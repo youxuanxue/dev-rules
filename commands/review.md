@@ -108,6 +108,40 @@ $ARGUMENTS
 
 将报告以 **JSON** 格式输出到 `docs/review-$(date +%Y%m%d).json`，遵循结构化审查格式（含 `approved_artifacts_referenced`、`conformance_summary`、每个 finding 的 `category` 和 `reference` 字段）。
 
+每个 finding 必须包含一个空的 `human_verdict` 对象，供人工校准时填写：
+
+```json
+{
+  "severity": "critical",
+  "category": "conformance",
+  "automatable": false,
+  "file": "src/models.py",
+  "line": 30,
+  "description": "...",
+  "reference": "docs/approved/data-model-v1.md#审批步骤表",
+  "suggested_fix": "...",
+  "human_verdict": {}
+}
+```
+
+人工校准时，reviewers 在 `human_verdict` 中填写：
+
+```json
+"human_verdict": {
+  "accurate": true,
+  "severity_correct": true,
+  "autofix_safe": true,
+  "notes": "可选备注"
+}
+```
+
+- `accurate`：该发现是否确实是问题（false = 误报）
+- `severity_correct`：严重程度分级是否合理
+- `autofix_safe`：如果 `automatable=true` 且已自动修复，修复是否安全（未引入新问题）
+- `notes`：可选的人工备注
+
+标注完成后运行 `/user:calibrate` 命令自动汇总校准指标。
+
 同时生成一份人类可读的 Markdown 摘要到 `docs/review-$(date +%Y%m%d).md`：
 
 ```markdown
