@@ -100,7 +100,9 @@ sync_to_project() {
         fi
     done
 
-    [ "$changed" -eq 0 ] && echo "  ok: $(basename "$project_dir") (all rules up to date)"
+    if [ "$changed" -eq 0 ]; then
+        echo "  ok: $(basename "$project_dir") (all rules up to date)"
+    fi
 }
 
 sync_local() {
