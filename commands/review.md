@@ -123,7 +123,7 @@ $ARGUMENTS
   "file": "src/models.py",
   "line": 30,
   "description": "...",
-  "reference": "docs/approved/data-model-v1.md#审批步骤表",
+  "reference": "docs/approved/data-model.md#审批步骤表",
   "suggested_fix": "...",
   "human_verdict": {}
 }
