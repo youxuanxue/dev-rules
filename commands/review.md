@@ -12,6 +12,11 @@ $ARGUMENTS
 2. `.testing/user-stories/` — User Story 及其验收标准（AC）
 3. `CLAUDE.md` — 项目架构约束
 
+加载 `docs/approved/` 时，检查每个文件的 YAML frontmatter 元数据头：
+- `approved_by: pending` → 该文件尚未通过人工审批，在报告中标注"未审批产物：{文件名}"，不作为符合性基线
+- 缺少元数据头 → 在报告中标注"缺少审批元数据：{文件名}"，仍作为基线但降低置信度
+- `approved_by` 为具体人名 → 正常作为符合性基线
+
 如果 `docs/approved/` 不存在或为空，在报告中注明"无法执行符合性检查：缺少审批产物"。
 
 ## 审查维度

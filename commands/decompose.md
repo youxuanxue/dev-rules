@@ -14,8 +14,8 @@ $ARGUMENTS
 
 研发流程必须包含以下阶段，按顺序排列：
 
-1. **原型设计**（必须）：技术方案文档 + 最小可运行原型
-2. **▶ 原型审批门禁**（必须）：人工确认数据模型/API/技术选型
+1. **原型设计**（必须）：设计文档直接写入 `docs/approved/`（含 `approved_by: pending` 元数据头）+ 最小可运行原型
+2. **▶ 原型审批门禁**（必须）：人在 PR 中校准 `docs/approved/` 中的文档，merge = 审批
 3. **功能实现**（审批通过后）：生产级代码 + 边界处理
 4. **测试验证**（必须）：测试套件 + 验收确认
 5. **▶ 合并审批门禁**（必须）：人工确认可合并
@@ -40,15 +40,17 @@ $ARGUMENTS
 
 根据任务特征自动选择引擎，优先级从上到下匹配第一条命中的规则：
 
-| # | 条件 | 引擎 | 原因 |
-|---|------|------|------|
-| 1 | 复杂度 ≥ L **且** 涉及 ≥ 3 个文件的代码变更 | Cursor Long-running | 需要长时间深度工作 + 跨文件协调 |
-| 2 | 任务类型 = 功能模块实现 / 系统重构 / 新模块开发 | Cursor Long-running | 大型功能开发是 L-R Agent 的核心场景 |
-| 3 | 任务类型 = Bug 修复 / 数据库 Migration / 小型功能 **且** 复杂度 ≤ M | Cursor Background | 快速定向任务，无需长时运行 |
-| 4 | 任务类型 = 测试补充 / 文档生成 / 技术债务清理 / 依赖升级 / CI 配置 | Claude Code Headless | 批量处理、模板化任务，适合无人值守 |
-| 5 | 任务产出 = 纯文档（设计文档 / 技术方案 / API 契约） | Claude Code Headless | 文档类任务不需要 IDE 环境 |
-| 6 | 任务类型 = 代码审查 / 巡检 / 报告生成 | Claude Code Headless | 只读分析 + 报告产出 |
-| 7 | 以上均不匹配 | Cursor Background | 默认选择，启动快、成本低 |
+
+| #   | 条件                                                 | 引擎                   | 原因                      |
+| --- | -------------------------------------------------- | -------------------- | ----------------------- |
+| 1   | 复杂度 ≥ L **且** 涉及 ≥ 3 个文件的代码变更                      | Cursor Long-running  | 需要长时间深度工作 + 跨文件协调       |
+| 2   | 任务类型 = 功能模块实现 / 系统重构 / 新模块开发                       | Cursor Long-running  | 大型功能开发是 L-R Agent 的核心场景 |
+| 3   | 任务类型 = Bug 修复 / 数据库 Migration / 小型功能 **且** 复杂度 ≤ M | Cursor Background    | 快速定向任务，无需长时运行           |
+| 4   | 任务类型 = 测试补充 / 文档生成 / 技术债务清理 / 依赖升级 / CI 配置         | Claude Code Headless | 批量处理、模板化任务，适合无人值守       |
+| 5   | 任务产出 = 纯文档（设计文档 / 技术方案 / API 契约）                   | Claude Code Headless | 文档类任务不需要 IDE 环境         |
+| 6   | 任务类型 = 代码审查 / 巡检 / 报告生成                            | Claude Code Headless | 只读分析 + 报告产出             |
+| 7   | 以上均不匹配                                             | Cursor Background    | 默认选择，启动快、成本低            |
+
 
 路由决策记录在每个子任务的 `引擎` 字段中，格式为 `引擎名称（规则 #N）`，例如 `Cursor Long-running（规则 #2）`。
 
@@ -76,8 +78,8 @@ $ARGUMENTS
 
 ### T-001: [设计文档] [PARALLEL]
 - 阶段：原型设计
-- 目标：...
-- 验收标准：...
+- 目标：将设计文档写入 `docs/approved/`（含 `approved_by: pending` 元数据头）
+- 验收标准：`docs/approved/` 下包含数据模型、API 契约等设计文件，元数据头完整
 - 复杂度：M
 - 引擎：Claude Code Headless（规则 #5）
 - 依赖：无
@@ -87,7 +89,8 @@ $ARGUMENTS
 - ...
 
 ### ▶ GATE-1: 原型审批 [GATE: 需人工审批]
-- 审批内容：数据模型、API 设计、技术选型、原型演示
+- 审批内容：校准 `docs/approved/` 中的设计文档（数据模型、API 设计、技术选型）+ 原型演示
+- 审批方式：人在 PR 中直接编辑/修正 `docs/approved/` 下的文件，merge = 审批
 - 阻塞：所有功能实现任务
 
 ## 二、功能实现阶段
@@ -109,6 +112,34 @@ $ARGUMENTS
 ## 待澄清问题
 - [ ] 问题1
 - [ ] 问题2
+
+## 派发清单
+
+按引擎分组，包含可直接执行的命令/prompt，人只需复制粘贴。
+
+### Cursor Long-running（N 个任务）
+
+复制以下内容到 Cursor Agent 对话框启动：
+
+**T-004: [任务标题]**
+> [完整的任务 prompt，包含：目标、验收标准、参考的 docs/approved/ 文件、目标分支名]
+
+### Cursor Background（N 个任务）
+
+复制以下内容到 Cursor Background Agent：
+
+**T-003: [任务标题]**
+> [完整的任务 prompt]
+
+### Claude Code Headless（N 个任务）
+
+在终端直接执行：
+
+    # T-001: [任务标题]
+    claude -p "[完整的任务 prompt]" --max-budget-usd [预算]
+
+    # T-00N: [任务标题]
+    claude -p "[完整的任务 prompt]" --max-budget-usd [预算]
 ```
 
 将结果输出到 `docs/task-breakdown-$(date +%Y%m%d).md`，如果 docs 目录不存在则创建。

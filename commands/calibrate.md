@@ -14,14 +14,16 @@ $ARGUMENTS
 
 从所有已标注 `human_verdict` 的 findings 中计算：
 
-| 指标 | 公式 | 达标门槛 |
-|------|------|----------|
-| 审查准确率 | `accurate=true` 的 🟡🔴 findings / 所有已标注的 🟡🔴 findings | ≥ 80% |
-| 自动修复安全率 | `autofix_safe=true` 的 findings / 所有 `automatable=true` 且已标注的 findings | ≥ 95% |
-| 分级准确率 | `severity_correct=true` 的 findings / 所有已标注的 findings | ≥ 75% |
-| 误报率 | `accurate=false` 的 findings / 所有已标注的 findings | ≤ 20% |
-| 符合性检查准确率 | `accurate=true` 的 conformance findings / 所有已标注的 conformance findings | ≥ 85% |
+
+| 指标       | 公式                                                                       | 达标门槛  |
+| -------- | ------------------------------------------------------------------------ | ----- |
+| 审查准确率    | `accurate=true` 的 🟡🔴 findings / 所有已标注的 🟡🔴 findings                   | ≥ 80% |
+| 自动修复安全率  | `autofix_safe=true` 的 findings / 所有 `automatable=true` 且已标注的 findings    | ≥ 95% |
+| 分级准确率    | `severity_correct=true` 的 findings / 所有已标注的 findings                     | ≥ 75% |
+| 误报率      | `accurate=false` 的 findings / 所有已标注的 findings                            | ≤ 20% |
+| 符合性检查准确率 | `accurate=true` 的 conformance findings / 所有已标注的 conformance findings     | ≥ 85% |
 | 符合性检查覆盖率 | 从 `conformance_summary.artifacts_checked` 和所有报告的 conformance findings 推算 | ≥ 70% |
+
 
 ### 分级映射
 
@@ -86,3 +88,4 @@ $ARGUMENTS
 - 只统计有 `human_verdict` 且至少填了 `accurate` 字段的 findings
 - 跳过 `human_verdict` 为空 `{}` 的 findings（未标注）
 - 如果没有任何已标注的 findings，输出提示"尚未进行人工校准，请先标注 review JSON 中的 human_verdict"
+
