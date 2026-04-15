@@ -30,16 +30,31 @@ git commit -m "chore: add dev-rules submodule and sync rules"
 
 ## 编辑规则
 
+涉及 `dev-rules/` 的 Git 提交**必须**遵守「先子模块、后父仓库」顺序（详见下一节）。其余步骤如下：
+
 1. 在任意项目内编辑 `dev-rules/rules/*.mdc`
 2. 运行 `dev-rules/sync.sh --local` 同步到当前项目的 `.cursor/rules/`
-3. 提交 dev-rules 子模块变更并推送：
+3. 在子模块仓库内提交并推送（先于父仓库）：
    ```bash
    cd dev-rules && git add -A && git commit -m "update rules" && git push && cd ..
    ```
-4. 提交父项目的子模块指针和 .cursor/rules/ 变更：
+4. 回到项目根目录，再提交父仓库的子模块指针与 `.cursor/rules/`：
    ```bash
    git add dev-rules .cursor/rules/ && git commit -m "chore: sync dev-rules"
    ```
+
+## Git 提交顺序（强制）
+
+凡变更 `dev-rules/`（含 `rules/`、`commands/`、`sync.sh` 等子模块内任意文件），**必须先**在子模块仓库完成提交（并 `git push` 到远端），**再**在父项目提交「子模块指针 + `.cursor/rules/` 同步产物」。
+
+**正确顺序**：
+
+1. 子模块：`cd dev-rules` → `git add -A` → `git commit` → `git push`
+2. 父仓库：`cd ..` → `git add dev-rules .cursor/rules/` → `git commit` → `git push`
+
+**原因**：父仓库中的 `dev-rules` 记录的是子模块某一提交的 SHA；若先提交父仓库而子模块尚无对应 commit，协作者与 CI 会出现无法解析的悬空指针或「有 sync 产物但规则仓库无历史」的不一致。
+
+**禁止**：在子模块未提交（或未推送、若团队以远端为准）的情况下，单独在父仓库 `git commit` 更新 `dev-rules` 子模块引用或仅提交 `.cursor/rules/` 而不同步子模块上游。
 
 ## 禁止事项
 
@@ -52,3 +67,4 @@ git commit -m "chore: add dev-rules submodule and sync rules"
 - 如果发现项目缺少 `dev-rules/` submodule，提醒用户按上述步骤接入
 - 如果发现 `.cursor/rules/` 与 `dev-rules/rules/` 内容不一致，运行 `dev-rules/sync.sh --local` 修复
 - 修改规则时，编辑 `dev-rules/rules/` 中的文件，然后运行 sync
+- 涉及 `dev-rules/` 的提交与推送时，**必须**按「Git 提交顺序（强制）」先子模块、后父仓库；不得颠倒顺序或只提交父仓库而不同步子模块上游
