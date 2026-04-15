@@ -104,3 +104,11 @@ alwaysApply: true
 - 如果连续 3 次尝试同一问题未成功，暂停并记录分析，等待人工介入
 - 产出 PR 时附带：变更说明、测试结果、待决策问题清单
 - 原型阶段完成后必须暂停等待审批，不得自行进入功能实现阶段
+
+## 云端 Agent 调用 Claude Code CLI
+
+当需要在云端 VM 中执行 `claude -p` 命令（审查、拆解、校准等）时：
+
+1. 先运行 `bash scripts/setup-claude-code.sh` 检查并安装 Claude Code CLI
+2. API Key 通过 Cursor Dashboard → Cloud Agents → Secrets 配置（`ANTHROPIC_API_KEY`）
+3. 安装完成后即可执行 `claude -p "..." --max-budget-usd N`
