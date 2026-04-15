@@ -4,12 +4,24 @@
 
 ## 架构
 
+每个 IT 产品研发项目通过 **git submodule** 引入 dev-rules，在项目内即可编辑和提交规则：
+
 ```
-~/Codes/dev-rules/rules/*.mdc     ← 唯一编辑入口
-     │
+项目根目录/
+├── dev-rules/              ← git submodule（唯一编辑入口）
+│   ├── rules/*.mdc
+│   ├── commands/*.md
+│   └── sync.sh
+├── .cursor/rules/*.mdc     ← sync 产物（real copy, git tracked, 云端 Agent 可读）
+└── .gitmodules
+```
+
+本地全局消费端通过 symlink 自动同步：
+
+```
+~/Codes/dev-rules/rules/*.mdc
      ├──→ ~/.cursor/rules/         symlink（本地 Cursor 交互式会话）
-     ├──→ ~/.claude/commands/      symlink（本地 Claude Code 命令）
-     └──→ 各项目/.cursor/rules/    real copy（云端 Agent，committed to git）
+     └──→ ~/.claude/commands/      symlink（本地 Claude Code 命令）
 ```
 
 **与 agent-skills 的关系**：
@@ -17,12 +29,13 @@
 | 仓库 | 位置 | 管什么 | 消费端 |
 |------|------|--------|--------|
 | `agent-skills` | `~/Codes/agent-skills/` | Cursor Skills（怎么做事的技能） | `~/.cursor/skills/` |
-| `dev-rules` | `~/Codes/dev-rules/` | Cursor Rules + Claude Commands（做事的规则） | `~/.cursor/rules/` + `~/.claude/commands/` |
+| `dev-rules` | `~/Codes/dev-rules/` | Cursor Rules + Claude Commands（做事的规则） | `~/.cursor/rules/` + submodule |
 
 ## 包含的规则
 
 | 文件 | 说明 |
 |------|------|
+| `dev-rules-convention.mdc` | submodule 约定本身（alwaysApply） |
 | `agent-contract-enforcement.mdc` | API 契约同步与安全基线 |
 | `test-philosophy.mdc` | 测试设计方法论（User Story → 测试 → 对齐门禁） |
 | `safe-shell-commands.mdc` | 破坏性命令使用规范 |
@@ -35,7 +48,17 @@
 | `decompose` | `/user:decompose [需求描述]` | 将需求拆解为含原型阶段和审批门禁的子任务 |
 | `review` | `/user:review [范围]` | 代码审查（默认最近 24h） |
 
-## 安装（首次）
+## 新项目接入
+
+```bash
+cd 项目根目录
+git submodule add git@github.com:youxuanxue/dev-rules.git dev-rules
+dev-rules/sync.sh --local
+git add .cursor/rules/ .gitmodules dev-rules
+git commit -m "chore: add dev-rules submodule and sync rules"
+```
+
+## 首次安装（本地全局）
 
 ```bash
 cd ~/Codes/dev-rules
@@ -49,20 +72,23 @@ cd ~/Codes/dev-rules
 ## 日常使用
 
 ```bash
-# 编辑规则（唯一入口）
-vim ~/Codes/dev-rules/rules/product-dev.mdc
+# 在任意项目内编辑规则
+vim dev-rules/rules/product-dev.mdc
 
-# 同步到本地（通常不需要，symlink 自动生效）
-./sync.sh
+# 同步到当前项目的 .cursor/rules/
+dev-rules/sync.sh --local
 
-# 注册一个项目（之后 --all 会包含它）
-./sync.sh --register /path/to/project
+# 提交 submodule 变更
+cd dev-rules && git add -A && git commit -m "update rules" && git push && cd ..
 
-# 同步到所有已注册项目（real copy for 云端 Agent）
-./sync.sh --all
+# 提交父项目的变更
+git add dev-rules .cursor/rules/ && git commit -m "chore: sync dev-rules"
 
-# 查看状态
-./sync.sh --status
+# 克隆含 submodule 的项目（一次性）
+git clone --recurse-submodules <repo-url>
+
+# 已克隆项目初始化 submodule
+git submodule update --init --recursive
 ```
 
 ## 为什么 home 用 symlink、项目用 real copy？

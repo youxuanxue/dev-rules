@@ -1,0 +1,54 @@
+---
+description: dev-rules submodule 约定：规则的单一事实来源管理规范
+alwaysApply: true
+---
+
+# dev-rules 约定
+
+## 项目结构
+
+每个 IT 产品研发项目必须包含 `dev-rules` 作为 git submodule：
+
+```
+项目根目录/
+├── dev-rules/              ← git submodule → git@github.com:youxuanxue/dev-rules.git
+│   ├── rules/*.mdc         ← 规则原件（唯一编辑入口）
+│   ├── commands/*.md        ← Claude Code 自定义命令
+│   └── sync.sh              ← 分发脚本
+└── .cursor/rules/*.mdc     ← sync 产物（禁止直接编辑）
+```
+
+## 新项目接入
+
+```bash
+cd 项目根目录
+git submodule add git@github.com:youxuanxue/dev-rules.git dev-rules
+dev-rules/sync.sh --local
+git add .cursor/rules/ .gitmodules dev-rules
+git commit -m "chore: add dev-rules submodule and sync rules"
+```
+
+## 编辑规则
+
+1. 在任意项目内编辑 `dev-rules/rules/*.mdc`
+2. 运行 `dev-rules/sync.sh --local` 同步到当前项目的 `.cursor/rules/`
+3. 提交 dev-rules 子模块变更并推送：
+   ```bash
+   cd dev-rules && git add -A && git commit -m "update rules" && git push && cd ..
+   ```
+4. 提交父项目的子模块指针和 .cursor/rules/ 变更：
+   ```bash
+   git add dev-rules .cursor/rules/ && git commit -m "chore: sync dev-rules"
+   ```
+
+## 禁止事项
+
+- 禁止直接编辑 `.cursor/rules/` 中的文件（它们是 sync 产物）
+- 禁止绕过 submodule 手动复制规则文件
+- 禁止在 `.cursor/rules/` 中创建不在 `dev-rules/rules/` 中的规则文件
+
+## Agent 行为约束
+
+- 如果发现项目缺少 `dev-rules/` submodule，提醒用户按上述步骤接入
+- 如果发现 `.cursor/rules/` 与 `dev-rules/rules/` 内容不一致，运行 `dev-rules/sync.sh --local` 修复
+- 修改规则时，编辑 `dev-rules/rules/` 中的文件，然后运行 sync

@@ -6,6 +6,7 @@
 #
 # 用法：
 #   ./sync.sh                    # 同步到本地 home 目录
+#   ./sync.sh --local            # 从 submodule 同步到父项目的 .cursor/rules/
 #   ./sync.sh --project /path    # 同步规则到指定项目（real copy）
 #   ./sync.sh --all              # 同步到本地 + 所有已注册项目
 #   ./sync.sh --status           # 查看当前同步状态
@@ -22,6 +23,9 @@
 #
 #   为什么 home 目录用 symlink？ → 修改 dev-rules 后立即生效，无需重新 sync
 #   为什么项目目录用 real copy？ → 云端 VM 克隆 repo 时拿不到 symlink 目标文件
+#
+#   --local 模式：当 dev-rules 作为 submodule 存在于项目中时，
+#   从 submodule 位置同步到父项目的 .cursor/rules/（real copy）
 
 set -euo pipefail
 
@@ -97,6 +101,19 @@ sync_to_project() {
     done
 
     [ "$changed" -eq 0 ] && echo "  ok: $(basename "$project_dir") (all rules up to date)"
+}
+
+sync_local() {
+    local parent_dir
+    parent_dir="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+    if [ ! -f "$parent_dir/.gitmodules" ] || ! grep -q "dev-rules" "$parent_dir/.gitmodules" 2>/dev/null; then
+        echo "Warning: dev-rules does not appear to be a submodule in $parent_dir"
+        echo "  (continuing anyway)"
+    fi
+
+    echo "=== Syncing to parent project: $(basename "$parent_dir")/.cursor/rules/ (real copies) ==="
+    sync_to_project "$parent_dir"
 }
 
 register_project() {
@@ -179,6 +196,9 @@ case "${1:-}" in
         sync_all_projects
         print_status
         ;;
+    --local)
+        sync_local
+        ;;
     --project)
         [ -z "${2:-}" ] && { echo "Usage: $0 --project /path/to/project"; exit 1; }
         sync_to_project "$2"
@@ -196,6 +216,7 @@ case "${1:-}" in
     --help|-h)
         echo "Usage:"
         echo "  $0                    Sync to home directory (symlinks)"
+        echo "  $0 --local            Sync from submodule to parent project (real copy)"
         echo "  $0 --project /path    Sync to a specific project (real copy)"
         echo "  $0 --all              Sync to home + all registered projects"
         echo "  $0 --register /path   Register a project for --all sync"
