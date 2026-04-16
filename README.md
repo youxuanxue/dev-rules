@@ -26,27 +26,33 @@
 
 **与 agent-skills 的关系**：
 
-| 仓库 | 位置 | 管什么 | 消费端 |
-|------|------|--------|--------|
-| `agent-skills` | `~/Codes/agent-skills/` | Cursor Skills（怎么做事的技能） | `~/.cursor/skills/` |
-| `dev-rules` | `~/Codes/dev-rules/` | Cursor Rules + Claude Commands（做事的规则） | `~/.cursor/rules/` + submodule |
+
+| 仓库             | 位置                      | 管什么                                   | 消费端                            |
+| -------------- | ----------------------- | ------------------------------------- | ------------------------------ |
+| `agent-skills` | `~/Codes/agent-skills/` | Cursor Skills（怎么做事的技能）                | `~/.cursor/skills/`            |
+| `dev-rules`    | `~/Codes/dev-rules/`    | Cursor Rules + Claude Commands（做事的规则） | `~/.cursor/rules/` + submodule |
+
 
 ## 包含的规则
 
-| 文件 | 说明 |
-|------|------|
-| `dev-rules-convention.mdc` | submodule 约定本身（alwaysApply） |
-| `agent-contract-enforcement.mdc` | API 契约同步与安全基线 |
-| `test-philosophy.mdc` | 测试设计方法论（User Story → 测试 → 对齐门禁） |
-| `safe-shell-commands.mdc` | 破坏性命令使用规范 |
-| `product-dev.mdc` | 产品研发工作流（含原型设计 + 两个审批门禁） |
+
+| 文件                               | 说明                              |
+| -------------------------------- | ------------------------------- |
+| `dev-rules-convention.mdc`       | submodule 约定本身（alwaysApply）     |
+| `agent-contract-enforcement.mdc` | API 契约同步与安全基线                   |
+| `test-philosophy.mdc`            | 测试设计方法论（User Story → 测试 → 对齐门禁） |
+| `safe-shell-commands.mdc`        | 破坏性命令使用规范                       |
+| `product-dev.mdc`                | 产品研发工作流（含原型设计 + 两个审批门禁）         |
+
 
 ## 包含的 Claude Code 命令
 
-| 命令 | 用法 | 说明 |
-|------|------|------|
+
+| 命令          | 用法                       | 说明                   |
+| ----------- | ------------------------ | -------------------- |
 | `decompose` | `/user:decompose [需求描述]` | 将需求拆解为含原型阶段和审批门禁的子任务 |
-| `review` | `/user:review [范围]` | 代码审查（默认最近 24h） |
+| `review`    | `/user:review [范围]`      | 代码审查（默认最近 24h）       |
+
 
 ## 新项目接入
 
@@ -66,6 +72,7 @@ cd ~/Codes/dev-rules
 ```
 
 这会：
+
 1. Symlink 规则到 `~/.cursor/rules/`，命令到 `~/.claude/commands/`
 2. 注册 macOS LaunchAgent 每小时自动 `git pull`（有更新时自动 re-sync）
 
@@ -95,3 +102,4 @@ git submodule update --init --recursive
 
 - **Home 目录 (`~/.cursor/rules/`)**：编辑 dev-rules 后 symlink 立即生效，零延迟。
 - **项目目录 (`.cursor/rules/`)**：Cursor 云端 Agent 在 VM 中克隆 repo，拿不到 symlink 的目标文件，必须是真实文件并 commit 到 git。
+
