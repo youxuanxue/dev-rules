@@ -9,12 +9,16 @@
 - **乔布斯产品理念**（约束「做什么」）：聚焦核心场景、删除非核心功能、API 最小面、端到端体验、设计即功能、工艺级打磨。
 - **OPC（One-Person Company）哲学**（约束「怎么做」）：人做判断、AI 做执行；流程最小化；自动化优先；规则与记忆代码化（防遗忘、防漂移）。
 
-二者的承载点：
+每个载体承载的哲学（与父项目 `digital-clone-research.md` §10 表保持同步）：
 
-| 哲学 | 主要载体 | 强制时机 |
-|------|----------|----------|
-| Jobs 聚焦 / 简洁 | `commands/decompose.md`（聚焦决策表）、`commands/review.md`（设计质量维度）、`rules/product-dev.mdc`（设计哲学节）、`rules/agent-contract-enforcement.mdc`（API 最小面） | 需求拆解时、PR review 时 |
-| OPC 自动化 / 杠杆 | `rules/test-philosophy.mdc`（测试自动化）、`rules/agent-contract-enforcement.mdc`（契约自动生成）、`commands/calibrate.md`（指标自动汇总）、`commands/review.md`（手动操作残留检查） | 测试编写、契约变更、Phase 准入、PR review |
+| 载体 | Jobs（聚焦/简洁） | OPC（自动化/杠杆） |
+|------|------------------|-----------------|
+| `rules/product-dev.mdc` | 设计哲学节 + 聚焦过滤步 | 自检纪律 + 4 阶段无臃肿 |
+| `commands/decompose.md` | 聚焦决策表（不做什么） | 引擎路由 + 派发清单 |
+| `commands/review.md` | 设计质量维度（简洁/最小面/范围蔓延） | 手动操作残留检查 + 流程冗余检查 |
+| `commands/calibrate.md` | — | 校准指标自动汇总 |
+| `rules/test-philosophy.mdc` | 测试聚焦（核心 AC 优先） | 测试自动化（CI 可跑） |
+| `rules/agent-contract-enforcement.mdc` | API 最小面 + 一意一径 | 契约自动生成（禁手编） |
 
 详细原则说明见父项目的 `digital-clone-research.md` §〇「两个哲学基石」。
 
@@ -105,8 +109,8 @@ dev-rules/sync.sh --local
 # 提交 submodule 变更
 cd dev-rules && git add -A && git commit -m "update rules" && git push && cd ..
 
-# 提交父项目的变更
-git add dev-rules .cursor/rules/ && git commit -m "chore: sync dev-rules"
+# 提交父项目的变更并推送
+git add dev-rules .cursor/rules/ && git commit -m "chore: sync dev-rules" && git push
 
 # 克隆含 submodule 的项目（一次性）
 git clone --recurse-submodules <repo-url>

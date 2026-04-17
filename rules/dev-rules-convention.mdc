@@ -38,9 +38,9 @@ git commit -m "chore: add dev-rules submodule and sync rules"
    ```bash
    cd dev-rules && git add -A && git commit -m "update rules" && git push && cd ..
    ```
-4. 回到项目根目录，再提交父仓库的子模块指针与 `.cursor/rules/`：
+4. 回到项目根目录，再提交父仓库的子模块指针与 `.cursor/rules/`，并推送：
    ```bash
-   git add dev-rules .cursor/rules/ && git commit -m "chore: sync dev-rules"
+   git add dev-rules .cursor/rules/ && git commit -m "chore: sync dev-rules" && git push
    ```
 
 ## Git 提交顺序（强制）
