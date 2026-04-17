@@ -14,6 +14,7 @@ alwaysApply: true
 ├── dev-rules/                       ← git submodule → git@github.com:youxuanxue/dev-rules.git
 │   ├── rules/*.mdc                  ← 规则原件（唯一编辑入口）
 │   ├── commands/*.md                ← Claude Code 自定义命令
+│   ├── global/CLAUDE.md             ← Claude Code 全局工作宪法
 │   ├── schemas/*.json               ← JSON Schema（review 输出契约等）
 │   ├── templates/                   ← 项目侧脚本模板
 │   │   ├── preflight.sh             ←   提交前/CI 强约束门禁模板
@@ -24,6 +25,11 @@ alwaysApply: true
 ├── scripts/
 │   └── preflight.sh                 ← 复制自 dev-rules/templates/preflight.sh
 └── .git/hooks/pre-commit            ← 由 install-hooks.sh 安装，调用 preflight.sh
+
+家目录消费端（symlink，由 sync.sh 维护）：
+~/.cursor/rules/        → dev-rules/rules/
+~/.claude/commands/     → dev-rules/commands/
+~/.claude/CLAUDE.md     → dev-rules/global/CLAUDE.md
 ```
 
 ## 新项目接入

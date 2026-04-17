@@ -16,10 +16,14 @@
 #
 # 架构说明：
 #
-#   ~/Codes/dev-rules/rules/*.mdc     ← 唯一编辑入口（SINGLE SOURCE OF TRUTH）
+#   ~/Codes/dev-rules/                ← 唯一编辑入口（SINGLE SOURCE OF TRUTH）
+#   ├── rules/*.mdc
+#   ├── commands/*.md
+#   └── global/CLAUDE.md
 #        │
-#        ├──→ ~/.cursor/rules/*.mdc         本地 Cursor 交互式会话（symlink）
+#        ├──→ ~/.cursor/rules/*.mdc          本地 Cursor 交互式会话（symlink）
 #        ├──→ ~/.claude/commands/*           本地 Claude Code 自定义命令（symlink）
+#        ├──→ ~/.claude/CLAUDE.md            全局工作宪法（symlink，所有 Claude Code 会话起手读）
 #        └──→ 各项目/.cursor/rules/*.mdc    云端 Agent 可读（real copy, git tracked）
 #
 #   为什么 home 目录用 symlink？ → 修改 dev-rules 后立即生效，无需重新 sync
@@ -33,9 +37,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RULES_DIR="$SCRIPT_DIR/rules"
 COMMANDS_DIR="$SCRIPT_DIR/commands"
+GLOBAL_DIR="$SCRIPT_DIR/global"
 
 CURSOR_HOME="$HOME/.cursor/rules"
 CLAUDE_COMMANDS="$HOME/.claude/commands"
+CLAUDE_GLOBAL_MD="$HOME/.claude/CLAUDE.md"
 
 PROJECTS_FILE="$SCRIPT_DIR/.registered-projects"
 
@@ -73,6 +79,24 @@ sync_to_home() {
             echo "  updated: $basename"
         fi
     done
+
+    echo ""
+    echo "=== Syncing to ~/.claude/CLAUDE.md (symlink) ==="
+    local global_src="$GLOBAL_DIR/CLAUDE.md"
+    if [ ! -f "$global_src" ]; then
+        echo "  WARN: $global_src not found, skipping"
+    elif [ -L "$CLAUDE_GLOBAL_MD" ] && [ "$(readlink "$CLAUDE_GLOBAL_MD")" = "$global_src" ]; then
+        echo "  ok: CLAUDE.md → $global_src"
+    else
+        # Backup existing real file before replacing with symlink
+        if [ -f "$CLAUDE_GLOBAL_MD" ] && [ ! -L "$CLAUDE_GLOBAL_MD" ]; then
+            local backup="$CLAUDE_GLOBAL_MD.bak.$(date +%Y%m%d%H%M%S)"
+            mv "$CLAUDE_GLOBAL_MD" "$backup"
+            echo "  backup: $CLAUDE_GLOBAL_MD → $backup"
+        fi
+        ln -sf "$global_src" "$CLAUDE_GLOBAL_MD"
+        echo "  linked: CLAUDE.md → $global_src"
+    fi
 }
 
 sync_to_project() {
@@ -241,6 +265,21 @@ print_status() {
             echo "  ⚠ $(basename "$rule") (regular file, should be symlink)"
         fi
     done 2>/dev/null || echo "  (none)"
+    echo ""
+    echo "Home ~/.claude/CLAUDE.md:"
+    if [ -L "$CLAUDE_GLOBAL_MD" ]; then
+        local target
+        target="$(readlink "$CLAUDE_GLOBAL_MD")"
+        if [ "$target" = "$GLOBAL_DIR/CLAUDE.md" ]; then
+            echo "  ✓ → $target"
+        else
+            echo "  ⚠ → $target (not pointing to dev-rules/global/)"
+        fi
+    elif [ -f "$CLAUDE_GLOBAL_MD" ]; then
+        echo "  ⚠ regular file (run sync.sh to convert to symlink)"
+    else
+        echo "  ✗ missing"
+    fi
     echo ""
     list_projects
 }

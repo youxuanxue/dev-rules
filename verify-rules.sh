@@ -8,7 +8,8 @@
 #   3. 反向：rules/ 与 commands/ 中的所有文件均在 README 表中出现
 #   4. commands/*.md 不含未定义的 placeholder（{{...}}）
 #   5. 哲学映射表（README §设计哲学）覆盖所有 rules + commands
-#   6. 仓库内引用的 dev-rules/ 路径（rules/commands/README）真实存在（防"幽灵引用"）
+#   6. 仓库内引用的 dev-rules/ 路径（rules/commands/global/README）真实存在（防"幽灵引用"）
+#   7. global/ 目录关键文件存在（CLAUDE.md）
 #
 # 用法：
 #   ./verify-rules.sh           # 验证，发现问题非零退出
@@ -23,6 +24,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RULES_DIR="$SCRIPT_DIR/rules"
 COMMANDS_DIR="$SCRIPT_DIR/commands"
+GLOBAL_DIR="$SCRIPT_DIR/global"
 README="$SCRIPT_DIR/README.md"
 
 QUIET=0
@@ -37,7 +39,7 @@ log "=== verify-rules: dev-rules repo integrity ==="
 log ""
 
 # Check 1: frontmatter
-log "[1/6] frontmatter on every rule"
+log "[1/7] frontmatter on every rule"
 for rule in "$RULES_DIR"/*.mdc; do
     base="$(basename "$rule")"
     head -n 1 "$rule" | grep -q '^---$' || { fail "$base: missing leading ---"; continue; }
@@ -49,7 +51,7 @@ done
 
 # Check 2: README rules table → real files
 log ""
-log "[2/6] README rule references resolve"
+log "[2/7] README rule references resolve"
 if [ ! -f "$README" ]; then
     fail "README.md not found at $README"
 else
@@ -75,7 +77,7 @@ fi
 # Check 3: every rule/command appears in README
 # Accept either path-prefixed (`rules/foo.mdc`) or bare backtick (`foo.mdc`).
 log ""
-log "[3/6] every rule/command is documented in README"
+log "[3/7] every rule/command is documented in README"
 for rule in "$RULES_DIR"/*.mdc; do
     base="$(basename "$rule")"
     if grep -qE "(rules/$base|\`$base\`)" "$README" 2>/dev/null; then
@@ -96,7 +98,7 @@ done
 
 # Check 4: commands have no unresolved placeholders
 log ""
-log "[4/6] commands free of unresolved {{placeholders}}"
+log "[4/7] commands free of unresolved {{placeholders}}"
 for cmd in "$COMMANDS_DIR"/*.md; do
     base="$(basename "$cmd")"
     if grep -qE '\{\{[^}]+\}\}' "$cmd"; then
@@ -115,7 +117,7 @@ done
 
 # Check 5: philosophy mapping coverage
 log ""
-log "[5/6] philosophy mapping covers all rules+commands"
+log "[5/7] philosophy mapping covers all rules+commands"
 if grep -q '## 设计哲学' "$README" 2>/dev/null; then
     # Extract the 设计哲学 section content (until next top-level ## heading)
     philosophy_section=$(awk '/^## 设计哲学/{flag=1; next} /^## /{flag=0} flag' "$README")
@@ -140,9 +142,9 @@ else
     fail "README missing '## 设计哲学' section"
 fi
 
-# Check 6: every dev-rules/ path mentioned in rules/commands/README must exist
+# Check 6: every dev-rules/ path mentioned in rules/commands/global/README must exist
 log ""
-log "[6/6] dev-rules/ path references resolve (no ghost paths)"
+log "[6/7] dev-rules/ path references resolve (no ghost paths)"
 ghost=0
 # Collect all `dev-rules/...` references inside backticks across this repo
 while IFS= read -r path; do
@@ -157,9 +159,18 @@ while IFS= read -r path; do
         fail "$clean referenced but not present at $target"
         ghost=1
     fi
-done < <(grep -rhoE '`dev-rules/[A-Za-z0-9_./-]+`' "$RULES_DIR" "$COMMANDS_DIR" "$README" 2>/dev/null \
+done < <(grep -rhoE '`dev-rules/[A-Za-z0-9_./-]+`' "$RULES_DIR" "$COMMANDS_DIR" "$GLOBAL_DIR" "$README" 2>/dev/null \
          | sed -E 's/^`(.*)`$/\1/' | sort -u)
 [ "$ghost" -eq 0 ] || true
+
+# Check 7: global/ key files exist
+log ""
+log "[7/7] global/ key files present"
+if [ -f "$GLOBAL_DIR/CLAUDE.md" ]; then
+    ok "global/CLAUDE.md"
+else
+    fail "global/CLAUDE.md missing — sync.sh symlinks ~/.claude/CLAUDE.md to it"
+fi
 
 log ""
 if [ $errors -eq 0 ]; then

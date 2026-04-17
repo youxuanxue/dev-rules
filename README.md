@@ -35,26 +35,28 @@
 ├── dev-rules/              ← git submodule（唯一编辑入口）
 │   ├── rules/*.mdc
 │   ├── commands/*.md
+│   ├── global/CLAUDE.md    ← Claude Code 全局工作宪法
 │   └── sync.sh
 ├── .cursor/rules/*.mdc     ← sync 产物（real copy, git tracked, 云端 Agent 可读）
 └── .gitmodules
 ```
 
-本地全局消费端通过 symlink 自动同步：
+本地全局消费端通过 symlink 自动同步（编辑 dev-rules 后立即生效）：
 
 ```
-~/Codes/dev-rules/rules/*.mdc
-     ├──→ ~/.cursor/rules/         symlink（本地 Cursor 交互式会话）
-     └──→ ~/.claude/commands/      symlink（本地 Claude Code 命令）
+~/Codes/dev-rules/
+├── rules/*.mdc        ──→ ~/.cursor/rules/        symlink（Cursor 交互式会话）
+├── commands/*.md      ──→ ~/.claude/commands/     symlink（Claude Code 命令）
+└── global/CLAUDE.md   ──→ ~/.claude/CLAUDE.md     symlink（Claude Code 起手读的宪法）
 ```
 
 **与 agent-skills 的关系**：
 
 
-| 仓库             | 位置                      | 管什么                                   | 消费端                            |
-| -------------- | ----------------------- | ------------------------------------- | ------------------------------ |
-| `agent-skills` | `~/Codes/agent-skills/` | Cursor Skills（怎么做事的技能）                | `~/.cursor/skills/`            |
-| `dev-rules`    | `~/Codes/dev-rules/`    | Cursor Rules + Claude Commands（做事的规则） | `~/.cursor/rules/` + submodule |
+| 仓库             | 位置                      | 管什么                                                       | 消费端                                                        |
+| -------------- | ----------------------- | --------------------------------------------------------- | ---------------------------------------------------------- |
+| `agent-skills` | `~/Codes/agent-skills/` | Cursor Skills（怎么做事的技能）                                    | `~/.cursor/skills/`                                        |
+| `dev-rules`    | `~/Codes/dev-rules/`    | Cursor Rules + Claude Commands + Claude 全局宪法（`global/`）（做事的规则） | `~/.cursor/rules/` + `~/.claude/commands/` + `~/.claude/CLAUDE.md` + 项目 submodule |
 
 
 ## 包含的规则
@@ -84,13 +86,14 @@
 软规则与硬检查的完整映射定义在父项目 `digital-clone-research.md §六.½`，接入步骤见 `rules/dev-rules-convention.mdc`。本仓库交付的工件清单：
 
 
-| 工件                            | 退出码语义                                           |
-| ----------------------------- | ----------------------------------------------- |
-| `sync.sh --check`             | 0 = 一致；1 = drift                                |
-| `verify-rules.sh`             | 0 = 通过；1 = 至少一项失败（含幽灵路径引用检测）                    |
-| `schemas/review.schema.json`  | 由 ajv / check-jsonschema 消费；calibrate 入口校验      |
-| `templates/preflight.sh`      | 0 = 全部通过；非 0 = 至少一项失败（项目复制后使用）                  |
-| `templates/install-hooks.sh`  | 一键将 preflight.sh 接到 `.git/hooks/pre-commit`     |
+| 工件                            | 退出码语义                                                       |
+| ----------------------------- | ----------------------------------------------------------- |
+| `sync.sh --check`             | 0 = 一致；1 = drift                                            |
+| `verify-rules.sh`             | 0 = 通过；1 = 至少一项失败（7 段：含幽灵路径检测、含 `global/CLAUDE.md` 存在性）  |
+| `schemas/review.schema.json`  | 由 ajv / check-jsonschema 消费；calibrate 入口校验                  |
+| `templates/preflight.sh`      | 0 = 全部通过；非 0 = 至少一项失败（项目复制后使用）                              |
+| `templates/install-hooks.sh`  | 一键将 preflight.sh 接到 `.git/hooks/pre-commit`                 |
+| `global/CLAUDE.md`            | Claude Code 全局工作宪法（`~/.claude/CLAUDE.md` 是它的 symlink）       |
 
 
 ## 新项目接入
@@ -112,8 +115,9 @@ cd ~/Codes/dev-rules
 
 这会：
 
-1. Symlink 规则到 `~/.cursor/rules/`，命令到 `~/.claude/commands/`
-2. 注册 macOS LaunchAgent 每小时自动 `git pull`（有更新时自动 re-sync）
+1. Symlink 规则到 `~/.cursor/rules/`、命令到 `~/.claude/commands/`、全局宪法到 `~/.claude/CLAUDE.md`
+2. 现存的真实 `~/.claude/CLAUDE.md` 会被备份为 `CLAUDE.md.bak.<timestamp>` 后再替换为 symlink
+3. 注册 macOS LaunchAgent 每小时自动 `git pull`（有更新时自动 re-sync）
 
 ## 日常使用
 
