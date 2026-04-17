@@ -18,8 +18,23 @@
 
 set -u
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Resolve project root robustly so the script works whether invoked:
+#   - directly as $project/scripts/preflight.sh
+#   - via a wrapper that exec's $project/dev-rules/templates/preflight.sh
+#   - from any cwd
+# Strategy: prefer git toplevel of the current directory (caller's cwd),
+# fall back to PREFLIGHT_REPO_ROOT env var, finally to script-relative path.
+if [ -n "${PREFLIGHT_REPO_ROOT:-}" ] && [ -d "$PREFLIGHT_REPO_ROOT" ]; then
+    REPO_ROOT="$PREFLIGHT_REPO_ROOT"
+elif git_top="$(git rev-parse --show-superproject-working-tree 2>/dev/null)" && [ -n "$git_top" ]; then
+    REPO_ROOT="$git_top"
+elif git_top="$(git rev-parse --show-toplevel 2>/dev/null)" && [ -n "$git_top" ]; then
+    REPO_ROOT="$git_top"
+else
+    REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+fi
 cd "$REPO_ROOT"
+echo "preflight: repo root = $REPO_ROOT"
 
 FIX_MODE=0
 [ "${1:-}" = "--fix" ] && FIX_MODE=1
@@ -134,8 +149,8 @@ fi
 
 # ---- 检查 7: 待审批产物不应进入 main ----（approved_by: pending 元数据）
 section "no docs/approved/ files left as 'approved_by: pending' on main"
-if [ -d docs/approved ] && [ "$branch" = "main" ] || [ "$branch" = "master" ]; then
-    pending=$(grep -lE '^approved_by:\s*pending\s*$' docs/approved/*.md 2>/dev/null || true)
+if [ -d docs/approved ] && { [ "$branch" = "main" ] || [ "$branch" = "master" ]; }; then
+    pending=$(grep -lE '^approved_by:[[:space:]]*pending[[:space:]]*$' docs/approved/*.md 2>/dev/null || true)
     if [ -n "$pending" ]; then
         echo "$pending" | sed 's/^/    - /'
         fail "files with approved_by: pending must not land on $branch"

@@ -11,11 +11,19 @@ alwaysApply: true
 
 ```
 项目根目录/
-├── dev-rules/              ← git submodule → git@github.com:youxuanxue/dev-rules.git
-│   ├── rules/*.mdc         ← 规则原件（唯一编辑入口）
-│   ├── commands/*.md        ← Claude Code 自定义命令
-│   └── sync.sh              ← 分发脚本
-└── .cursor/rules/*.mdc     ← sync 产物（禁止直接编辑）
+├── dev-rules/                       ← git submodule → git@github.com:youxuanxue/dev-rules.git
+│   ├── rules/*.mdc                  ← 规则原件（唯一编辑入口）
+│   ├── commands/*.md                ← Claude Code 自定义命令
+│   ├── schemas/*.json               ← JSON Schema（review 输出契约等）
+│   ├── templates/                   ← 项目侧脚本模板
+│   │   ├── preflight.sh             ←   提交前/CI 强约束门禁模板
+│   │   └── install-hooks.sh         ←   一键安装 git pre-commit hook
+│   ├── sync.sh                      ← 分发脚本（含 --check drift 检测）
+│   └── verify-rules.sh              ← 规则仓库自身完整性检查
+├── .cursor/rules/*.mdc              ← sync 产物（禁止直接编辑）
+├── scripts/
+│   └── preflight.sh                 ← 复制自 dev-rules/templates/preflight.sh
+└── .git/hooks/pre-commit            ← 由 install-hooks.sh 安装，调用 preflight.sh
 ```
 
 ## 新项目接入
@@ -58,19 +66,16 @@ git commit -m "chore: add dev-rules submodule and sync rules"
 
 ## 强约束门禁（机械检查，禁止仅"靠自觉"）
 
-软规则配套有可执行脚本，提交/CI 必须运行：
+每条软规则都有对应的可执行脚本。**完整的「软规则 → 硬检查」映射表是单一事实来源**，定义在 `digital-clone-research.md §六.½`。本节只列接入步骤：
 
-| 软规则 | 硬约束脚本 | 触发时机 |
-|--------|----------|---------|
-| 「`.cursor/rules/` 与 submodule 不漂移」 | `dev-rules/sync.sh --check` | pre-commit / CI |
-| 「dev-rules 仓库自身完整性（README、frontmatter、哲学映射）」 | `dev-rules/verify-rules.sh` | dev-rules 子模块提交前 |
-| 「先子模块后父仓库」（submodule SHA 必须在 dev-rules 中真实存在） | `scripts/preflight.sh` 检查段 2 | pre-commit / CI |
-| 「review JSON 输出格式合规」 | `dev-rules/schemas/review.schema.json` | `/user:calibrate` 入口处 |
-| 「契约文档不漂移」 | `python scripts/export_agent_contract.py --check` | `scripts/preflight.sh` 检查段 4 / CI |
-| 「分支命名 `prototype/|feature/|fix/`」 | `scripts/preflight.sh` 检查段 1 | pre-commit |
-| 「`docs/approved/` 仅在 GATE PR 中改动」 | `scripts/preflight.sh` 检查段 6 | PR 检查 |
+1. **复制模板**：`cp dev-rules/templates/preflight.sh scripts/preflight.sh`（如已存在则更新）
+2. **安装 git hook**：`bash dev-rules/templates/install-hooks.sh`，将 `preflight.sh` 接到 `.git/hooks/pre-commit`
+3. **CI 同步运行**：在 GitHub Actions / GitLab CI 中追加一步 `./scripts/preflight.sh`
+4. **dev-rules 子模块自身**：在子模块内提交前必须跑 `./dev-rules/verify-rules.sh`
 
-新项目接入时，将 `dev-rules/templates/preflight.sh` 复制到 `scripts/preflight.sh` 并按需启用各检查段。CI workflow 至少应运行 `dev-rules/sync.sh --check` 与 `scripts/preflight.sh`。
+接入完成后，违反任何一条强约束的提交都会被 hook 拦截，违反者的 CI 会 fail。`/user:calibrate` 在汇总指标前会用 `dev-rules/schemas/review.schema.json` 校验所有 `docs/review-*.json`。
+
+如果某项检查段在该项目尚不可自动化（例如还没有 API 时跳过 contract drift），必须把缺口记入 `docs/preflight-debt.md` 并设定截止日期，**禁止悄悄降级为"靠自觉"**。
 
 ## 禁止事项
 

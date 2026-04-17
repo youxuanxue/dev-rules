@@ -12,16 +12,16 @@
 每个载体承载的哲学（与父项目 `digital-clone-research.md` §10 表保持同步）：
 
 
-| 载体                                     | Jobs（聚焦/简洁）         | OPC（自动化/杠杆）              |
-| -------------------------------------- | ------------------- | ------------------------ |
-| `rules/product-dev.mdc`                | 设计哲学节 + 聚焦过滤步       | 自检纪律 + 4 阶段无臃肿           |
-| `rules/test-philosophy.mdc`            | 测试聚焦（核心 AC 优先）      | 测试自动化（CI 可跑）             |
-| `rules/agent-contract-enforcement.mdc` | API 最小面 + 一意一径      | 契约自动生成（禁手编）              |
-| `rules/dev-rules-convention.mdc`       | 单一事实来源（消除规则副本）      | 规则代码化 + 强制提交顺序（防漂移）      |
-| `rules/safe-shell-commands.mdc`        | —                   | 破坏性操作的人工门禁（防 Agent 失控）   |
-| `commands/decompose.md`                | 聚焦决策表（不做什么）         | 引擎路由 + 派发清单              |
-| `commands/review.md`                   | 设计质量维度（简洁/最小面/范围蔓延） | 手动操作残留检查 + 流程冗余检查        |
-| `commands/calibrate.md`                | —                   | 校准指标自动汇总                 |
+| 载体                                     | Jobs（聚焦/简洁）         | OPC（自动化/杠杆）            |
+| -------------------------------------- | ------------------- | ---------------------- |
+| `rules/product-dev.mdc`                | 设计哲学节 + 聚焦过滤步       | 自检纪律 + 4 阶段无臃肿         |
+| `rules/test-philosophy.mdc`            | 测试聚焦（核心 AC 优先）      | 测试自动化（CI 可跑）           |
+| `rules/agent-contract-enforcement.mdc` | API 最小面 + 一意一径      | 契约自动生成（禁手编）            |
+| `rules/dev-rules-convention.mdc`       | 单一事实来源（消除规则副本）      | 规则代码化 + 强制提交顺序（防漂移）    |
+| `rules/safe-shell-commands.mdc`        | —                   | 破坏性操作的人工门禁（防 Agent 失控） |
+| `commands/decompose.md`                | 聚焦决策表（不做什么）         | 引擎路由 + 派发清单            |
+| `commands/review.md`                   | 设计质量维度（简洁/最小面/范围蔓延） | 手动操作残留检查 + 流程冗余检查      |
+| `commands/calibrate.md`                | —                   | 校准指标自动汇总               |
 
 
 详细原则说明见父项目的 `digital-clone-research.md` §〇「两个哲学基石」。
@@ -81,15 +81,16 @@
 
 ## 强约束门禁（机械检查）
 
-每条软规则都有对应的可执行脚本，详见 `rules/dev-rules-convention.mdc` 的「强约束门禁」表。本仓库提供的脚本与模板：
+软规则与硬检查的完整映射定义在父项目 `digital-clone-research.md §六.½`，接入步骤见 `rules/dev-rules-convention.mdc`。本仓库交付的工件清单：
 
 
-| 脚本/资源                            | 作用                                            | 退出码语义        |
-| -------------------------------- | --------------------------------------------- | ------------ |
-| `sync.sh --check`                | 检测父项目 `.cursor/rules/` 与 submodule 的 drift | 0 = 一致；1 = drift |
-| `verify-rules.sh`                | 验证 dev-rules 仓库自身完整性（frontmatter / README / 哲学映射） | 0 = 通过；1 = 至少一项失败 |
-| `schemas/review.schema.json`     | review.md 输出的 JSON Schema（calibrate 入口前置校验） | 由 ajv / check-jsonschema 消费 |
-| `templates/preflight.sh`         | 项目级提交前/CI 门禁模板（覆盖分支命名、契约 drift、approved 改动门禁等） | 0 = 全部通过；非 0 = 至少一项失败 |
+| 工件                            | 退出码语义                                           |
+| ----------------------------- | ----------------------------------------------- |
+| `sync.sh --check`             | 0 = 一致；1 = drift                                |
+| `verify-rules.sh`             | 0 = 通过；1 = 至少一项失败（含幽灵路径引用检测）                    |
+| `schemas/review.schema.json`  | 由 ajv / check-jsonschema 消费；calibrate 入口校验      |
+| `templates/preflight.sh`      | 0 = 全部通过；非 0 = 至少一项失败（项目复制后使用）                  |
+| `templates/install-hooks.sh`  | 一键将 preflight.sh 接到 `.git/hooks/pre-commit`     |
 
 
 ## 新项目接入
