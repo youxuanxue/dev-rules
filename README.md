@@ -89,11 +89,12 @@
 | 工件                            | 退出码语义                                                       |
 | ----------------------------- | ----------------------------------------------------------- |
 | `sync.sh --check`             | 0 = 一致；1 = drift                                            |
-| `verify-rules.sh`             | 0 = 通过；1 = 至少一项失败（7 段：含幽灵路径检测、含 `global/CLAUDE.md` 存在性）  |
+| `verify-rules.sh`             | 0 = 通过；1 = 至少一项失败（<!-- stat:verify-rules-checks -->7<!-- /stat --> 段：含幽灵路径检测、含 `global/CLAUDE.md` 存在性）  |
 | `schemas/review.schema.json`  | 由 ajv / check-jsonschema 消费；calibrate 入口校验                  |
 | `templates/preflight.sh`      | 0 = 全部通过；非 0 = 至少一项失败（项目复制后使用）                              |
 | `templates/install-hooks.sh`  | 一键将 preflight.sh 接到 `.git/hooks/pre-commit`                 |
 | `global/CLAUDE.md`            | Claude Code 全局工作宪法（`~/.claude/CLAUDE.md` 是它的 symlink）       |
+| `sync-stats.sh` + `.stats.json` | 把散文档中的数值/事实从「叙述」变为「计算」——`--check` 漂移即 exit 1，根治"变更必伴漂移" |
 
 
 ## 新项目接入

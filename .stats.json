@@ -1,0 +1,26 @@
+{
+  "$schema": "./schemas/stats.schema.json",
+  "_comment": "Source-of-truth registry for numerical/factual claims that appear in prose docs. sync-stats.sh computes each value from the live repo and replaces the inner text of <!-- stat:NAME --> blocks. Add a new stat here, then annotate any doc that mentions the value, and the cycle of 'change → docs lag' is mechanically broken.",
+  "stats": {
+    "verify-rules-checks": {
+      "description": "Number of [N/M] check sections in dev-rules/verify-rules.sh",
+      "compute": "grep -cE '^log \"\\[[0-9]+/[0-9]+\\]' dev-rules/verify-rules.sh"
+    },
+    "preflight-sections": {
+      "description": "Number of '---- 检查 N: ' sections in dev-rules/templates/preflight.sh",
+      "compute": "grep -cE '^# ---- 检查 [0-9]+:' dev-rules/templates/preflight.sh"
+    },
+    "rules-count": {
+      "description": "Number of .mdc rule files in dev-rules/rules/",
+      "compute": "ls dev-rules/rules/*.mdc 2>/dev/null | wc -l | tr -d ' '"
+    },
+    "commands-count": {
+      "description": "Number of .md command files in dev-rules/commands/",
+      "compute": "ls dev-rules/commands/*.md 2>/dev/null | wc -l | tr -d ' '"
+    },
+    "hard-constraint-rows": {
+      "description": "Number of soft→hard mapping rows in digital-clone-research.md §六.½ table",
+      "compute": "awk '/^## 六.½/{flag=1; next} /^## /{flag=0} flag' digital-clone-research.md | grep -cE '^\\| [^|-]'  | awk '{print $1-1}'"
+    }
+  }
+}

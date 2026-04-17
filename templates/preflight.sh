@@ -149,6 +149,7 @@ fi
 
 # ---- 检查 7: 待审批产物不应进入 main ----（approved_by: pending 元数据）
 section "no docs/approved/ files left as 'approved_by: pending' on main"
+# (the trailing logic for this section is below, before the new section 8)
 if [ -d docs/approved ] && { [ "$branch" = "main" ] || [ "$branch" = "master" ]; }; then
     pending=$(grep -lE '^approved_by:[[:space:]]*pending[[:space:]]*$' docs/approved/*.md 2>/dev/null || true)
     if [ -n "$pending" ]; then
@@ -159,6 +160,24 @@ if [ -d docs/approved ] && { [ "$branch" = "main" ] || [ "$branch" = "master" ];
     fi
 else
     skip "not on main/master, or no docs/approved/"
+fi
+
+# ---- 检查 8: 散文档中的 stat 块与 live 计算值一致 ----（治"变更必伴漂移"）
+section "doc stats vs live values (sync-stats.sh --check)"
+if [ -x dev-rules/sync-stats.sh ]; then
+    if [ "$FIX_MODE" -eq 1 ]; then
+        dev-rules/sync-stats.sh --update | sed 's/^/    /'
+        ok "stat blocks updated to live values"
+    else
+        if dev-rules/sync-stats.sh --check > /tmp/preflight-stats.log 2>&1; then
+            ok "all stat blocks match live values"
+        else
+            cat /tmp/preflight-stats.log | sed 's/^/    /'
+            fail "doc stats have drifted (re-run with --fix or 'dev-rules/sync-stats.sh --update')"
+        fi
+    fi
+else
+    skip "dev-rules/sync-stats.sh not available"
 fi
 
 echo ""
