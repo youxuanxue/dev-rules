@@ -5,6 +5,14 @@ alwaysApply: true
 
 # Agent Contract Enforcement
 
+## Design Principles (Jobs simplicity + OPC automation)
+
+- **Minimal API surface (Jobs)**: every public endpoint, parameter, and exported symbol must have at least one real consumer. Speculative or "just in case" exports are forbidden — delete them.
+- **One canonical path per intent (Jobs)**: do not provide multiple endpoints/CLI commands that achieve the same outcome. Pick one shape and stick to it.
+- **Contract regeneration is automated (OPC)**: no manual editing of `docs/agent_integration.md` or endpoint tables. Drift is detected and fixed by running the generator, not by hand.
+
+## Enforcement Rules
+
 - Treat `docs/agent_integration.md` as generated from live code; do not hand-edit endpoint inventories.
 - After API/CLI behavior changes, regenerate contract docs and include resulting diffs in the same change.
 - Fail the task if implementation and contract docs diverge; fix by updating code or regenerating docs.
