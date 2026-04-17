@@ -10,6 +10,7 @@
 #   5. 哲学映射表（README §设计哲学）覆盖所有 rules + commands
 #   6. 仓库内引用的 dev-rules/ 路径（rules/commands/global/README）真实存在（防"幽灵引用"）
 #   7. global/ 目录关键文件存在（CLAUDE.md）
+#   8. LaunchAgent 实装一致性（macOS dev 机器：plist + launchctl 必须可见，否则跨机器同步路径就只是文档承诺）
 #
 # 用法：
 #   ./verify-rules.sh           # 验证，发现问题非零退出
@@ -39,7 +40,7 @@ log "=== verify-rules: dev-rules repo integrity ==="
 log ""
 
 # Check 1: frontmatter
-log "[1/7] frontmatter on every rule"
+log "[1/8] frontmatter on every rule"
 for rule in "$RULES_DIR"/*.mdc; do
     base="$(basename "$rule")"
     head -n 1 "$rule" | grep -q '^---$' || { fail "$base: missing leading ---"; continue; }
@@ -51,7 +52,7 @@ done
 
 # Check 2: README rules table → real files
 log ""
-log "[2/7] README rule references resolve"
+log "[2/8] README rule references resolve"
 if [ ! -f "$README" ]; then
     fail "README.md not found at $README"
 else
@@ -77,7 +78,7 @@ fi
 # Check 3: every rule/command appears in README
 # Accept either path-prefixed (`rules/foo.mdc`) or bare backtick (`foo.mdc`).
 log ""
-log "[3/7] every rule/command is documented in README"
+log "[3/8] every rule/command is documented in README"
 for rule in "$RULES_DIR"/*.mdc; do
     base="$(basename "$rule")"
     if grep -qE "(rules/$base|\`$base\`)" "$README" 2>/dev/null; then
@@ -98,7 +99,7 @@ done
 
 # Check 4: commands have no unresolved placeholders
 log ""
-log "[4/7] commands free of unresolved {{placeholders}}"
+log "[4/8] commands free of unresolved {{placeholders}}"
 for cmd in "$COMMANDS_DIR"/*.md; do
     base="$(basename "$cmd")"
     if grep -qE '\{\{[^}]+\}\}' "$cmd"; then
@@ -117,7 +118,7 @@ done
 
 # Check 5: philosophy mapping coverage
 log ""
-log "[5/7] philosophy mapping covers all rules+commands"
+log "[5/8] philosophy mapping covers all rules+commands"
 if grep -q '## 设计哲学' "$README" 2>/dev/null; then
     # Extract the 设计哲学 section content (until next top-level ## heading)
     philosophy_section=$(awk '/^## 设计哲学/{flag=1; next} /^## /{flag=0} flag' "$README")
@@ -144,7 +145,7 @@ fi
 
 # Check 6: every dev-rules/ path mentioned in rules/commands/global/README must exist
 log ""
-log "[6/7] dev-rules/ path references resolve (no ghost paths)"
+log "[6/8] dev-rules/ path references resolve (no ghost paths)"
 ghost=0
 # Collect all `dev-rules/...` references inside backticks across this repo
 while IFS= read -r path; do
@@ -165,11 +166,45 @@ done < <(grep -rhoE '`dev-rules/[A-Za-z0-9_./-]+`' "$RULES_DIR" "$COMMANDS_DIR" 
 
 # Check 7: global/ key files exist
 log ""
-log "[7/7] global/ key files present"
+log "[7/8] global/ key files present"
 if [ -f "$GLOBAL_DIR/CLAUDE.md" ]; then
     ok "global/CLAUDE.md"
 else
     fail "global/CLAUDE.md missing — sync.sh symlinks ~/.claude/CLAUDE.md to it"
+fi
+
+# Check 8: LaunchAgent installed where applicable.
+# Skip when not on macOS, in CI, or when ~/Codes/dev-rules doesn't exist
+# (pure consumer machines without the canonical mirror need no agent).
+log ""
+log "[8/8] cross-machine sync agent installed (macOS dev machines only)"
+HOME_CANONICAL="${DEV_RULES_HOME:-$HOME/Codes/dev-rules}"
+LAUNCH_LABEL="local.dev-rules.sync"
+LAUNCH_PLIST="$HOME/Library/LaunchAgents/${LAUNCH_LABEL}.plist"
+
+if [ -n "${CI:-}" ]; then
+    ok "skipped (CI environment)"
+elif [ "$(uname)" != "Darwin" ]; then
+    ok "skipped (non-macOS: $(uname))"
+elif [ ! -d "$HOME_CANONICAL" ]; then
+    ok "skipped ($HOME_CANONICAL not present — pure consumer machine)"
+elif [ ! -f "$LAUNCH_PLIST" ]; then
+    fail "LaunchAgent plist missing at $LAUNCH_PLIST"
+    echo "    fix: bash $SCRIPT_DIR/templates/install-launchagent.sh"
+else
+    # Materialize listing before piping; `launchctl list | grep -q` gets SIGPIPE'd (141)
+    # and would be misreported as "not loaded" even when it is.
+    if command -v launchctl > /dev/null 2>&1; then
+        listing="$(launchctl list 2>/dev/null || true)"
+        if printf '%s\n' "$listing" | grep -qF "$LAUNCH_LABEL"; then
+            ok "$LAUNCH_LABEL installed and loaded (--pull every 30 min)"
+        else
+            fail "LaunchAgent plist exists but not loaded into launchctl"
+            echo "    fix: launchctl load $LAUNCH_PLIST"
+        fi
+    else
+        ok "skipped (launchctl not available)"
+    fi
 fi
 
 log ""

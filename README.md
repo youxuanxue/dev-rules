@@ -89,10 +89,13 @@
 | 工件                            | 退出码语义                                                       |
 | ----------------------------- | ----------------------------------------------------------- |
 | `sync.sh --check`             | 0 = 一致；1 = drift                                            |
-| `verify-rules.sh`             | 0 = 通过；1 = 至少一项失败（<!-- stat:verify-rules-checks -->7<!-- /stat --> 段：含幽灵路径检测、含 `global/CLAUDE.md` 存在性）  |
+| `verify-rules.sh`             | 0 = 通过；1 = 至少一项失败（<!-- stat:verify-rules-checks -->8<!-- /stat --> 段：含幽灵路径、含 `global/CLAUDE.md`、含 LaunchAgent 实装） |
+| `sync.sh --push`              | push submodule + ~/Codes pull --ff-only + fan-out 到所有已注册项目（编辑者主动同步，原子动作） |
+| `sync.sh --pull`              | 远端 → ~/Codes → 所有项目 fan-out（LaunchAgent 与手动救场用）             |
 | `schemas/review.schema.json`  | 由 ajv / check-jsonschema 消费；calibrate 入口校验                  |
 | `templates/preflight.sh`      | 0 = 全部通过；非 0 = 至少一项失败（项目复制后使用）                              |
 | `templates/install-hooks.sh`  | 一键将 preflight.sh 接到 `.git/hooks/pre-commit`                 |
+| `templates/launchagent.plist` + `install-launchagent.sh` | 渲染 macOS LaunchAgent + launchctl 注册；每 30 min 跑 `sync.sh --pull`，治"跨机器静默落后" |
 | `global/CLAUDE.md`            | Claude Code 全局工作宪法（`~/.claude/CLAUDE.md` 是它的 symlink）       |
 | `sync-stats.sh` + `.stats.json` | 把散文档中的数值/事实从「叙述」变为「计算」——`--check` 漂移即 exit 1，根治"变更必伴漂移" |
 
@@ -107,40 +110,38 @@ git add .cursor/rules/ .gitmodules dev-rules
 git commit -m "chore: add dev-rules submodule and sync rules"
 ```
 
-## 首次安装（本地全局）
+## 首次安装（本地全局，每台 dev 机器一次）
 
 ```bash
-cd ~/Codes/dev-rules
-./setup_dev_rules_autoupdate_macos.sh load
+git clone git@github.com:youxuanxue/dev-rules.git ~/Codes/dev-rules
+~/Codes/dev-rules/sync.sh                                # 创建 home symlinks
+bash ~/Codes/dev-rules/templates/install-launchagent.sh  # 注册 30min 跨机器同步 agent
 ```
 
-这会：
+完成后：
 
-1. Symlink 规则到 `~/.cursor/rules/`、命令到 `~/.claude/commands/`、全局宪法到 `~/.claude/CLAUDE.md`
-2. 现存的真实 `~/.claude/CLAUDE.md` 会被备份为 `CLAUDE.md.bak.<timestamp>` 后再替换为 symlink
-3. 注册 macOS LaunchAgent 每小时自动 `git pull`（有更新时自动 re-sync）
+1. 规则 → `~/.cursor/rules/`、命令 → `~/.claude/commands/`、全局宪法 → `~/.claude/CLAUDE.md`（symlink）
+2. 现存的真实 `~/.claude/CLAUDE.md` 备份为 `CLAUDE.md.bak.<ts>` 后再替换为 symlink
+3. macOS LaunchAgent `local.dev-rules.sync` 每 30 min 跑 `sync.sh --pull`
+4. 之后 `verify-rules.sh` 段 8 会强制要求 LaunchAgent 在该机器上必须实装，否则 exit 1
 
-## 日常使用
+## 日常使用（编辑 → 一步全机生效）
 
 ```bash
-# 在任意项目内编辑规则
-vim dev-rules/rules/product-dev.mdc
-
-# 同步到当前项目的 .cursor/rules/
-dev-rules/sync.sh --local
-
-# 提交 submodule 变更
-cd dev-rules && git add -A && git commit -m "update rules" && git push && cd ..
-
-# 提交父项目的变更并推送
+vim dev-rules/{rules,commands,global}/某文件
+dev-rules/sync.sh --local                                          # 复制到本项目 + auto-register
+dev-rules/verify-rules.sh                                          # 8 段强约束自检
+cd dev-rules && git add -A && git commit -m "update rules"
+./sync.sh --push                                                   # push + ~/Codes pull + 所有项目 fan-out
+cd ..
 git add dev-rules .cursor/rules/ && git commit -m "chore: sync dev-rules" && git push
 
-# 克隆含 submodule 的项目（一次性）
+# 克隆含 submodule 的项目
 git clone --recurse-submodules <repo-url>
-
-# 已克隆项目初始化 submodule
-git submodule update --init --recursive
+git submodule update --init --recursive   # 已克隆项目补 submodule
 ```
+
+`sync.sh --push` 把"提交后人工要跑 N 个机器/项目同步"压成一个原子动作。跨机器同步由 LaunchAgent 兜底，不需要任何手工步骤。
 
 ## 为什么 home 用 symlink、项目用 real copy？
 

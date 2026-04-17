@@ -18,9 +18,12 @@ alwaysApply: true
 │   ├── schemas/*.json               ← JSON Schema（review 输出契约等）
 │   ├── templates/                   ← 项目侧脚本模板
 │   │   ├── preflight.sh             ←   提交前/CI 强约束门禁模板
-│   │   └── install-hooks.sh         ←   一键安装 git pre-commit hook
-│   ├── sync.sh                      ← 分发脚本（含 --check drift 检测）
-│   └── verify-rules.sh              ← 规则仓库自身完整性检查
+│   │   ├── install-hooks.sh         ←   一键安装 git pre-commit hook
+│   │   ├── launchagent.plist        ←   跨机器同步用 LaunchAgent 模板
+│   │   └── install-launchagent.sh   ←   渲染 plist + 注册到 launchctl
+│   ├── sync.sh                      ← 分发脚本（--push/--pull/--local/--check）
+│   ├── sync-stats.sh                ← 散文档数值漂移机械检查
+│   └── verify-rules.sh              ← 规则仓库自身完整性检查（8 段）
 ├── .cursor/rules/*.mdc              ← sync 产物（禁止直接编辑）
 ├── scripts/
 │   └── preflight.sh                 ← 复制自 dev-rules/templates/preflight.sh
@@ -37,25 +40,50 @@ alwaysApply: true
 ```bash
 cd 项目根目录
 git submodule add git@github.com:youxuanxue/dev-rules.git dev-rules
-dev-rules/sync.sh --local
+dev-rules/sync.sh --local                   # 复制规则 + 自动 register 该项目
 git add .cursor/rules/ .gitmodules dev-rules
 git commit -m "chore: add dev-rules submodule and sync rules"
 ```
 
+**首次在本机使用**（仅一次）：
+
+```bash
+git clone git@github.com:youxuanxue/dev-rules.git ~/Codes/dev-rules
+~/Codes/dev-rules/sync.sh                                          # 创建 home symlinks
+bash ~/Codes/dev-rules/templates/install-launchagent.sh            # 注册跨机器同步 agent
+```
+
+之后在任意项目里 `sync.sh --local` 就会自动 register 进 `~/Codes/dev-rules/.registered-projects`，下一次 `--push` / `--pull` / LaunchAgent 自动 fan-out 到该项目。
+
 ## 编辑规则
 
-涉及 `dev-rules/` 的 Git 提交**必须**遵守「先子模块、后父仓库」顺序（详见下一节）。其余步骤如下：
+涉及 `dev-rules/` 的 Git 提交**必须**遵守「先子模块、后父仓库」顺序（详见下一节）。**两种工作流**——日常用 wrapper，特殊场景手工：
 
-1. 在任意项目内编辑 `dev-rules/rules/*.mdc`
-2. 运行 `dev-rules/sync.sh --local` 同步到当前项目的 `.cursor/rules/`
-3. 在子模块仓库内提交并推送（先于父仓库）：
+### 日常工作流（推荐 — 一条命令完成 push + 全机生效）
+
+1. 在任意项目内编辑 `dev-rules/rules/*.mdc`（或 `commands/`、`global/`）
+2. 运行 `dev-rules/sync.sh --local` 同步到当前项目的 `.cursor/rules/` 并自动 register 该项目
+3. 在子模块仓库内 commit：
    ```bash
-   cd dev-rules && git add -A && git commit -m "update rules" && git push && cd ..
+   cd dev-rules && git add -A && git commit -m "update rules"
    ```
-4. 回到项目根目录，再提交父仓库的子模块指针与 `.cursor/rules/`，并推送：
+4. 用 wrapper 一步完成 push + ~/Codes 拉取 + 所有项目 fan-out：
+   ```bash
+   ./sync.sh --push          # 在 dev-rules/ 内运行；它会自己 git push origin
+   cd ..
+   ```
+5. 父仓库提交子模块指针 + 已同步的 `.cursor/rules/`：
    ```bash
    git add dev-rules .cursor/rules/ && git commit -m "chore: sync dev-rules" && git push
    ```
+
+### 手工工作流（断网 / wrapper 不可用 / debug 时）
+
+把第 4 步拆为 `git push` + `cd ~/Codes/dev-rules && git pull --ff-only && ./sync.sh --all`。效果与 `--push` 完全等价。
+
+### 跨机器同步（被动路径）
+
+不需要任何手工动作。本机 LaunchAgent `local.dev-rules.sync` 每 30 分钟跑 `sync.sh --pull`，把别的机器推上来的更新自动拉到 `~/Codes/dev-rules` 并 fan-out 到所有已注册项目。如果验证失败（`verify-rules.sh` 段 8）说明 LaunchAgent 没装，按提示运行 `templates/install-launchagent.sh`。
 
 ## Git 提交顺序（强制）
 
@@ -86,14 +114,16 @@ git commit -m "chore: add dev-rules submodule and sync rules"
 ## 禁止事项
 
 - 禁止直接编辑 `.cursor/rules/` 中的文件（它们是 sync 产物）
-- 禁止绕过 submodule 手动复制规则文件
-- 禁止在 `.cursor/rules/` 中创建不在 `dev-rules/rules/` 中的规则文件
+- 禁止把 `~/Codes/dev-rules/` 用作"另一个上游"——每个项目的真相是它自己的 submodule SHA
+- 禁止在项目里把 `.cursor/rules/*.mdc` 改为 symlink 指向 `~/Codes/dev-rules/`（云端 Agent 拿不到目标文件 + 上游错乱）
 - 禁止在 `dev-rules/sync.sh --check` 失败的情况下提交父仓库
 - 禁止在 `dev-rules/verify-rules.sh` 失败的情况下提交 dev-rules 子模块
+- 禁止在 macOS dev 机器上把 LaunchAgent 卸载后不重新装回——跨机器同步路径会变回"承诺"
 
 ## Agent 行为约束
 
-- 如果发现项目缺少 `dev-rules/` submodule，提醒用户按上述步骤接入
+- 如果发现项目缺少 `dev-rules/` submodule，提醒用户按"新项目接入"步骤接入
 - 如果发现 `.cursor/rules/` 与 `dev-rules/rules/` 内容不一致，运行 `dev-rules/sync.sh --local` 修复（提交前必须再跑 `--check` 确认归零）
-- 修改规则时，编辑 `dev-rules/rules/` 中的文件 → `sync.sh --local` → `verify-rules.sh` → 提交
+- 修改规则的标准链路：`编辑 dev-rules/{rules,commands,global}/* → sync.sh --local → verify-rules.sh → cd dev-rules && git commit → ./sync.sh --push → cd .. && git commit && git push`
 - 涉及 `dev-rules/` 的提交与推送时，**必须**按「Git 提交顺序（强制）」先子模块、后父仓库；不得颠倒顺序或只提交父仓库而不同步子模块上游
+- 如果 `dev-rules/sync.sh --status` 报告 mirror SHA 与 submodule SHA 不一致，必须先 `--push`（本机有未推变更）或 `--pull`（远端有未拉变更），不得在 mirror 落后状态下做新规则编辑

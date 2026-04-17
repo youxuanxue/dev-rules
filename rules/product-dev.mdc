@@ -138,7 +138,7 @@ alwaysApply: true
 凡在 markdown/mdc 中写"X 段 / X 类 / X 条"等会随实现演进而过期的数字，**必须**用 stat 块包裹：
 
 ```markdown
-verify-rules.sh 现在 <!-- stat:verify-rules-checks -->7<!-- /stat --> 段
+verify-rules.sh 现在 <!-- stat:verify-rules-checks -->8<!-- /stat --> 段
 ```
 
 新数字必须在 `dev-rules/.stats.json` 注册 compute 命令；preflight 段 8 会用 `dev-rules/sync-stats.sh --check` 自动核对。这是治"变更必伴漂移"的元解法（机制见 `digital-clone-research.md §六.¾`）。
