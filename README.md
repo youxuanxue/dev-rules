@@ -11,14 +11,18 @@
 
 每个载体承载的哲学（与父项目 `digital-clone-research.md` §10 表保持同步）：
 
-| 载体 | Jobs（聚焦/简洁） | OPC（自动化/杠杆） |
-|------|------------------|-----------------|
-| `rules/product-dev.mdc` | 设计哲学节 + 聚焦过滤步 | 自检纪律 + 4 阶段无臃肿 |
-| `commands/decompose.md` | 聚焦决策表（不做什么） | 引擎路由 + 派发清单 |
-| `commands/review.md` | 设计质量维度（简洁/最小面/范围蔓延） | 手动操作残留检查 + 流程冗余检查 |
-| `commands/calibrate.md` | — | 校准指标自动汇总 |
-| `rules/test-philosophy.mdc` | 测试聚焦（核心 AC 优先） | 测试自动化（CI 可跑） |
-| `rules/agent-contract-enforcement.mdc` | API 最小面 + 一意一径 | 契约自动生成（禁手编） |
+
+| 载体                                     | Jobs（聚焦/简洁）         | OPC（自动化/杠杆）              |
+| -------------------------------------- | ------------------- | ------------------------ |
+| `rules/product-dev.mdc`                | 设计哲学节 + 聚焦过滤步       | 自检纪律 + 4 阶段无臃肿           |
+| `rules/test-philosophy.mdc`            | 测试聚焦（核心 AC 优先）      | 测试自动化（CI 可跑）             |
+| `rules/agent-contract-enforcement.mdc` | API 最小面 + 一意一径      | 契约自动生成（禁手编）              |
+| `rules/dev-rules-convention.mdc`       | 单一事实来源（消除规则副本）      | 规则代码化 + 强制提交顺序（防漂移）      |
+| `rules/safe-shell-commands.mdc`        | —                   | 破坏性操作的人工门禁（防 Agent 失控）   |
+| `commands/decompose.md`                | 聚焦决策表（不做什么）         | 引擎路由 + 派发清单              |
+| `commands/review.md`                   | 设计质量维度（简洁/最小面/范围蔓延） | 手动操作残留检查 + 流程冗余检查        |
+| `commands/calibrate.md`                | —                   | 校准指标自动汇总                 |
+
 
 详细原则说明见父项目的 `digital-clone-research.md` §〇「两个哲学基石」。
 
@@ -56,23 +60,36 @@
 ## 包含的规则
 
 
-| 文件                               | 说明                                                |
-| -------------------------------- | ------------------------------------------------- |
-| `dev-rules-convention.mdc`       | submodule 约定本身（含先子模块后父仓库提交顺序）                    |
-| `agent-contract-enforcement.mdc` | API 契约同步与安全基线（含 Jobs 最小面、OPC 契约自动生成原则）           |
-| `test-philosophy.mdc`            | 测试设计方法论（含 Jobs 测试聚焦、OPC 测试自动化原则）                 |
-| `safe-shell-commands.mdc`        | 破坏性命令使用规范                                         |
+| 文件                               | 说明                                              |
+| -------------------------------- | ----------------------------------------------- |
+| `dev-rules-convention.mdc`       | submodule 约定本身（含先子模块后父仓库提交顺序）                   |
+| `agent-contract-enforcement.mdc` | API 契约同步与安全基线（含 Jobs 最小面、OPC 契约自动生成原则）          |
+| `test-philosophy.mdc`            | 测试设计方法论（含 Jobs 测试聚焦、OPC 测试自动化原则）                |
+| `safe-shell-commands.mdc`        | 破坏性命令使用规范                                       |
 | `product-dev.mdc`                | 产品研发工作流（含设计哲学节、原型设计 + 两个审批门禁、提交前完成自检、云端 CLI 配置） |
 
 
 ## 包含的 Claude Code 命令
 
 
-| 命令          | 用法                          | 说明                                   |
-| ----------- | --------------------------- | ------------------------------------ |
-| `decompose` | `/user:decompose [需求描述]`    | 将需求拆解为含聚焦决策、原型阶段、引擎路由、派发清单的子任务       |
-| `review`    | `/user:review [范围]`         | 双维度代码审查（通用质量 + 符合性 + 设计质量），默认最近 24h |
-| `calibrate` | `/user:calibrate [日期范围]`    | 汇总审查校准指标（Phase 2 准入判定）               |
+| 命令          | 用法                       | 说明                                  |
+| ----------- | ------------------------ | ----------------------------------- |
+| `decompose` | `/user:decompose [需求描述]` | 将需求拆解为含聚焦决策、原型阶段、引擎路由、派发清单的子任务      |
+| `review`    | `/user:review [范围]`      | 双维度代码审查（通用质量 + 符合性 + 设计质量），默认最近 24h |
+| `calibrate` | `/user:calibrate [日期范围]` | 汇总审查校准指标（Phase 2 准入判定）              |
+
+
+## 强约束门禁（机械检查）
+
+每条软规则都有对应的可执行脚本，详见 `rules/dev-rules-convention.mdc` 的「强约束门禁」表。本仓库提供的脚本与模板：
+
+
+| 脚本/资源                            | 作用                                            | 退出码语义        |
+| -------------------------------- | --------------------------------------------- | ------------ |
+| `sync.sh --check`                | 检测父项目 `.cursor/rules/` 与 submodule 的 drift | 0 = 一致；1 = drift |
+| `verify-rules.sh`                | 验证 dev-rules 仓库自身完整性（frontmatter / README / 哲学映射） | 0 = 通过；1 = 至少一项失败 |
+| `schemas/review.schema.json`     | review.md 输出的 JSON Schema（calibrate 入口前置校验） | 由 ajv / check-jsonschema 消费 |
+| `templates/preflight.sh`         | 项目级提交前/CI 门禁模板（覆盖分支命名、契约 drift、approved 改动门禁等） | 0 = 全部通过；非 0 = 至少一项失败 |
 
 
 ## 新项目接入

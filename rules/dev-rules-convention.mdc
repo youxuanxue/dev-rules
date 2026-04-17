@@ -56,15 +56,33 @@ git commit -m "chore: add dev-rules submodule and sync rules"
 
 **禁止**：在子模块未提交（或未推送、若团队以远端为准）的情况下，单独在父仓库 `git commit` 更新 `dev-rules` 子模块引用或仅提交 `.cursor/rules/` 而不同步子模块上游。
 
+## 强约束门禁（机械检查，禁止仅"靠自觉"）
+
+软规则配套有可执行脚本，提交/CI 必须运行：
+
+| 软规则 | 硬约束脚本 | 触发时机 |
+|--------|----------|---------|
+| 「`.cursor/rules/` 与 submodule 不漂移」 | `dev-rules/sync.sh --check` | pre-commit / CI |
+| 「dev-rules 仓库自身完整性（README、frontmatter、哲学映射）」 | `dev-rules/verify-rules.sh` | dev-rules 子模块提交前 |
+| 「先子模块后父仓库」（submodule SHA 必须在 dev-rules 中真实存在） | `scripts/preflight.sh` 检查段 2 | pre-commit / CI |
+| 「review JSON 输出格式合规」 | `dev-rules/schemas/review.schema.json` | `/user:calibrate` 入口处 |
+| 「契约文档不漂移」 | `python scripts/export_agent_contract.py --check` | `scripts/preflight.sh` 检查段 4 / CI |
+| 「分支命名 `prototype/|feature/|fix/`」 | `scripts/preflight.sh` 检查段 1 | pre-commit |
+| 「`docs/approved/` 仅在 GATE PR 中改动」 | `scripts/preflight.sh` 检查段 6 | PR 检查 |
+
+新项目接入时，将 `dev-rules/templates/preflight.sh` 复制到 `scripts/preflight.sh` 并按需启用各检查段。CI workflow 至少应运行 `dev-rules/sync.sh --check` 与 `scripts/preflight.sh`。
+
 ## 禁止事项
 
 - 禁止直接编辑 `.cursor/rules/` 中的文件（它们是 sync 产物）
 - 禁止绕过 submodule 手动复制规则文件
 - 禁止在 `.cursor/rules/` 中创建不在 `dev-rules/rules/` 中的规则文件
+- 禁止在 `dev-rules/sync.sh --check` 失败的情况下提交父仓库
+- 禁止在 `dev-rules/verify-rules.sh` 失败的情况下提交 dev-rules 子模块
 
 ## Agent 行为约束
 
 - 如果发现项目缺少 `dev-rules/` submodule，提醒用户按上述步骤接入
-- 如果发现 `.cursor/rules/` 与 `dev-rules/rules/` 内容不一致，运行 `dev-rules/sync.sh --local` 修复
-- 修改规则时，编辑 `dev-rules/rules/` 中的文件，然后运行 sync
+- 如果发现 `.cursor/rules/` 与 `dev-rules/rules/` 内容不一致，运行 `dev-rules/sync.sh --local` 修复（提交前必须再跑 `--check` 确认归零）
+- 修改规则时，编辑 `dev-rules/rules/` 中的文件 → `sync.sh --local` → `verify-rules.sh` → 提交
 - 涉及 `dev-rules/` 的提交与推送时，**必须**按「Git 提交顺序（强制）」先子模块、后父仓库；不得颠倒顺序或只提交父仓库而不同步子模块上游

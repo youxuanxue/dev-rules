@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/youxuanxue/dev-rules/schemas/review.schema.json",
+  "title": "Code Review Report",
+  "description": "Schema for /user:review JSON output. Validated by /user:calibrate before computing metrics.",
+  "type": "object",
+  "required": ["review_date", "scope", "approved_artifacts_referenced", "summary", "conformance_summary", "findings", "circuit_breaker"],
+  "additionalProperties": true,
+  "properties": {
+    "review_date": {
+      "type": "string",
+      "format": "date",
+      "description": "ISO date when this review was generated"
+    },
+    "scope": {
+      "type": "string",
+      "description": "git range reviewed, e.g. 'HEAD~5..HEAD' or 'last 24h'"
+    },
+    "approved_artifacts_referenced": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "List of docs/approved/ files actually consulted as conformance baseline"
+    },
+    "summary": {
+      "type": "object",
+      "required": ["critical", "high", "medium", "low"],
+      "properties": {
+        "critical": { "type": "integer", "minimum": 0 },
+        "high":     { "type": "integer", "minimum": 0 },
+        "medium":   { "type": "integer", "minimum": 0 },
+        "low":      { "type": "integer", "minimum": 0 }
+      }
+    },
+    "conformance_summary": {
+      "type": "object",
+      "required": ["total_findings", "by_artifact"],
+      "properties": {
+        "total_findings": { "type": "integer", "minimum": 0 },
+        "by_artifact": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "category", "automatable", "file", "description", "human_verdict"],
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": ["critical", "high", "medium", "low"]
+          },
+          "category": {
+            "type": "string",
+            "enum": ["code-quality", "security", "test-coverage", "architecture", "contract", "input-safety", "design-quality", "conformance", "scope-creep"]
+          },
+          "automatable": { "type": "boolean" },
+          "file": { "type": "string", "minLength": 1 },
+          "line": { "type": ["integer", "null"], "minimum": 0 },
+          "description": { "type": "string", "minLength": 1 },
+          "reference": {
+            "type": ["string", "null"],
+            "description": "Required when category=conformance: points to approved-artifact path#section"
+          },
+          "suggested_fix": { "type": ["string", "null"] },
+          "human_verdict": {
+            "type": "object",
+            "description": "Empty object when generated; reviewers fill in during calibration",
+            "additionalProperties": false,
+            "properties": {
+              "accurate":         { "type": "boolean" },
+              "severity_correct": { "type": "boolean" },
+              "autofix_safe":     { "type": "boolean" },
+              "notes":            { "type": "string" }
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if":   { "properties": { "category": { "const": "conformance" } } },
+            "then": { "required": ["reference"], "properties": { "reference": { "type": "string", "minLength": 1 } } }
+          }
+        ]
+      }
+    },
+    "circuit_breaker": {
+      "type": "object",
+      "required": ["max_autofixes", "budget_usd_used", "tripped"],
+      "properties": {
+        "max_autofixes":   { "type": "integer", "minimum": 0 },
+        "budget_usd_used": { "type": "number",  "minimum": 0 },
+        "tripped":         { "type": "boolean" },
+        "trip_reason":     { "type": ["string", "null"] }
+      }
+    }
+  }
+}

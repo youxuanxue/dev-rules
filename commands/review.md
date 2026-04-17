@@ -13,6 +13,7 @@ $ARGUMENTS
 3. `CLAUDE.md` — 项目架构约束
 
 加载 `docs/approved/` 时，检查每个文件的 YAML frontmatter 元数据头：
+
 - `approved_by: pending` → 该文件尚未通过人工审批，在报告中标注"未审批产物：{文件名}"，不作为符合性基线
 - 缺少元数据头 → 在报告中标注"缺少审批元数据：{文件名}"，仍作为基线但降低置信度
 - `approved_by` 为具体人名 → 正常作为符合性基线
@@ -119,12 +120,13 @@ $ARGUMENTS
   - **high**：必须修复（与审批产物严重偏离、架构问题）
   - **medium**：建议修复（代码质量、缺少测试、与审批产物轻微偏离）
   - **low**：改进建议（风格、命名、可读性）
-
   Markdown 摘要中的映射：critical/high → CRITICAL，medium → WARNING，low → INFO
 
 ## 输出格式
 
 将报告以 **JSON** 格式输出到 `docs/review-$(date +%Y%m%d).json`，遵循结构化审查格式（含 `approved_artifacts_referenced`、`conformance_summary`、每个 finding 的 `category` 和 `reference` 字段）。
+
+**强约束**：JSON 必须能通过 `dev-rules/schemas/review.schema.json`（JSON Schema Draft 2020-12）的校验。`/user:calibrate` 在汇总指标前会拒绝任何不合规文件。校验涵盖：必填字段、severity/category 枚举、conformance 类必须含 `reference`、`human_verdict` 结构。
 
 每个 finding 必须包含一个空的 `human_verdict` 对象，供人工校准时填写：
 

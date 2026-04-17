@@ -12,6 +12,7 @@
 #   ./sync.sh --status           # 查看当前同步状态
 #   ./sync.sh --register /path   # 注册一个项目到同步列表
 #   ./sync.sh --list             # 列出所有已注册项目
+#   ./sync.sh --check            # 检测父项目 .cursor/rules/ 与 submodule 的 drift（不修复，CI 用）
 #
 # 架构说明：
 #
@@ -118,6 +119,58 @@ sync_local() {
     sync_to_project "$parent_dir"
 }
 
+check_project_drift() {
+    local project_dir="$1"
+    local target_rules="$project_dir/.cursor/rules"
+    local drift=0
+
+    if [ ! -d "$target_rules" ]; then
+        echo "  MISSING: $project_dir/.cursor/rules/ does not exist (run --local to create)"
+        return 1
+    fi
+
+    for rule in "$RULES_DIR"/*.mdc; do
+        local basename
+        basename="$(basename "$rule")"
+        local target="$target_rules/$basename"
+
+        if [ ! -f "$target" ]; then
+            echo "  DRIFT: $basename missing in $(basename "$project_dir")/.cursor/rules/"
+            drift=1
+        elif ! diff -q "$rule" "$target" > /dev/null 2>&1; then
+            echo "  DRIFT: $basename differs from submodule source"
+            drift=1
+        fi
+    done
+
+    for target in "$target_rules"/*.mdc; do
+        [ -f "$target" ] || continue
+        local basename
+        basename="$(basename "$target")"
+        if [ ! -f "$RULES_DIR/$basename" ]; then
+            echo "  DRIFT: $basename exists in .cursor/rules/ but not in dev-rules/rules/ (orphan)"
+            drift=1
+        fi
+    done
+
+    return $drift
+}
+
+check_drift() {
+    local parent_dir
+    parent_dir="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+    echo "=== Checking drift: $(basename "$parent_dir")/.cursor/rules/ vs submodule ==="
+    if check_project_drift "$parent_dir"; then
+        echo "  ok: no drift"
+        exit 0
+    else
+        echo ""
+        echo "Drift detected. Run: ./dev-rules/sync.sh --local"
+        exit 1
+    fi
+}
+
 register_project() {
     local project_dir
     project_dir="$(cd "$1" && pwd)"
@@ -201,6 +254,9 @@ case "${1:-}" in
     --local)
         sync_local
         ;;
+    --check)
+        check_drift
+        ;;
     --project)
         [ -z "${2:-}" ] && { echo "Usage: $0 --project /path/to/project"; exit 1; }
         sync_to_project "$2"
@@ -219,6 +275,7 @@ case "${1:-}" in
         echo "Usage:"
         echo "  $0                    Sync to home directory (symlinks)"
         echo "  $0 --local            Sync from submodule to parent project (real copy)"
+        echo "  $0 --check            Check drift between parent .cursor/rules/ and submodule (CI use, exit 1 on drift)"
         echo "  $0 --project /path    Sync to a specific project (real copy)"
         echo "  $0 --all              Sync to home + all registered projects"
         echo "  $0 --register /path   Register a project for --all sync"

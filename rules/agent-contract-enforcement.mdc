@@ -30,3 +30,12 @@ Each project must maintain its own `scripts/export_agent_contract.py` tailored t
 2. Run `python scripts/export_agent_contract.py`.
 3. Run `python scripts/export_agent_contract.py --check`.
 4. If check fails, resolve drift before any further feature work.
+
+## Hard Constraint Wiring (no soft rule without a check)
+
+Every rule above must have a mechanical gate. The canonical wiring is:
+
+- `scripts/export_agent_contract.py --check` is invoked by `scripts/preflight.sh` (template at `dev-rules/templates/preflight.sh`, check section 4).
+- `scripts/preflight.sh` runs in pre-commit and CI; failure blocks merge.
+- Layered-dependency, input-safety, and state-file safety rules above must be encoded as project-level lint or test cases; describing them here without a check is forbidden.
+- When a project cannot yet automate one of these checks, record it in the project's `docs/preflight-debt.md` with a deadline; do not silently downgrade to "honor system".
