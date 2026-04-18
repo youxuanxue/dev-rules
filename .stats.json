@@ -26,20 +26,20 @@
       "description": "zw-brain: Number of legacy '一体化大数据平台' subsystems (source: docs/integrated-bigdata-platform/README.md, may be .gitignore'd in zw-brain repo so guarded).",
       "compute": "[ -f docs/integrated-bigdata-platform/README.md ] && grep -cE '^### [0-9]+\\.[0-9]+ ' docs/integrated-bigdata-platform/README.md || true"
     },
-    "zwbrain.mapping-rows-old": {
-      "description": "zw-brain: Number of '旧平台映射' rows in design baseline §八 table.",
-      "compute": "[ -f docs/approved/zw-brain-architecture.md ] && awk '/^## 八/{flag=1; next} /^## 九/{flag=0} flag' docs/approved/zw-brain-architecture.md | grep -cE '^\\| K[0-9]+ ' || true"
+    "zwbrain.kept-functions": {
+      "description": "zw-brain: Number of K-rows (must-keep functions) in design baseline §3.1 table.",
+      "compute": "[ -f docs/approved/zw-brain-architecture.md ] && awk '/^### 3\\.1 /{flag=1; next} /^### 3\\.[2-9]/{flag=0} flag' docs/approved/zw-brain-architecture.md | grep -cE '^\\| K[0-9]+' || true"
     },
-    "zwbrain.mapping-rows-new": {
-      "description": "zw-brain: Number of '新增' rows in design baseline §八 table.",
-      "compute": "[ -f docs/approved/zw-brain-architecture.md ] && awk '/^## 八/{flag=1; next} /^## 九/{flag=0} flag' docs/approved/zw-brain-architecture.md | grep -cE '^\\| N[0-9]+ ' || true"
+    "zwbrain.not-doing": {
+      "description": "zw-brain: Number of N-rows (won't-do items) in design baseline §3.4 table.",
+      "compute": "[ -f docs/approved/zw-brain-architecture.md ] && awk '/^### 3\\.4 /{flag=1; next} /^### |^## /{flag=0} flag' docs/approved/zw-brain-architecture.md | grep -cE '^\\| N[0-9]+' || true"
     },
     "zwbrain.webui-pages-cap": {
-      "description": "zw-brain: WebUI core scenario page count (§7.3 table data rows).",
-      "compute": "[ -f docs/approved/zw-brain-architecture.md ] && awk '/^### 7\\.3 /{flag=1; next} /^### 7\\.4|^## 八/{flag=0} flag' docs/approved/zw-brain-architecture.md | grep -cE '^\\| [^|-]' | awk '{print $1>1?$1-1:0}' || true"
+      "description": "zw-brain: WebUI core scenario page count cap (§7.3 table data rows).",
+      "compute": "[ -f docs/approved/zw-brain-architecture.md ] && awk '/^### 7\\.3 /{flag=1; next} /^### |^## /{flag=0} flag' docs/approved/zw-brain-architecture.md | grep -cE '^\\| [0-9]+ ' || true"
     },
     "zwbrain.preflight-sections": {
-      "description": "zw-brain: Project-local scripts/preflight.sh adds 5 sections (7a/7b/9/10/11) on top of the dev-rules template (counts run_check invocations).",
+      "description": "zw-brain: Project-local scripts/preflight.sh adds N project-specific sections on top of the dev-rules template (counts run_check invocations).",
       "compute": "[ -f scripts/preflight.sh ] && grep -cE '^run_check ' scripts/preflight.sh || true"
     }
   }
