@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/youxuanxue/dev-rules/schemas/skill.schema.json",
+  "title": "Agent Skill Manifest",
+  "description": "Canonical Skill manifest contract for AI-native projects (originated for zw-brain §3 + §六, generalized for any registered Skill across the dev-rules ecosystem). Every Skill registered into an Agent platform MUST validate against this schema.",
+  "type": "object",
+  "required": ["skill_id", "title", "version", "input_schema", "output_schema", "side_effects", "registry_source"],
+  "additionalProperties": false,
+  "properties": {
+    "skill_id": {
+      "type": "string",
+      "description": "URN-style identifier in the form `<namespace>.<verb>` or `<namespace>.<sub_namespace>.<verb>` (e.g. `data.search`, `dashboard.render_command_center`, `national.relay_submit`). The first path segment is the Skill's domain namespace, the last is the action verb.",
+      "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*){1,3}$"
+    },
+    "title": {
+      "type": "string",
+      "description": "Human-readable Skill title (one short line). Used in marketplaces, agent prompts, and Skill cards.",
+      "minLength": 2,
+      "maxLength": 80
+    },
+    "description": {
+      "type": "string",
+      "description": "Multi-line Skill description (Markdown allowed). Should answer: what does it do, when to call it, what NOT to use it for."
+    },
+    "version": {
+      "type": "string",
+      "description": "Semver. Major bump = breaking change to input/output schema; minor = additive; patch = bug fix only.",
+      "pattern": "^\\d+\\.\\d+\\.\\d+(-[a-z0-9.-]+)?$"
+    },
+    "input_schema": {
+      "type": "object",
+      "description": "JSON Schema describing the Skill's input. MUST be valid JSON Schema draft 2020-12 or earlier. Empty object `{}` allowed for parameter-less Skills."
+    },
+    "output_schema": {
+      "type": "object",
+      "description": "JSON Schema describing the Skill's output."
+    },
+    "preconditions": {
+      "type": "array",
+      "description": "Predicates that MUST hold before invocation. Engine SHOULD check these (e.g. user has permission, session is open, target resource exists) and refuse to call the Skill if any fails.",
+      "items": {
+        "type": "object",
+        "required": ["check", "description"],
+        "additionalProperties": false,
+        "properties": {
+          "check": {
+            "type": "string",
+            "description": "Symbolic name of the precondition (e.g. `user.has_permission`, `resource.exists`, `session.open`)."
+          },
+          "description": { "type": "string" },
+          "params": { "type": "object", "description": "Optional parameters for the predicate." }
+        }
+      }
+    },
+    "side_effects": {
+      "type": "array",
+      "description": "Declared side effects. Read-only Skills MUST declare an empty array. Side effects drive audit, blockchain anchor, idempotency-key requirement, and read/write split for downstream consumers (e.g. dashboard-readonly check).",
+      "items": {
+        "type": "string",
+        "enum": [
+          "audit",
+          "blockchain_anchor",
+          "db_write",
+          "external_call",
+          "notification",
+          "task_dispatch",
+          "file_write",
+          "state_machine_transition"
+        ]
+      }
+    },
+    "audit_required": {
+      "type": "boolean",
+      "description": "When true (default for any Skill with side_effects), the engine MUST emit an audit_event before AND after invocation; failure to write the audit event MUST abort the Skill (per zw-brain D4 / preflight stage 7a).",
+      "default": true
+    },
+    "idempotency": {
+      "type": "object",
+      "description": "Idempotency policy. Required for Skills with `db_write`, `external_call`, or `state_machine_transition` side effects.",
+      "additionalProperties": false,
+      "properties": {
+        "key_field": {
+          "type": "string",
+          "description": "Name of the input field whose value is treated as the idempotency key."
+        },
+        "ttl_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "How long the engine SHOULD remember a key to deduplicate."
+        }
+      }
+    },
+    "permissions": {
+      "type": "array",
+      "description": "Permission tokens required to invoke this Skill. The auth layer maps user roles → permission tokens.",
+      "items": { "type": "string", "pattern": "^[a-z][a-z0-9_:.]*$" }
+    },
+    "rate_limit": {
+      "type": "object",
+      "description": "Optional per-caller rate limit applied by the entry layer.",
+      "additionalProperties": false,
+      "properties": {
+        "calls_per_minute": { "type": "integer", "minimum": 1 },
+        "burst": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "author": {
+      "type": "object",
+      "description": "Skill provenance for audit + revocation.",
+      "required": ["org"],
+      "additionalProperties": false,
+      "properties": {
+        "org": { "type": "string", "description": "Organization that owns the Skill (e.g. `inspur-cloud`, `external-vendor:foo`)." },
+        "contact": { "type": "string", "description": "Email / IM contact for Skill ownership questions." }
+      }
+    },
+    "registry_source": {
+      "type": "string",
+      "description": "Origin of the Skill manifest — used by the registration adapter to detect changes and revoke.",
+      "enum": ["internal", "agent-skills-platform", "external-a2a", "customer-supplied"]
+    },
+    "tags": {
+      "type": "array",
+      "description": "Free-form tags for marketplace browsing (e.g. `data-search`, `approval`, `dashboard`).",
+      "items": { "type": "string", "maxLength": 32 },
+      "maxItems": 16
+    },
+    "deprecation": {
+      "type": "object",
+      "description": "Set when the Skill is being phased out. The engine SHOULD warn callers and SHOULD NOT route new traffic to it.",
+      "required": ["since", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "since": { "type": "string", "format": "date" },
+        "reason": { "type": "string" },
+        "replacement_skill_id": { "type": "string" }
+      }
+    }
+  },
+  "examples": [
+    {
+      "skill_id": "data.search",
+      "title": "数据资源检索",
+      "description": "按关键词 / 部门 / 主题域检索共享数据资源目录，返回命中清单 + 摘要。",
+      "version": "0.1.0",
+      "input_schema": {
+        "type": "object",
+        "required": ["query"],
+        "properties": {
+          "query": { "type": "string", "minLength": 1 },
+          "page": { "type": "integer", "minimum": 1, "default": 1 }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "required": ["results"],
+        "properties": {
+          "results": { "type": "array", "items": { "type": "object" } },
+          "total": { "type": "integer" }
+        }
+      },
+      "side_effects": [],
+      "audit_required": true,
+      "permissions": ["data.search.execute"],
+      "author": { "org": "inspur-cloud", "contact": "zw-brain@inspur.com" },
+      "registry_source": "internal",
+      "tags": ["data-search", "core"]
+    }
+  ]
+}

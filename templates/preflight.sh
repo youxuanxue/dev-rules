@@ -39,6 +39,11 @@ echo "preflight: repo root = $REPO_ROOT"
 FIX_MODE=0
 [ "${1:-}" = "--fix" ] && FIX_MODE=1
 
+# Resolve a usable Python interpreter (some macOS / minimal Linux installs only
+# have python3, not python). Sections 4 + 5 use $PYTHON_BIN instead of bare
+# `python` to avoid `command not found` failures.
+PYTHON_BIN="${PYTHON_BIN:-$(command -v python3 2>/dev/null || command -v python 2>/dev/null || echo python3)}"
+
 errors=0
 section() { echo ""; echo "=== $* ==="; }
 fail()    { echo "  FAIL: $*"; errors=$((errors + 1)); }
@@ -97,11 +102,11 @@ fi
 # ---- 检查 4: API/CLI/MCP 契约不漂移 ----（对应 agent-contract-enforcement.mdc）
 section "agent contract drift"
 if [ -f scripts/export_agent_contract.py ]; then
-    if python scripts/export_agent_contract.py --check > /tmp/preflight-contract.log 2>&1; then
+    if "$PYTHON_BIN" scripts/export_agent_contract.py --check > /tmp/preflight-contract.log 2>&1; then
         ok "contract docs in sync with code"
     else
         cat /tmp/preflight-contract.log | sed 's/^/    /'
-        fail "contract docs have drifted (regenerate via 'python scripts/export_agent_contract.py')"
+        fail "contract docs have drifted (regenerate via '$PYTHON_BIN scripts/export_agent_contract.py')"
     fi
 else
     skip "scripts/export_agent_contract.py not present (create it per agent-contract-enforcement.mdc)"
@@ -110,7 +115,7 @@ fi
 # ---- 检查 5: User Story ↔ Test 漂移 ----（对应 test-philosophy.mdc）
 section "user story / test alignment"
 if [ -f .testing/user-stories/verify_quality.py ]; then
-    if python .testing/user-stories/verify_quality.py > /tmp/preflight-stories.log 2>&1; then
+    if "$PYTHON_BIN" .testing/user-stories/verify_quality.py > /tmp/preflight-stories.log 2>&1; then
         ok "stories aligned with tests"
     else
         cat /tmp/preflight-stories.log | sed 's/^/    /'
