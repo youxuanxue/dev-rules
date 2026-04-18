@@ -19,8 +19,8 @@
       "compute": "ls dev-rules/commands/*.md 2>/dev/null | wc -l | tr -d ' '"
     },
     "hard-constraint-rows": {
-      "description": "Number of soft→hard mapping rows in digital-clone-research.md §六.½ table",
-      "compute": "awk '/^## 六.½/{flag=1; next} /^## /{flag=0} flag' digital-clone-research.md | grep -cE '^\\| [^|-]'  | awk '{print $1-1}'"
+      "description": "Number of soft→hard mapping rows in digital-clone-research.md §六.½ table (workspace-sibling at ../../, .gitignore'd from zw-brain repo). Empty output when the external file is absent, by design — consumers must explicitly handle missing case rather than silently treat it as zero.",
+      "compute": "[ -f ../../digital-clone-research.md ] && awk '/^## 六.½/{flag=1; next} /^## /{flag=0} flag' ../../digital-clone-research.md | grep -cE '^\\| [^|-]' | awk '{print $1-1}' || true"
     },
     "zwbrain.legacy-subsystems": {
       "description": "zw-brain: Number of legacy '一体化大数据平台' subsystems (source: old/integrated-bigdata-platform/README.md, .gitignore'd in zw-brain repo so guarded).",
