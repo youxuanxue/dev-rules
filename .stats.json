@@ -23,8 +23,8 @@
       "compute": "awk '/^## 六.½/{flag=1; next} /^## /{flag=0} flag' digital-clone-research.md | grep -cE '^\\| [^|-]'  | awk '{print $1-1}'"
     },
     "zwbrain.legacy-subsystems": {
-      "description": "zw-brain: Number of legacy '一体化大数据平台' subsystems (source: docs/integrated-bigdata-platform/README.md, may be .gitignore'd in zw-brain repo so guarded).",
-      "compute": "[ -f docs/integrated-bigdata-platform/README.md ] && grep -cE '^### [0-9]+\\.[0-9]+ ' docs/integrated-bigdata-platform/README.md || true"
+      "description": "zw-brain: Number of legacy '一体化大数据平台' subsystems (source: old/integrated-bigdata-platform/README.md, .gitignore'd in zw-brain repo so guarded).",
+      "compute": "[ -f old/integrated-bigdata-platform/README.md ] && grep -cE '^### [0-9]+\\.[0-9]+ ' old/integrated-bigdata-platform/README.md || true"
     },
     "zwbrain.kept-functions": {
       "description": "zw-brain: Number of K-rows (must-keep functions) in design baseline §3.1 table.",
