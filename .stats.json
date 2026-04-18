@@ -41,6 +41,14 @@
     "zwbrain.preflight-sections": {
       "description": "zw-brain: Project-local scripts/preflight.sh adds N project-specific sections on top of the dev-rules template (counts run_check invocations).",
       "compute": "[ -f scripts/preflight.sh ] && grep -cE '^run_check ' scripts/preflight.sh || true"
+    },
+    "zwbrain.prototype-pages": {
+      "description": "zw-brain: GATE-1 clickable prototype SPA route count (counts ROUTES entries in prototype/ui/js/app.js).",
+      "compute": "[ -f prototype/ui/js/app.js ] && awk '/const ROUTES = \\[/{flag=1; next} /^[[:space:]]*\\];/{flag=0} flag' prototype/ui/js/app.js | grep -cE '^[[:space:]]*\\{ test:' || true"
+    },
+    "zwbrain.prototype-storyboards": {
+      "description": "zw-brain: GATE-1 prototype storyboard count (markdown files under prototype/storyboards/).",
+      "compute": "ls prototype/storyboards/*.md 2>/dev/null | wc -l | tr -d ' '"
     }
   }
 }
