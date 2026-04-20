@@ -1,1 +1,5 @@
-/Users/xuejiao/Desktop/History/inspur/cowork/zw/zw-brain
+# dev-rules cross-machine project registry (git-tracked)
+# Format: <name>\t<git_remote_url>
+# Per-machine local paths live in .local-projects (gitignored)
+zw-brain	git@github-feng:feng222666888/zw-brain.git
+sub2api	git@github.com:youxuanxue/sub2api.git
