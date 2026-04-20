@@ -52,12 +52,12 @@
 **单一事实来源**：`dev-rules` 仓库（`github.com/youxuanxue/dev-rules`）。
 
 
-| 消费端                       | 形式                                                  | 自动更新方式                          |
-| ------------------------- | --------------------------------------------------- | ------------------------------- |
-| `~/.cursor/rules/*.mdc`   | symlink → `~/Codes/dev-rules/rules/`                | 每小时 LaunchAgent `git pull`      |
-| `~/.claude/commands/*.md` | symlink → `~/Codes/dev-rules/commands/`             | 同上                              |
-| `~/.claude/CLAUDE.md`     | symlink → `~/Codes/dev-rules/global/CLAUDE.md`（本文件） | 同上                              |
-| 项目 `.cursor/rules/*.mdc`  | real copy（云端 Agent 可读）                              | 项目内 `dev-rules/sync.sh --local` |
+| 消费端                       | 形式                                                  | 自动更新方式                                          |
+| ------------------------- | --------------------------------------------------- | ----------------------------------------------- |
+| `~/.cursor/rules/*.mdc`   | symlink → `~/Codes/dev-rules/rules/`                | 每 30 min LaunchAgent `sync.sh --pull`            |
+| `~/.claude/commands/*.md` | symlink → `~/Codes/dev-rules/commands/`             | 同上                                              |
+| `~/.claude/CLAUDE.md`     | symlink → `~/Codes/dev-rules/global/CLAUDE.md`（本文件） | 同上                                              |
+| 项目 `.cursor/rules/*.mdc`  | real copy（云端 Agent 可读）                              | 项目内 `dev-rules/sync.sh --local`                  |
 
 
 **禁止**直接编辑 sync 产物。修改流程固定四步：
@@ -68,14 +68,15 @@ edit dev-rules/{rules|commands|global}/*  →  dev-rules/sync.sh --local
                                           →  commit submodule (push) → commit parent
 ```
 
-**强约束（机械检查，违规即拦截）**：每条软规则配套可执行脚本，`git commit` 真的会失败。新项目两步接入：
+**强约束（机械检查，违规即拦截）**：每条软规则配套可执行脚本，`git commit` 真的会失败。新项目最小一步接入：
 
 ```bash
-cp dev-rules/templates/preflight.sh scripts/preflight.sh
 bash dev-rules/templates/install-hooks.sh    # 接到 .git/hooks/pre-commit
+                                             # hook 运行时按 scripts/preflight.sh → dev-rules/templates/preflight.sh fallback
+                                             # 仅当项目有特异检查时再 cp templates/preflight.sh → scripts/preflight.sh
 ```
 
-完整软→硬映射见所在工作区的 `digital-clone-research.md §六.½`。
+完整软→硬映射见 `dev-rules/digital-clone-research.md §六.½`（即本仓库根的 research 文档，submodule 路径下可见）。
 
 ## 5. Headless 模式（无人值守）
 

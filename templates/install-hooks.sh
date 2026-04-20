@@ -7,7 +7,7 @@
 #
 # 解析顺序（fallback chain）：
 #   1. $REPO_ROOT/scripts/preflight.sh        ← 项目级 wrapper（有项目特定检查时使用）
-#   2. $REPO_ROOT/dev-rules/templates/preflight.sh  ← dev-rules 模板（仅 8 段通用检查）
+#   2. $REPO_ROOT/dev-rules/templates/preflight.sh  ← dev-rules 模板（通用检查段，见模板文件头）
 #
 # 用法（在项目根目录）：
 #   bash dev-rules/templates/install-hooks.sh
@@ -26,7 +26,7 @@ if [ -f "$PROJECT_PREFLIGHT" ]; then
     echo "Found project-level preflight: $PROJECT_PREFLIGHT"
     PREFLIGHT_TARGET="project"
 elif [ -f "$TEMPLATE_PREFLIGHT" ]; then
-    echo "No scripts/preflight.sh found — falling back to dev-rules template (8 sections only)."
+    echo "No scripts/preflight.sh found — falling back to dev-rules template (generic sections only)."
     echo "  → $TEMPLATE_PREFLIGHT"
     PREFLIGHT_TARGET="template"
 else

@@ -8,14 +8,17 @@
 #   ./sync.sh                    # 同步到本地 home 目录（symlinks 指向 ~/Codes/dev-rules/）
 #   ./sync.sh --local            # 从当前 submodule 同步到父项目的 .cursor/rules/（real copy）
 #                                #   首次运行会自动 register 该项目，之后 --pull / --all 会带上它
-#   ./sync.sh --push             # 在 submodule 中 push 远端 + 在 ~/Codes 拉取 + fan-out 到所有已注册项目
+#   ./sync.sh --push             # 在 submodule 中 push 远端 + 在 ~/Codes 拉取 + fan-out 到本机已落地的注册项目
 #                                #   这是「编辑 dev-rules → 全机生效」的标准入口
 #   ./sync.sh --pull             # 从远端拉取 ~/Codes/dev-rules + fan-out（LaunchAgent / 跨机器同步用）
-#   ./sync.sh --all              # 同步 home + 所有已注册项目（不联网）
+#   ./sync.sh --all              # 同步 home + 本机已落地的注册项目（不联网）
 #   ./sync.sh --project /path    # 同步规则到指定项目（real copy）
 #   ./sync.sh --register /path   # 手动注册项目（通常 --local 已自动）
-#   ./sync.sh --list             # 列出所有已注册项目
-#   ./sync.sh --check            # 检测父项目 .cursor/rules/ 与 submodule 的 drift（CI 用，exit 1）
+#   ./sync.sh --list             # 列出所有已注册项目（含本机是否落地）
+#   ./sync.sh --check            # 检测 .cursor/rules/ drift（CI 用，exit 1）
+#                                #   submodule 模式（项目内运行）：检查父项目 .cursor/rules/ vs 父项目 dev-rules/rules/
+#                                #   canonical 模式（~/Codes/dev-rules/ 内运行）：遍历 .registered-projects 中
+#                                #     有 .local-projects 映射的条目，与该项目自己 dev-rules/rules/（按其 submodule SHA）比较
 #   ./sync.sh --status           # 查看当前同步状态（含 LaunchAgent 是否激活）
 #
 # 架构说明：
@@ -61,8 +64,122 @@ CLAUDE_GLOBAL_MD="$HOME/.claude/CLAUDE.md"
 LAUNCH_AGENT_LABEL="local.dev-rules.sync"
 LAUNCH_AGENT_PLIST="$HOME/Library/LaunchAgents/${LAUNCH_AGENT_LABEL}.plist"
 
-# Registered projects file lives in ~/Codes/dev-rules/ (so all submodule copies share it)
+# Two registries (separation of cross-machine truth vs per-machine state):
+#
+#   .registered-projects (TSV: name\tgit_remote_url, git-tracked)
+#     Cross-machine canonical list of which projects belong to this dev-rules
+#     ecosystem. Pushed to GitHub so a freshly-cloned machine knows the set.
+#
+#   .local-projects      (TSV: git_remote_url\tabsolute_local_path, .gitignore'd)
+#     Per-machine materialization map. Different on every machine because the
+#     same project lives at different paths (or isn't cloned at all).
+#
+# Always live under the canonical mirror so all submodule checkouts share them.
 PROJECTS_FILE="$HOME_CANONICAL/.registered-projects"
+LOCAL_PROJECTS_FILE="$HOME_CANONICAL/.local-projects"
+
+# ---------------------------------------------------------------------------
+# Registry helpers
+# ---------------------------------------------------------------------------
+#
+# Two registries with deliberate separation:
+#
+#   .registered-projects   — TSV `name<TAB>git_remote_url`, git-tracked.
+#                            The cross-machine canonical list. Pulling dev-rules
+#                            on a fresh machine gives you the full set.
+#
+#   .local-projects        — TSV `git_remote_url<TAB>absolute_local_path`,
+#                            .gitignore'd. Per-machine state: same project lives
+#                            at different paths on different machines (or isn't
+#                            cloned at all).
+#
+# Lookup at sync time = registered URL → local path; missing → skip with note.
+# Lines starting with '#' or empty lines in either file are treated as comments.
+
+project_git_url() {
+    git -C "$1" remote get-url origin 2>/dev/null
+}
+
+local_path_for() {
+    local url="$1"
+    [ -f "$LOCAL_PROJECTS_FILE" ] || return 0
+    awk -F'\t' -v u="$url" '!/^#/ && NF>=2 && $1 == u {print $2; exit}' "$LOCAL_PROJECTS_FILE"
+}
+
+write_local_mapping() {
+    local url="$1" local_path="$2"
+    [ -z "$url" ] && return 0
+    mkdir -p "$(dirname "$LOCAL_PROJECTS_FILE")" 2>/dev/null || return 0
+    if [ ! -f "$LOCAL_PROJECTS_FILE" ]; then
+        {
+            echo "# dev-rules per-machine local materialization map"
+            echo "# Format: <git_remote_url>\\t<absolute_local_path>"
+            echo "# Auto-managed by sync.sh; .gitignore'd (do not commit)"
+        } > "$LOCAL_PROJECTS_FILE" 2>/dev/null || return 0
+    fi
+    local tmp
+    tmp="$(mktemp)" || return 0
+    awk -F'\t' -v u="$url" -v p="$local_path" '
+      BEGIN { OFS="\t" }
+      /^#/ || NF==0 { print; next }
+      $1 == u { if (!done) { print u, p; done=1 }; next }
+      { print }
+      END { if (!done) print u, p }
+    ' "$LOCAL_PROJECTS_FILE" > "$tmp" && mv "$tmp" "$LOCAL_PROJECTS_FILE"
+}
+
+add_registered() {
+    local name="$1" url="$2" local_path="${3:-}"
+    [ -z "$url" ] && return 0
+    mkdir -p "$(dirname "$PROJECTS_FILE")" 2>/dev/null || return 0
+    if [ ! -f "$PROJECTS_FILE" ]; then
+        {
+            echo "# dev-rules cross-machine project registry (git-tracked)"
+            echo "# Format: <name>\\t<git_remote_url>"
+            echo "# Per-machine local paths live in .local-projects (gitignored)"
+        } > "$PROJECTS_FILE" 2>/dev/null || return 0
+    fi
+    # Self-healing: drop any legacy bare-path row that matches the local_path we
+    # are now upgrading to a (name,url) row. Older sync.sh versions still pinned
+    # in consumer projects' submodules append bare paths; this collapses them
+    # the next time any new sync.sh runs --local from anywhere.
+    if [ -n "$local_path" ] && grep -qxF "$local_path" "$PROJECTS_FILE" 2>/dev/null; then
+        local tmp
+        tmp="$(mktemp)" || true
+        if [ -n "$tmp" ]; then
+            awk -v p="$local_path" '$0 != p' "$PROJECTS_FILE" > "$tmp" && mv "$tmp" "$PROJECTS_FILE"
+        fi
+    fi
+    if awk -F'\t' -v u="$url" '!/^#/ && NF>=2 && $2 == u {found=1} END{exit !found}' "$PROJECTS_FILE" 2>/dev/null; then
+        return 0
+    fi
+    if printf '%s\t%s\n' "$name" "$url" >> "$PROJECTS_FILE" 2>/dev/null; then
+        echo "  registered: $name → $url"
+    fi
+}
+
+# Yield TSV lines `name<TAB>url<TAB>local_path` for every registered project that
+# is materialized on this machine. Entries lacking a local clone are silently
+# skipped. Empty stdout means nothing to iterate.
+iter_local_projects() {
+    [ -f "$PROJECTS_FILE" ] && [ -s "$PROJECTS_FILE" ] || return 0
+    local line name url local_path
+    while IFS= read -r line; do
+        case "$line" in ''|'#'*) continue ;; esac
+        if [[ "$line" == *$'\t'* ]]; then
+            name="${line%%$'\t'*}"
+            url="${line#*$'\t'}"
+            local_path="$(local_path_for "$url")"
+        else
+            # Legacy bare-path row from pre-refactor .registered-projects
+            local_path="$line"
+            name="$(basename "$line")"
+            url=""
+        fi
+        [ -n "$local_path" ] && [ -d "$local_path" ] || continue
+        printf '%s\t%s\t%s\n' "$name" "$url" "$local_path"
+    done < "$PROJECTS_FILE"
+}
 
 sync_to_home() {
     if [ ! -d "$HOME_CANONICAL" ]; then
@@ -180,24 +297,21 @@ sync_local() {
 
 auto_register() {
     local project_dir="$1"
-    if [ ! -d "$HOME_CANONICAL" ]; then
+    [ -d "$HOME_CANONICAL" ] || return 0
+    local url
+    url="$(project_git_url "$project_dir")"
+    if [ -z "$url" ]; then
+        echo "  note: $(basename "$project_dir") has no git remote 'origin'; skipping cross-machine registration"
         return 0
     fi
-    # If we can't even write to the projects file (sandbox / permissions), skip silently.
-    # This happens in restricted execution contexts; non-fatal.
-    if ! mkdir -p "$(dirname "$PROJECTS_FILE")" 2>/dev/null; then return 0; fi
-    if ! touch "$PROJECTS_FILE" 2>/dev/null; then return 0; fi
-    if ! grep -qxF "$project_dir" "$PROJECTS_FILE" 2>/dev/null; then
-        if echo "$project_dir" >> "$PROJECTS_FILE" 2>/dev/null; then
-            echo "  auto-registered: $project_dir"
-        fi
-    fi
+    add_registered "$(basename "$project_dir")" "$url" "$project_dir"
+    write_local_mapping "$url" "$project_dir"
 }
 
 # --push: 编辑 dev-rules 后的"全机生效"标准入口。
 #  1) 在 SCRIPT_DIR（通常是项目内 submodule）执行 git push
 #  2) 在 ~/Codes/dev-rules 执行 git pull --ff-only
-#  3) 重刷所有 home symlinks + fan-out 到所有已注册项目
+#  3) 重刷所有 home symlinks + fan-out 到本机已落地的注册项目
 # 这条命令把 git push、本机镜像更新、跨项目同步合成一个原子动作。
 sync_push() {
     echo "=== [1/3] Pushing submodule changes from $SCRIPT_DIR ==="
@@ -288,7 +402,19 @@ check_project_drift() {
         return 1
     fi
 
-    for rule in "$RULES_DIR"/*.mdc; do
+    # Source of truth = project's OWN dev-rules submodule (locked to its SHA),
+    # not the canonical mirror. Each project legitimately versions its rules
+    # by submodule SHA; canonical advancing beyond a project is normal.
+    # Falls back to $RULES_DIR (this script's own rules) only when the project
+    # has no submodule (rare; typically a non-submodule project that copied rules).
+    local source_rules="$project_dir/dev-rules/rules"
+    if [ ! -d "$source_rules" ]; then
+        source_rules="$RULES_DIR"
+        echo "  note: $project_dir has no dev-rules/ submodule; comparing against canonical mirror"
+    fi
+
+    for rule in "$source_rules"/*.mdc; do
+        [ -f "$rule" ] || continue
         local basename
         basename="$(basename "$rule")"
         local target="$target_rules/$basename"
@@ -297,7 +423,7 @@ check_project_drift() {
             echo "  DRIFT: $basename missing in $(basename "$project_dir")/.cursor/rules/"
             drift=1
         elif ! diff -q "$rule" "$target" > /dev/null 2>&1; then
-            echo "  DRIFT: $basename differs from submodule source"
+            echo "  DRIFT: $basename differs from project's dev-rules/rules/ source"
             drift=1
         fi
     done
@@ -306,8 +432,8 @@ check_project_drift() {
         [ -f "$target" ] || continue
         local basename
         basename="$(basename "$target")"
-        if [ ! -f "$RULES_DIR/$basename" ]; then
-            echo "  DRIFT: $basename exists in .cursor/rules/ but not in dev-rules/rules/ (orphan)"
+        if [ ! -f "$source_rules/$basename" ]; then
+            echo "  DRIFT: $basename exists in .cursor/rules/ but not in $source_rules/ (orphan)"
             drift=1
         fi
     done
@@ -316,17 +442,54 @@ check_project_drift() {
 }
 
 check_drift() {
+    # Two distinct invocation contexts:
+    #   1. SCRIPT_DIR == HOME_CANONICAL → we are the canonical mirror at ~/Codes/dev-rules/.
+    #      Parent (~/Codes/) is NOT a project; checking it would falsely report MISSING.
+    #      Instead, iterate .registered-projects and check each consumer.
+    #   2. SCRIPT_DIR is a submodule under some project → check that parent project.
     local parent_dir
     parent_dir="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-    echo "=== Checking drift: $(basename "$parent_dir")/.cursor/rules/ vs submodule ==="
-    if check_project_drift "$parent_dir"; then
-        echo "  ok: no drift"
-        exit 0
+    if [ "$SCRIPT_DIR" = "$HOME_CANONICAL" ]; then
+        # Canonical mirror mode: check every registered project that is materialized
+        # on this machine. Projects registered cross-machine but without a local
+        # clone are silently skipped (they'll be checked on whichever machine has them).
+        local total_drift=0 checked=0 name url project
+        while IFS=$'\t' read -r name url project; do
+            echo "=== Checking drift: $name/.cursor/rules/ vs submodule ==="
+            if check_project_drift "$project"; then
+                echo "  ok: no drift"
+            else
+                total_drift=$((total_drift + 1))
+            fi
+            checked=$((checked + 1))
+            echo ""
+        done < <(iter_local_projects)
+
+        if [ "$checked" -eq 0 ]; then
+            echo "=== Checking drift: no materialized projects on this machine ==="
+            echo "  ok: nothing to check (no .registered-projects entries have a matching .local-projects mapping)"
+            exit 0
+        fi
+
+        if [ "$total_drift" -eq 0 ]; then
+            echo "All $checked materialized project(s) in sync."
+            exit 0
+        else
+            echo "$total_drift of $checked project(s) drifted. Run: ./dev-rules/sync.sh --all"
+            exit 1
+        fi
     else
-        echo ""
-        echo "Drift detected. Run: ./dev-rules/sync.sh --local"
-        exit 1
+        # Submodule mode: check the parent project
+        echo "=== Checking drift: $(basename "$parent_dir")/.cursor/rules/ vs submodule ==="
+        if check_project_drift "$parent_dir"; then
+            echo "  ok: no drift"
+            exit 0
+        else
+            echo ""
+            echo "Drift detected. Run: ./dev-rules/sync.sh --local"
+            exit 1
+        fi
     fi
 }
 
@@ -339,40 +502,71 @@ register_project() {
         exit 1
     fi
 
-    mkdir -p "$(dirname "$PROJECTS_FILE")"
-    touch "$PROJECTS_FILE"
-    if grep -qxF "$project_dir" "$PROJECTS_FILE" 2>/dev/null; then
-        echo "Already registered: $project_dir"
-    else
-        echo "$project_dir" >> "$PROJECTS_FILE"
-        echo "Registered: $project_dir"
+    local url
+    url="$(project_git_url "$project_dir")"
+    if [ -z "$url" ]; then
+        echo "FAIL: $project_dir has no git remote 'origin' — cannot register cross-machine"
+        echo "       (add a remote, or this project is local-only and shouldn't be registered)"
+        exit 1
     fi
+
+    local name
+    name="$(basename "$project_dir")"
+    if awk -F'\t' -v u="$url" '!/^#/ && NF>=2 && $2 == u {found=1} END{exit !found}' "$PROJECTS_FILE" 2>/dev/null; then
+        echo "Already registered: $name → $url"
+        # Still call add_registered to trigger legacy bare-path cleanup
+        add_registered "$name" "$url" "$project_dir" >/dev/null 2>&1 || true
+    else
+        add_registered "$name" "$url" "$project_dir"
+    fi
+    write_local_mapping "$url" "$project_dir"
+    echo "Local mapping: $url → $project_dir"
 }
 
 list_projects() {
-    echo "=== Registered projects ==="
-    if [ -f "$PROJECTS_FILE" ] && [ -s "$PROJECTS_FILE" ]; then
-        while IFS= read -r project; do
-            if [ -d "$project" ]; then
-                echo "  ✓ $project"
-            else
-                echo "  ✗ $project (not found)"
-            fi
-        done < "$PROJECTS_FILE"
-    else
-        echo "  (none — use ./sync.sh --register /path/to/project)"
+    echo "=== Registered projects (.registered-projects, cross-machine) ==="
+    if [ ! -f "$PROJECTS_FILE" ] || [ ! -s "$PROJECTS_FILE" ]; then
+        echo "  (none — use ./sync.sh --register /path/to/project, or run --local in any project)"
+        return 0
     fi
+    local line name url local_path any=0
+    while IFS= read -r line; do
+        case "$line" in ''|'#'*) continue ;; esac
+        any=1
+        if [[ "$line" == *$'\t'* ]]; then
+            name="${line%%$'\t'*}"
+            url="${line#*$'\t'}"
+            local_path="$(local_path_for "$url")"
+        else
+            local_path="$line"
+            name="$(basename "$line")"
+            url="(legacy bare-path row)"
+        fi
+        if [ -n "$local_path" ] && [ -d "$local_path" ]; then
+            echo "  ✓ $name  ($url)"
+            echo "      local: $local_path"
+        elif [ -n "$local_path" ]; then
+            echo "  ✗ $name  ($url)"
+            echo "      stale local path: $local_path (directory missing)"
+        else
+            echo "  ⊘ $name  ($url)"
+            echo "      not cloned on this machine (run sync.sh --local in that clone to materialize)"
+        fi
+    done < "$PROJECTS_FILE"
+    [ "$any" -eq 0 ] && echo "  (none — only comment lines)"
 }
 
 sync_all_projects() {
     echo ""
     echo "=== Syncing to registered projects (real copies, source: $HOME_RULES_DIR) ==="
-    if [ -f "$PROJECTS_FILE" ] && [ -s "$PROJECTS_FILE" ]; then
-        while IFS= read -r project; do
-            sync_to_project "$project" "$HOME_RULES_DIR"
-        done < "$PROJECTS_FILE"
-    else
-        echo "  (no projects registered — first ./sync.sh --local in any project will auto-register it)"
+    local any=0 name url project
+    while IFS=$'\t' read -r name url project; do
+        any=1
+        sync_to_project "$project" "$HOME_RULES_DIR"
+    done < <(iter_local_projects)
+    if [ "$any" -eq 0 ]; then
+        echo "  (no materialized projects on this machine)"
+        echo "  (registered projects without a local clone are listed by --status / --list)"
     fi
 }
 
@@ -454,6 +648,10 @@ print_status() {
     else
         echo "  ✗ not installed — run: bash $SCRIPT_DIR/templates/install-launchagent.sh"
     fi
+    echo ""
+    echo "Registries:"
+    echo "  cross-machine: $PROJECTS_FILE (git-tracked)"
+    echo "  per-machine:   $LOCAL_PROJECTS_FILE (gitignored)"
     echo ""
     list_projects
 }

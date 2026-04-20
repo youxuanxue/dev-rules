@@ -3,24 +3,24 @@
   "_comment": "Source-of-truth registry for numerical/factual claims that appear in prose docs. sync-stats.sh computes each value from the live repo and replaces the inner text of <!-- stat:NAME --> blocks. Add a new stat here, then annotate any doc that mentions the value, and the cycle of 'change → docs lag' is mechanically broken.",
   "stats": {
     "verify-rules-checks": {
-      "description": "Number of [N/M] check sections in dev-rules/verify-rules.sh",
-      "compute": "grep -cE '^log \"\\[[0-9]+/[0-9]+\\]' dev-rules/verify-rules.sh"
+      "description": "Number of [N/M] check sections in verify-rules.sh (works both inside dev-rules and from parent project where it's a submodule)",
+      "compute": "f=verify-rules.sh; [ -f dev-rules/$f ] && f=dev-rules/$f; grep -cE '^log \"\\[[0-9]+/[0-9]+\\]' \"$f\""
     },
     "preflight-sections": {
-      "description": "Number of '---- 检查 N: ' sections in dev-rules/templates/preflight.sh",
-      "compute": "grep -cE '^# ---- 检查 [0-9]+:' dev-rules/templates/preflight.sh"
+      "description": "Number of '---- 检查 N: ' sections in templates/preflight.sh (path-robust)",
+      "compute": "f=templates/preflight.sh; [ -f dev-rules/$f ] && f=dev-rules/$f; grep -cE '^# ---- 检查 [0-9]+:' \"$f\""
     },
     "rules-count": {
-      "description": "Number of .mdc rule files in dev-rules/rules/",
-      "compute": "ls dev-rules/rules/*.mdc 2>/dev/null | wc -l | tr -d ' '"
+      "description": "Number of .mdc rule files in dev-rules/rules/ (path-robust)",
+      "compute": "d=rules; [ -d dev-rules/$d ] && d=dev-rules/$d; ls $d/*.mdc 2>/dev/null | wc -l | tr -d ' '"
     },
     "commands-count": {
-      "description": "Number of .md command files in dev-rules/commands/",
-      "compute": "ls dev-rules/commands/*.md 2>/dev/null | wc -l | tr -d ' '"
+      "description": "Number of .md command files in dev-rules/commands/ (path-robust)",
+      "compute": "d=commands; [ -d dev-rules/$d ] && d=dev-rules/$d; ls $d/*.md 2>/dev/null | wc -l | tr -d ' '"
     },
     "hard-constraint-rows": {
-      "description": "Number of soft→hard mapping rows in digital-clone-research.md §六.½ table (workspace-sibling at ../../, .gitignore'd from zw-brain repo). Empty output when the external file is absent, by design — consumers must explicitly handle missing case rather than silently treat it as zero.",
-      "compute": "[ -f ../../digital-clone-research.md ] && awk '/^## 六.½/{flag=1; next} /^## /{flag=0} flag' ../../digital-clone-research.md | grep -cE '^\\| [^|-]' | awk '{print $1-1}' || true"
+      "description": "Number of soft→hard mapping data rows in digital-clone-research.md §六.½ table. Path-robust: file lives at dev-rules/digital-clone-research.md when consumed as submodule, or at digital-clone-research.md when run inside the dev-rules repo itself. awk extracts the §六.½ section, grep counts table data rows (lines starting with '| '), then subtract 1 for the header row.",
+      "compute": "f=digital-clone-research.md; [ -f dev-rules/$f ] && f=dev-rules/$f; [ -f \"$f\" ] && awk '/^## 六.½/{flag=1; next} /^## /{flag=0} flag' \"$f\" | grep -cE '^\\| [^|-]' | awk '{print $1-1}' || true"
     },
     "zwbrain.legacy-subsystems": {
       "description": "zw-brain: Number of legacy '一体化大数据平台' subsystems (source: old/integrated-bigdata-platform/README.md, .gitignore'd in zw-brain repo so guarded).",
