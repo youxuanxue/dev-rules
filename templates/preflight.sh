@@ -77,10 +77,11 @@ git_sub() {
 }
 
 # ---- 检查 1: 分支命名 ----（对应 product-dev.mdc 分支命名规范）
-section "branch naming (prototype/|feature/|fix/|chore/|main|master)"
+# merge/* 用于上游合并（CLAUDE.md §5.y `merge/upstream-YYYYMMDD`）
+section "branch naming (prototype/|feature/|fix/|chore/|docs/|merge/|main|master)"
 branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
 case "$branch" in
-    main|master|prototype/*|feature/*|fix/*|chore/*|docs/*|HEAD)
+    main|master|prototype/*|feature/*|fix/*|chore/*|docs/*|merge/*|HEAD)
         ok "branch '$branch'"
         ;;
     *)
