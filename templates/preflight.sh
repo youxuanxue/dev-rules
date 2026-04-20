@@ -152,19 +152,38 @@ else
     skip "docs/approved/ directory not present"
 fi
 
-# ---- 检查 7: 待审批产物不应进入 main ----（approved_by: pending 元数据）
-section "no docs/approved/ files left as 'approved_by: pending' on main"
-# (the trailing logic for this section is below, before the new section 8)
-if [ -d docs/approved ] && { [ "$branch" = "main" ] || [ "$branch" = "master" ]; }; then
-    pending=$(grep -lE '^approved_by:[[:space:]]*pending[[:space:]]*$' docs/approved/*.md 2>/dev/null || true)
-    if [ -n "$pending" ]; then
-        echo "$pending" | sed 's/^/    - /'
-        fail "files with approved_by: pending must not land on $branch"
+# ---- 检查 7: docs/approved/ 不变量（R1-R4 任何分支 + R5 仅 main/master） ----
+# R1 frontmatter exists / R2 status valid / R3 pending+commits smell /
+# R4 shipped without commits — enforced by dev-rules/scripts/check_approved_docs.py
+# (universal across all consumer projects).
+# R5 approved_by: pending — branch-specific, kept inline because it only blocks
+# on main/master (other branches may legitimately carry pending approvers).
+section "approved-doc invariants (R1-R4 universal + R5 main/master only)"
+if [ -d docs/approved ]; then
+    if [ -f dev-rules/scripts/check_approved_docs.py ]; then
+        if "$PYTHON_BIN" dev-rules/scripts/check_approved_docs.py 2> /tmp/preflight-approved.log; then
+            ok "R1-R4: all approved-doc frontmatter invariants hold"
+        else
+            cat /tmp/preflight-approved.log | sed 's/^/    /'
+            fail "R1-R4: approved-doc invariants violated (see above)"
+        fi
     else
-        ok "all approved/* files have a real approver"
+        skip "dev-rules/scripts/check_approved_docs.py not present"
+    fi
+
+    if [ "$branch" = "main" ] || [ "$branch" = "master" ]; then
+        pending=$(grep -lE '^approved_by:[[:space:]]*pending[[:space:]]*$' docs/approved/*.md 2>/dev/null || true)
+        if [ -n "$pending" ]; then
+            echo "$pending" | sed 's/^/    - /'
+            fail "R5: files with approved_by: pending must not land on $branch"
+        else
+            ok "R5: all approved/* files on $branch have a real approver"
+        fi
+    else
+        skip "R5 (approved_by: pending) only enforced on main/master, current=$branch"
     fi
 else
-    skip "not on main/master, or no docs/approved/"
+    skip "docs/approved/ directory not present"
 fi
 
 # ---- 检查 8: 散文档中的 stat 块与 live 计算值一致 ----（治"变更必伴漂移"）

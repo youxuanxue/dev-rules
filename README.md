@@ -93,8 +93,9 @@
 | `sync.sh --push`              | push submodule + ~/Codes pull --ff-only + fan-out 到所有已注册项目（编辑者主动同步，原子动作） |
 | `sync.sh --pull`              | 远端 → ~/Codes → 所有项目 fan-out（LaunchAgent 与手动救场用）             |
 | `schemas/review.schema.json`  | 由 ajv / check-jsonschema 消费；calibrate 入口校验                  |
-| `templates/preflight.sh`      | 0 = 全部通过；非 0 = 至少一项失败（项目复制后使用）                              |
-| `templates/install-hooks.sh`  | 一键将 preflight.sh 接到 `.git/hooks/pre-commit`                 |
+| `templates/preflight.sh`      | 0 = 全部通过；非 0 = 至少一项失败。可被项目直接 install-hooks（fallback 路径），也可被项目 wrapper 复制后扩展 |
+| `templates/install-hooks.sh`  | 一键将 preflight 接到 `.git/hooks/pre-commit`，运行时按 `scripts/preflight.sh` → `dev-rules/templates/preflight.sh` 顺序 fallback |
+| `scripts/check_approved_docs.py` | 跨项目共享：`docs/approved/*.md` frontmatter R1-R4 不变量（status 词汇 + 审计链），由 `templates/preflight.sh § 7` 调用 |
 | `templates/launchagent.plist` + `install-launchagent.sh` | 渲染 macOS LaunchAgent + launchctl 注册；每 30 min 跑 `sync.sh --pull`，治"跨机器静默落后" |
 | `global/CLAUDE.md`            | Claude Code 全局工作宪法（`~/.claude/CLAUDE.md` 是它的 symlink）       |
 | `sync-stats.sh` + `.stats.json` | 把散文档中的数值/事实从「叙述」变为「计算」——`--check` 漂移即 exit 1，根治"变更必伴漂移" |
