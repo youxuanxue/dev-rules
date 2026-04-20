@@ -50,6 +50,32 @@ fail()    { echo "  FAIL: $*"; errors=$((errors + 1)); }
 ok()      { echo "  ok: $*"; }
 skip()    { echo "  skip: $*"; }
 
+# Run `git ...` inside a sub-path (e.g. a submodule), isolated from any
+# parent-process GIT_* env leakage. When this preflight is invoked from a
+# git hook (pre-commit, commit-msg, …) git exports GIT_DIR / GIT_WORK_TREE
+# / GIT_INDEX_FILE pointing at the *outer* repo. A naive `(cd dev-rules &&
+# git cat-file -e $sub_sha)` then asks the OUTER git for the inner
+# submodule's SHA — which is, by construction, not present, so the check
+# fails with a misleading "submodule SHA not found" message inside hooks
+# while passing fine when run directly. Symptom: every worktree-based
+# commit fails preflight § 2 spuriously and the operator has to use
+# --no-verify, eroding the entire gate.
+#
+# Fix: explicitly `unset` every git-context env var inside the subshell
+# before invoking git; that forces git to re-derive its repo from the
+# subshell's cwd. Keeping the unset list aligned with `git --help
+# environment` (the variables git itself documents as "context").
+git_sub() {
+    local subdir="$1"; shift
+    (
+        cd "$subdir" || exit 2
+        unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_NAMESPACE \
+              GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
+              GIT_COMMON_DIR GIT_PREFIX
+        git "$@"
+    )
+}
+
 # ---- 检查 1: 分支命名 ----（对应 product-dev.mdc 分支命名规范）
 section "branch naming (prototype/|feature/|fix/|chore/|main|master)"
 branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
@@ -63,14 +89,15 @@ case "$branch" in
 esac
 
 # ---- 检查 2: dev-rules submodule-first 提交顺序 ----（对应 dev-rules-convention.mdc）
+# Uses git_sub() so this works under git hooks too — see note above the helper.
 section "dev-rules submodule pointer is reachable on remote"
 if [ -f .gitmodules ] && grep -q "dev-rules" .gitmodules; then
     sub_sha="$(git submodule status dev-rules | awk '{print $1}' | sed 's/^[+-]//')"
-    if (cd dev-rules && git cat-file -e "$sub_sha" 2>/dev/null); then
+    if git_sub dev-rules cat-file -e "$sub_sha" 2>/dev/null; then
         ok "submodule SHA $sub_sha exists locally in dev-rules"
         # remote check (warn-only, may fail if offline)
-        if (cd dev-rules && git fetch --quiet origin 2>/dev/null) && \
-           (cd dev-rules && git merge-base --is-ancestor "$sub_sha" origin/main 2>/dev/null); then
+        if git_sub dev-rules fetch --quiet origin 2>/dev/null && \
+           git_sub dev-rules merge-base --is-ancestor "$sub_sha" origin/main 2>/dev/null; then
             ok "submodule SHA is reachable on dev-rules origin/main"
         else
             echo "  warn: cannot verify submodule SHA on remote (offline or not pushed yet)"
