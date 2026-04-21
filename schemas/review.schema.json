@@ -2,9 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/youxuanxue/dev-rules/schemas/review.schema.json",
   "title": "Code Review Report",
-  "description": "Schema for /user:review JSON output. Validated by /user:calibrate before computing metrics.",
+  "description": "Schema for /user:review JSON output. Default reports stay concise; high-risk reviews add conformance evidence.",
   "type": "object",
-  "required": ["review_date", "scope", "approved_artifacts_referenced", "summary", "conformance_summary", "findings", "circuit_breaker"],
+  "required": ["review_date", "scope", "risk_level", "review_mode", "decision", "summary", "findings"],
   "additionalProperties": true,
   "properties": {
     "review_date": {
@@ -16,10 +16,30 @@
       "type": "string",
       "description": "git range reviewed, e.g. 'HEAD~5..HEAD' or 'last 24h'"
     },
+    "risk_level": {
+      "type": "string",
+      "enum": ["low", "normal", "high"],
+      "description": "Risk classification of the reviewed change"
+    },
+    "review_mode": {
+      "type": "string",
+      "enum": ["concise", "full_conformance"],
+      "description": "Concise is the default; full_conformance is used for high-risk changes"
+    },
+    "decision": {
+      "type": "string",
+      "enum": ["merge-ready", "needs-fix", "needs-design-review"],
+      "description": "Top-level reviewer decision"
+    },
     "approved_artifacts_referenced": {
       "type": "array",
       "items": { "type": "string" },
       "description": "List of docs/approved/ files actually consulted as conformance baseline"
+    },
+    "validation_gaps": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Notable tests or checks that were not run"
     },
     "summary": {
       "type": "object",
@@ -33,9 +53,13 @@
     },
     "conformance_summary": {
       "type": "object",
-      "required": ["total_findings", "by_artifact"],
+      "required": ["total_findings", "by_artifact", "artifacts_checked"],
       "properties": {
         "total_findings": { "type": "integer", "minimum": 0 },
+        "artifacts_checked": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
         "by_artifact": {
           "type": "object",
           "additionalProperties": { "type": "integer", "minimum": 0 }
@@ -95,5 +119,22 @@
         "trip_reason":     { "type": ["string", "null"] }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "review_mode": { "const": "full_conformance" }
+        }
+      },
+      "then": {
+        "required": ["approved_artifacts_referenced", "conformance_summary"],
+        "properties": {
+          "approved_artifacts_referenced": {
+            "minItems": 1
+          }
+        }
+      }
+    }
+  ]
 }

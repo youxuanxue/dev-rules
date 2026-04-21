@@ -4,6 +4,8 @@
 > 现状：已安装 Cursor + Claude Code，全部规则/命令/全局宪法由 `dev-rules/` 单一仓库管理（详见 §4）
 > 目标：构建一个 7×24 不间断工作的数字分身，独立承接 IT 产品研发长周期任务
 
+> 说明：本文档是研究、论证与设计背景，不是日常操作手册。当前操作真相以 `rules/product-dev.mdc`、`commands/decompose.md`、`commands/review.md`、`global/CLAUDE.md` 和 `README.md` 为准。若本文示例与规则正文冲突，以规则正文为准。
+
 ---
 
 ## 〇、两个哲学基石
@@ -24,9 +26,9 @@
 
 **对数字分身系统的约束**：
 
-- Agent 在原型阶段必须先回答「这个功能应不应该存在」，再回答「怎么实现」
+- 高风险变更在原型阶段必须先回答「这个功能应不应该存在」，再回答「怎么实现」
 - 需求拆解时，砍掉的功能和保留的功能同样重要——砍掉什么必须在报告中说明
-- 每个 PR 只解决一个问题（已在 `product-dev.mdc` 中执行），但更深层：每个产品版本只解决一个核心场景
+- 每个 PR 只解决一个问题（已在 `product-dev.mdc` 中执行）；默认单 PR，只有高风险或真实决策边界才拆分
 
 ### OPC（One-Person Company）哲学 — 决定「谁来做」和「做多少」
 
@@ -43,7 +45,7 @@
 **对数字分身系统的约束**：
 
 - 你（人类）每天只投入 1-2 小时（见 §五 工作节奏），其余时间 Agent 自主运转
-- 人工介入只出现在两个审批门禁和架构决策——其他一切可自动化
+- 人工介入只出现在高风险审批门禁和架构决策——其他一切可自动化
 - 不招人，不组团队。产能瓶颈靠增加 Agent 并行数解决（最多 8 个），不靠增加人头
 - 成本预算严格控制在 $250-350/月（≈ ¥2,500，不到初级工程师月薪的 1/10）
 
@@ -60,7 +62,7 @@
     数字分身系统的设计原则：
     · 产品方向你来定（聚焦），执行 Agent 来做（杠杆）
     · 做少做精（乔布斯），自动化一切非判断性工作（OPC）
-    · 两个审批门禁 = 人类判断力的最小必要介入
+    · 高风险审批门禁 = 人类判断力的最小必要介入
     · Agent 的 Rules/Skills/Memory 就是 OPC 的「制度资产」
 ```
 
@@ -115,7 +117,7 @@
 │   ├── agent-contract-enforcement.mdc  ← API 契约同步，Agent 变更后自动校验
 │   ├── test-philosophy.mdc             ← 完整测试方法论（User Story → 测试 → 对齐门禁）
 │   ├── safe-shell-commands.mdc         ← 危险命令拦截
-│   └── product-dev.mdc                 ← 产品研发工作流（含原型设计 + 两个审批门禁）
+│   └── product-dev.mdc                 ← 产品研发工作流（默认单 PR；高风险时启用原型与审批门禁）
 ├── skills/                             ← 14 个领域技能（PPT/视频/策展/发布...）
 └── skills-cursor/                      ← 8 个 Cursor 原生技能（babysit/hook/rule...）
 ```
@@ -128,7 +130,7 @@
 ~/.claude/
 ├── CLAUDE.md                           ← 全局数字分身工作模式（不再 @include 外部规则）
 └── commands/                           ← symlink → ~/Codes/dev-rules/commands/
-    ├── decompose.md                    ← 任务拆解命令（含原型审批门禁 + 引擎路由 + 派发清单）
+    ├── decompose.md                    ← 任务拆解命令（先做风险分级，再决定是否启用原型审批）
     ├── review.md                       ← 代码审查命令（双维度 + human_verdict 标注）
     └── calibrate.md                    ← 审查校准汇总（Phase 2 准入判定）
 ```
@@ -168,9 +170,9 @@
 | 之前缺失       | 现在补齐方案                                               | 状态  |
 | ---------- | ---------------------------------------------------- | --- |
 | 项目上下文（做什么） | 每个项目的 `CLAUDE.md`（自包含）                               | ✅   |
-| 任务拆解模板     | `/user:decompose` 命令（含原型 + 审批门禁）                     | ✅   |
+| 任务拆解模板     | `/user:decompose` 命令（先做风险分级，再输出对应路径）              | ✅   |
 | 长时运行编排配置   | Cursor Long-running Agent + Claude Code Headless 双引擎 | ✅   |
-| 产品研发专用工作流  | `product-dev.mdc` 规则（4 阶段 + 2 审批门禁）                  | ✅   |
+| 产品研发专用工作流  | `product-dev.mdc` 规则（默认单 PR；高风险才升级门禁）             | ✅   |
 | 规则云端可达     | submodule + sync --local（real copy, git tracked）     | ✅   |
 
 
@@ -391,7 +393,15 @@ git add scripts/preflight.sh && git commit -m "chore: add project-level prefligh
 
 **这个约定本身也是一条规则**：`dev-rules-convention.mdc`（alwaysApply: true），通过 submodule 分发到所有项目，确保 Agent 知道如何正确处理规则。
 
-### 4.2 研发阶段流程（含原型设计与审批门禁）
+### 4.2 研发阶段流程（高风险路径示意）
+
+日常默认路径已经收敛为：
+
+```text
+单 PR → 实现/测试 → preflight → review → 人工确认
+```
+
+下图只说明**高风险变更**为什么需要原型与审批门禁，而不是默认要求所有任务都走这条路径。
 
 ```
 需求分析          原型设计          功能实现          测试验证
@@ -410,7 +420,7 @@ git add scripts/preflight.sh && git commit -m "chore: add project-level prefligh
               · 原型演示
 ```
 
-**关键设计**：两个人工审批门禁确保你对方向有完全控制权，同时 Agent 在门禁之间可以完全自主工作。
+**关键设计**：高风险路径上的两个审批门禁确保你对方向有完全控制权，同时 Agent 在门禁之间可以完全自主工作。低风险与常规风险不应被这条路径拖重。
 
 ### 4.3 面向 IT 产品研发的完整架构
 
@@ -501,7 +511,7 @@ dev-rules 仓库结构见 §2.3。每个项目的完整目录布局如下：
 │   │   ├── data-model.md       #   数据模型
 │   │   └── tech-decisions.md   #   技术选型决策
 │   ├── review-*.json           #   结构化审查报告（review 命令产出，机器消费）
-│   ├── review-*.md             #   审查摘要（review 命令产出，人类阅读）
+│   ├── review-*.md             #   [可选] 审查摘要（高风险或明确要求人类阅读时产出）
 │   ├── calibration-*.json      #   校准指标原始数据（calibrate 命令产出）
 │   ├── calibration-*.md        #   校准报告（含 Phase 准入判定）
 │   └── task-breakdown-*.md     #   任务拆解文档（decompose 命令产出）
@@ -515,16 +525,16 @@ dev-rules 仓库结构见 §2.3。每个项目的完整目录布局如下：
 
 **为什么自包含**：云端 Agent 和 CI 无法访问 `~/.cursor/rules/` 或 `@~` 路径（见 §4.1）。所有引用必须是项目内相对路径。
 
-### 4.5 任务拆解（含原型审批门禁）
+### 4.5 任务拆解（风险分级后再决定是否启用原型审批）
 
-使用 Claude Code 自定义命令，内置了原型设计 + 两个审批门禁：
+使用 Claude Code 自定义命令时，先做风险分级，再决定输出默认单 PR 路径还是高风险路径：
 
 ```bash
 claude
 /user:decompose 老板说要给政务系统加一个审批流程引擎，支持多级审批、会签、加签，需要可视化流程设计器
 ```
 
-输出包含按阶段组织的子任务和审批门禁：
+高风险需求的输出会包含按阶段组织的子任务和审批门禁；低风险与常规风险则应收敛成默认单 PR 任务清单：
 
 ```
 一、原型设计阶段
@@ -546,6 +556,8 @@ claude
 ---
 
 ## 五、一天的工作节奏（目标状态）
+
+本节示例故意使用“高风险审批流程引擎”场景来展示原型审批、符合性审查与校准如何协作；它不是“所有任务默认都会产生多个 PR”的操作建议。默认任务应优先收敛为单 PR。
 
 ### 07:30 — 早起 Review（30 分钟）
 
@@ -702,7 +714,7 @@ OPC 哲学的核心一条是「自动化优先」——能写成脚本/CI 检查
 | 契约文档不漂移 (`agent-contract-enforcement.mdc`)                                                                        | `python scripts/export_agent_contract.py --check`                                                 | preflight 段 4 / CI   | exit 1                       |
 | 分支命名前缀（`prototype/` `feature/` `fix/` `chore/` `docs/`） (`product-dev.mdc`)                                       | `scripts/preflight.sh` 段 1                                                                        | pre-commit           | exit 1                       |
 | User Story ↔ Test 不漂移 (`test-philosophy.mdc`)                                                                     | `python .testing/user-stories/verify_quality.py`                                                  | preflight 段 5 / CI   | exit 1                       |
-| `docs/approved/` 仅 GATE PR 可改 (`product-dev.mdc`)                                                                 | `scripts/preflight.sh` 段 6                                                                        | PR 检查                | warn → reviewer 必须确认         |
+| `docs/approved/` 在非高风险 / 非原型路径中被修改时必须触发 reviewer 明确确认 (`product-dev.mdc`)                              | `scripts/preflight.sh` 段 6                                                                        | PR 检查                | warn → reviewer 必须确认         |
 | `approved_by: pending` 不进 main (`product-dev.mdc`)                                                                | `scripts/preflight.sh` 段 7                                                                        | main 分支 commit / CI  | exit 1                       |
 | 提交前完成自检 (`product-dev.mdc`)                                                                                       | 整个 `scripts/preflight.sh`（接到 git pre-commit hook）                                                 | pre-commit / CI      | exit 1                       |
 | 文档/规则中引用的 `dev-rules/...` 路径必须真实存在（防"幽灵引用"） (`dev-rules-convention.mdc`)                                          | `dev-rules/verify-rules.sh` 幽灵路径段                                                                 | 子模块提交前               | exit 1                       |
