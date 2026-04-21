@@ -12,7 +12,7 @@
 | 载体 | Jobs（聚焦/简洁） | OPC（自动化/杠杆） |
 | --- | --- | --- |
 | `rules/product-dev.mdc` | 默认单 PR，只有高风险才升级流程 | 风险分级、自检纪律 |
-| `rules/test-philosophy.mdc` | 测试优先覆盖核心 AC | 测试自动化、Story 对齐 |
+| `rules/test-philosophy.mdc` | 测试优先覆盖核心 AC，按风险升级 Story 强度 | 测试自动化、Story 对齐 |
 | `rules/agent-contract-enforcement.mdc` | API 最小面、一意一径 | 契约生成与 drift gate |
 | `rules/dev-rules-convention.mdc` | 单一事实来源，减少副本 | submodule 工作流与同步 |
 | `rules/safe-shell-commands.mdc` | 避免“顺手破坏” | 危险命令人工门禁 |
@@ -30,7 +30,7 @@
 | --- | --- |
 | `rules/dev-rules-convention.mdc` | `dev-rules` submodule 约定、同步顺序、接入方式 |
 | `rules/agent-contract-enforcement.mdc` | agent-facing 契约同步、安全基线、生成脚本要求 |
-| `rules/test-philosophy.mdc` | User Story、测试设计、Story ↔ Test 对齐 |
+| `rules/test-philosophy.mdc` | 按风险匹配 Story 强度、测试设计、Story ↔ Test 对齐 |
 | `rules/safe-shell-commands.mdc` | 破坏性命令确认规则 |
 | `rules/product-dev.mdc` | 默认单 PR、高风险升级路径、PR/commit 形状、自检纪律 |
 
