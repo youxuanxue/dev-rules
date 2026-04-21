@@ -115,14 +115,14 @@
 ├── rules/                              ← symlink → ~/Codes/dev-rules/rules/
 │   ├── dev-rules-convention.mdc        ← submodule 约定本身（alwaysApply）
 │   ├── agent-contract-enforcement.mdc  ← API 契约同步，Agent 变更后自动校验
-│   ├── test-philosophy.mdc             ← 完整测试方法论（User Story → 测试 → 对齐门禁）
+│   ├── test-philosophy.mdc             ← 分层测试方法论（默认聚焦测试；高风险才启用完整 Story 闭环）
 │   ├── safe-shell-commands.mdc         ← 危险命令拦截
 │   └── product-dev.mdc                 ← 产品研发工作流（默认单 PR；高风险时启用原型与审批门禁）
 ├── skills/                             ← 14 个领域技能（PPT/视频/策展/发布...）
 └── skills-cursor/                      ← 8 个 Cursor 原生技能（babysit/hook/rule...）
 ```
 
-**关键优势**：你的 `test-philosophy.mdc` 是一份极其严格的测试规范——这正是长时运行 Agent 最需要的"自动验收标准"。Agent 可以据此自主判断自己的代码是否通过验收，而不需要你在场。
+**关键优势**：你的 `test-philosophy.mdc` 现在是一份分层测试规范——默认先补聚焦测试，高风险再启用完整 Story 与对齐门禁。这让 Agent 既不会漏掉关键验证，也不会把低风险工作默认推成重文档流程。
 
 ### 2.2 Claude Code 端
 
