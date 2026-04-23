@@ -54,7 +54,9 @@ section() { echo ""; echo "=== $* ==="; }
 fail()    { echo "  FAIL: $*"; errors=$((errors + 1)); }
 ok()      { echo "  ok: $*"; }
 skip()    { echo "  skip: $*"; }
-group()   { echo ""; echo "--- $* ---"; }
+# Note: no "default vs conditional" group labels — every check below
+# self-skips when its prerequisite is missing, so the distinction adds
+# noise without changing behavior. Run order is deterministic top-to-bottom.
 
 # Run `git ...` inside a sub-path (e.g. a submodule), isolated from any
 # parent-process GIT_* env leakage. When this preflight is invoked from a
@@ -81,8 +83,6 @@ git_sub() {
         git "$@"
     )
 }
-
-group "default gates (run for most projects and PRs)"
 
 # ---- 检查 1: 分支命名 ----（对应 product-dev.mdc 分支命名规范）
 # merge/* 用于上游合并（CLAUDE.md §5.y `merge/upstream-YYYY-MM-DD`）
@@ -141,10 +141,7 @@ else
     skip "dev-rules/sync.sh not available"
 fi
 
-# ---- 条件门禁：项目真的引入某类高风险工件时才启用 ----
-group "conditional gates (high-risk or artifact-specific)"
-
-# ---- 检查 4: API/CLI/MCP 契约不漂移 ----（对应 agent-contract-enforcement.mdc）
+# ---- 检查 4: WebUI/API/CLI/MCP 契约不漂移 ----（对应 agent-contract-enforcement.mdc）
 section "agent contract drift"
 if [ -f scripts/export_agent_contract.py ]; then
     if "$PYTHON_BIN" scripts/export_agent_contract.py --check > /tmp/preflight-contract.log 2>&1; then
@@ -231,9 +228,6 @@ else
     skip "docs/approved/ directory not present (high-risk design gate not enabled)"
 fi
 
-# ---- 回到默认门禁：所有引用 stat 块的仓库都应承担 ----
-group "default gates (documentation integrity)"
-
 # ---- 检查 8: 散文档中的 stat 块与 live 计算值一致 ----（治"变更必伴漂移"）
 section "doc stats vs live values (sync-stats.sh --check)"
 if [ -x dev-rules/sync-stats.sh ]; then
@@ -250,6 +244,26 @@ if [ -x dev-rules/sync-stats.sh ]; then
     fi
 else
     skip "dev-rules/sync-stats.sh not available"
+fi
+
+# ---- 检查 9: cloud agent / 本地 agent 运行环境一致性 ----（对应 cloud-agent-bootstrap.sh）
+# Only triggers when the project opts in by creating .cursor/cloud-agent.env.
+# Reports tools missing from PATH and secrets the project declared as
+# REQUIRED but are not exported in the current shell. The same script runs
+# in cloud-agent install (bootstrap), in this preflight gate, and standalone
+# via `bash dev-rules/templates/cloud-agent-bootstrap.sh --check`, so cloud
+# agent and local agent are checked against the identical contract.
+section "cloud-agent env consistency (tools + secrets, both local and cloud)"
+if [ -f .cursor/cloud-agent.env ] && [ -x dev-rules/templates/cloud-agent-bootstrap.sh ]; then
+    if CLOUD_AGENT_REPO_ROOT="$REPO_ROOT" \
+       dev-rules/templates/cloud-agent-bootstrap.sh --check > /tmp/preflight-cloud-agent.log 2>&1; then
+        ok "cloud-agent env consistent (tools + required secrets present)"
+    else
+        cat /tmp/preflight-cloud-agent.log | sed 's/^/    /'
+        fail "cloud-agent env inconsistent (missing required tool or secret — see above)"
+    fi
+else
+    skip ".cursor/cloud-agent.env not present (cloud-agent contract not declared for this project)"
 fi
 
 echo ""

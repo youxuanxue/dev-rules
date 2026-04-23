@@ -1,26 +1,8 @@
 # dev-rules
 
-数字分身规则的单一事实来源。`README.md` 只回答三件事：这里有什么、怎么接入、日常怎么用。长篇原理论证放在 `digital-clone-research.md`。
+数字分身规则的单一事实来源。`README.md` 只回答三件事：这里有什么、怎么接入、日常怎么用。
 
-## 设计哲学
-
-- **Jobs**：聚焦核心场景、删除非核心流程、最小 API 面、端到端体验、简洁。
-- **OPC**：人做判断、AI 做执行；默认轻流程；把重复劳动写成脚本和检查。
-
-载体与哲学映射：
-
-| 载体 | Jobs（聚焦/简洁） | OPC（自动化/杠杆） |
-| --- | --- | --- |
-| `rules/product-dev.mdc` | 默认单 PR，只有高风险才升级流程 | 风险分级、自检纪律 |
-| `rules/test-philosophy.mdc` | 测试优先覆盖核心 AC，按风险升级 Story 强度 | 测试自动化、Story 对齐 |
-| `rules/agent-contract-enforcement.mdc` | API 最小面、一意一径 | 契约生成与 drift gate |
-| `rules/dev-rules-convention.mdc` | 单一事实来源，减少副本 | submodule 工作流与同步 |
-| `rules/safe-shell-commands.mdc` | 避免“顺手破坏” | 危险命令人工门禁 |
-| `commands/decompose.md` | 先判定风险，再决定是否走高风险路径 | 自动路由与派发 |
-| `commands/review.md` | 默认短审查，只报真实风险 | 高风险时自动展开证据链 |
-| `commands/calibrate.md` | 不把 review 变成散文系统 | 校准指标自动汇总 |
-
-规则正文是操作真相；`digital-clone-research.md` 是 why，不是每天照抄的 SOP。
+哲学（Jobs 聚焦/简洁 + OPC 杠杆/自动化）的完整论证见 `digital-clone-research.md`；规则正文是它们落到日常工作的可执行形式。
 
 ## 仓库内容
 
@@ -49,12 +31,14 @@
 | `sync.sh --check` | 检查项目 `.cursor/rules/` 与 submodule 是否 drift |
 | `sync.sh --push` | push submodule 后同步到本机镜像与已落地项目 |
 | `sync.sh --pull` | 从远端拉取并 fan-out 到本机已落地项目 |
-| `verify-rules.sh` | 验证仓库自身完整性（<!-- stat:verify-rules-checks -->8<!-- /stat --> 段） |
+| `verify-rules.sh` | 验证仓库自身完整性（frontmatter / 哲学映射 / 幽灵路径 / global 关键文件 / LaunchAgent 实装） |
 | `templates/preflight.sh` | 默认门禁 + 条件门禁模板 |
 | `templates/install-hooks.sh` | 安装 pre-commit hook |
+| `templates/cloud-agent-bootstrap.sh` | 安装 + `--check` 云端/本地 agent 运行环境（claude/gh/jq、secrets） |
+| `templates/cloud-agent.env.example` | 项目声明 agent 运行契约（工具、必需/可选 secrets、Claude gateway） |
 | `scripts/check_approved_docs.py` | `docs/approved/*.md` frontmatter 不变量检查 |
-| `schemas/review.schema.json` | `/user:review` 输出契约 |
-| `schemas/skill.schema.json` | 通用 Skill manifest 契约 |
+| `schemas/review.schema.json` | `/user:review` 输出契约（`/user:calibrate` 入口校验） |
+| `schemas/skill.schema.json` | 跨项目共享的 Skill manifest 规范（消费侧自行 validate；本仓库不内置 check） |
 | `sync-stats.sh` + `.stats.json` | 文档数字/事实 drift 机械检查 |
 | `global/CLAUDE.md` | Claude Code 全局工作宪法 |
 | `.registered-projects` + `.local-projects` | 跨机器项目注册表 + 本机落地映射 |

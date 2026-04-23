@@ -190,31 +190,16 @@ $ARGUMENTS
 
 ## 派发清单（仅当确实需要跨引擎派发时输出）
 
-按引擎分组，包含可直接执行的命令/prompt，人只需复制粘贴。
+仅在拆解结果包含「需切到非默认引擎」的子任务时才输出本节。每条派发条目格式：
 
-### Cursor Long-running（N 个任务）
+    [T-编号] [任务标题] → [引擎名称（规则 #N）]
+    > [完整 prompt：风险等级 / 目标 / 验收标准 / 目标分支名；高风险任务附 docs/approved/ 参考]
 
-复制以下内容到 Cursor Agent 对话框启动：
+Headless 任务在终端直接执行：
 
-**T-004: [任务标题]**
-> [完整的任务 prompt，包含：风险等级、目标、验收标准、目标分支名；只有高风险任务才附 `docs/approved/` 参考]
+    claude -p "[prompt]" --max-budget-usd [预算]
 
-### Cursor Background（N 个任务）
-
-复制以下内容到 Cursor Background Agent：
-
-**T-003: [任务标题]**
-> [完整的任务 prompt]
-
-### Claude Code Headless（N 个任务）
-
-在终端直接执行：
-
-    # T-001: [任务标题]
-    claude -p "[完整的任务 prompt]" --max-budget-usd [预算]
-
-    # T-00N: [任务标题]
-    claude -p "[完整的任务 prompt]" --max-budget-usd [预算]
+不要为「派发」本身额外创建按引擎分组的小节；引擎已在每条任务的「引擎」字段中。
 ```
 
 低风险需求默认直接在对话中输出；只有用户要求留档、需求本身是高风险、或后续确实需要异步派发时，才写入 `docs/task-breakdown-$(date +%Y%m%d).md`。

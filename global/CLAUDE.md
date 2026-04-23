@@ -94,7 +94,7 @@ bash dev-rules/templates/install-hooks.sh    # 接到 .git/hooks/pre-commit
                                              # 仅当项目有特异检查时再 cp templates/preflight.sh → scripts/preflight.sh
 ```
 
-完整软→硬映射见 `dev-rules/digital-clone-research.md §六.½`（即本仓库根的 research 文档，submodule 路径下可见）。
+完整软→硬映射见 `dev-rules/digital-clone-research.md §二`。
 
 ## 5. Headless 模式（无人值守）
 
@@ -104,7 +104,7 @@ bash dev-rules/templates/install-hooks.sh    # 接到 .git/hooks/pre-commit
 - 产出写入文件而非 stdout（便于 Cursor Agent 拾取）
 - 预算不超过 `--max-budget-usd`
 - 失败以非零退出码报告，不输出"看起来成功"的文字
-- 云端 VM 内首次运行先执行 `bash scripts/setup-claude-code.sh` 完成 CLI + API Key 自检
+- 云端 / 本地两端的运行环境（CLI + secrets）由 `dev-rules/templates/cloud-agent-bootstrap.sh` 统一安装与 `--check`；项目侧只在 `.cursor/cloud-agent.env` 声明工具与 secrets 契约（preflight 段 9 自动拦截不一致）
 
 ## 6. 升级原则
 

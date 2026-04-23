@@ -49,9 +49,8 @@ cat > "$HOOK" <<'HOOK_EOF'
 # (discouraged — only acceptable for emergency reverts).
 #
 # Resolution: prefer scripts/preflight.sh (project wrapper), fall back to
-# dev-rules/templates/preflight.sh (generic 8-section template). The hook
-# resolves at runtime, so adding/removing scripts/preflight.sh later
-# requires no re-install.
+# dev-rules/templates/preflight.sh (generic template). The hook resolves at
+# runtime, so adding/removing scripts/preflight.sh later requires no re-install.
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 if [ -x "$REPO_ROOT/scripts/preflight.sh" ]; then
