@@ -2,33 +2,9 @@
   "$schema": "./schemas/stats.schema.json",
   "_comment": "Source-of-truth registry for DESIGN CONTRACT numbers (caps, SLOs, budgets) that appear verbatim in prose. sync-stats.sh computes each value from the live repo and replaces the inner text of <!-- stat:NAME --> blocks. Vanity counts ('how many sections this script has', 'how many rules exist') do NOT belong here — for those, rewrite the prose to omit the number. See digital-clone-research.md §三 for the registration gate.",
   "stats": {
-    "zwbrain.legacy-subsystems": {
-      "description": "zw-brain: Number of legacy '一体化大数据平台' subsystems (source: old/integrated-bigdata-platform/README.md, .gitignore'd in zw-brain repo so guarded).",
-      "compute": "[ -f old/integrated-bigdata-platform/README.md ] && grep -cE '^### [0-9]+\\.[0-9]+ ' old/integrated-bigdata-platform/README.md || true"
-    },
-    "zwbrain.kept-functions": {
-      "description": "zw-brain: Number of K-rows (must-keep functions) in design baseline §3.1 table.",
-      "compute": "[ -f docs/approved/zw-brain-architecture.md ] && awk '/^### 3\\.1 /{flag=1; next} /^### 3\\.[2-9]/{flag=0} flag' docs/approved/zw-brain-architecture.md | grep -cE '^\\| K[0-9]+' || true"
-    },
-    "zwbrain.not-doing": {
-      "description": "zw-brain: Number of N-rows (won't-do items) in design baseline §3.4 table.",
-      "compute": "[ -f docs/approved/zw-brain-architecture.md ] && awk '/^### 3\\.4 /{flag=1; next} /^### |^## /{flag=0} flag' docs/approved/zw-brain-architecture.md | grep -cE '^\\| N[0-9]+' || true"
-    },
     "zwbrain.webui-pages-cap": {
-      "description": "zw-brain: WebUI core scenario page count cap (§7.3 table data rows).",
-      "compute": "[ -f docs/approved/zw-brain-architecture.md ] && awk '/^### 7\\.3 /{flag=1; next} /^### |^## /{flag=0} flag' docs/approved/zw-brain-architecture.md | grep -cE '^\\| [0-9]+ ' || true"
-    },
-    "zwbrain.preflight-sections": {
-      "description": "zw-brain: Project-local scripts/preflight.sh adds N project-specific sections on top of the dev-rules template (counts run_check invocations).",
-      "compute": "[ -f scripts/preflight.sh ] && grep -cE '^run_check ' scripts/preflight.sh || true"
-    },
-    "zwbrain.prototype-pages": {
-      "description": "zw-brain: GATE-1 clickable prototype SPA route count (counts ROUTES entries in prototype/ui/js/app.js).",
-      "compute": "[ -f prototype/ui/js/app.js ] && awk '/const ROUTES = \\[/{flag=1; next} /^[[:space:]]*\\];/{flag=0} flag' prototype/ui/js/app.js | grep -cE '^[[:space:]]*\\{ test:' || true"
-    },
-    "zwbrain.prototype-storyboards": {
-      "description": "zw-brain: GATE-1 prototype storyboard count (markdown files under prototype/storyboards/).",
-      "compute": "ls prototype/storyboards/*.md 2>/dev/null | wc -l | tr -d ' '"
+      "description": "zw-brain: WebUI core scenario page count cap (design contract: ≤ 10). Computed from §5.2 P-rows in v2 baseline.",
+      "compute": "[ -f docs/approved/zw-brain-architecture-v2.md ] && awk '/^### 5\\.2 /{flag=1; next} /^### |^## /{flag=0} flag' docs/approved/zw-brain-architecture-v2.md | grep -cE '^\\| P[0-9]+' || true"
     }
   }
 }
