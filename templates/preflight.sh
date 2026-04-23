@@ -86,10 +86,16 @@ group "default gates (run for most projects and PRs)"
 
 # ---- 检查 1: 分支命名 ----（对应 product-dev.mdc 分支命名规范）
 # merge/* 用于上游合并（CLAUDE.md §5.y `merge/upstream-YYYY-MM-DD`）
-section "branch naming (prototype/|feature/|fix/|chore/|docs/|merge/|main|master)"
+# cursor/* 用于云端 Coding Agent（如 Cursor Background Agent）的会话分支：
+#   该前缀由托管平台强制（"the head branch must start with cursor/<sessionId>"），
+#   开发者无法改成 fix/feature 等业务前缀；CI 必须接受它，否则所有云端 agent
+#   提交的 PR 都会卡在 preflight 而无法演进。Squash-merge 时人类 reviewer 会把
+#   PR title 重写成业务化文案（fix(...)/feat(...)），最终落入 main 的 commit
+#   message 仍保持业务前缀。
+section "branch naming (prototype/|feature/|fix/|chore/|docs/|merge/|cursor/|main|master)"
 branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
 case "$branch" in
-    main|master|prototype/*|feature/*|fix/*|chore/*|docs/*|merge/*|HEAD)
+    main|master|prototype/*|feature/*|fix/*|chore/*|docs/*|merge/*|cursor/*|HEAD)
         ok "branch '$branch'"
         ;;
     *)
