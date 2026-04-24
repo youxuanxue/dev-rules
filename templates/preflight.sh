@@ -253,10 +253,20 @@ fi
 # in cloud-agent install (bootstrap), in this preflight gate, and standalone
 # via `bash dev-rules/templates/cloud-agent-bootstrap.sh --check`, so cloud
 # agent and local agent are checked against the identical contract.
+#
+# Skipped on generic CI runners (GitHub Actions, GitLab CI, etc.) — those
+# environments are neither cloud-agent VMs nor local dev shells, so they
+# legitimately lack the agent's runtime tools and secrets. The check still
+# runs in install / cloud-agent / local preflight paths where the contract
+# does need to hold. Detection covers the common CI providers; project
+# wrappers can opt in by exporting CLOUD_AGENT_FORCE_CHECK=1.
 section "cloud-agent env consistency (tools + secrets, both local and cloud)"
 if [ -f .cursor/cloud-agent.env ] && [ -x dev-rules/templates/cloud-agent-bootstrap.sh ]; then
-    if CLOUD_AGENT_REPO_ROOT="$REPO_ROOT" \
-       dev-rules/templates/cloud-agent-bootstrap.sh --check > /tmp/preflight-cloud-agent.log 2>&1; then
+    if [ -z "${CLOUD_AGENT_FORCE_CHECK:-}" ] && \
+       { [ "${CI:-}" = "true" ] || [ -n "${GITHUB_ACTIONS:-}" ] || [ -n "${GITLAB_CI:-}" ] || [ -n "${BUILDKITE:-}" ] || [ -n "${CIRCLECI:-}" ]; }; then
+        skip "generic CI runner detected (CI / GITHUB_ACTIONS / GITLAB_CI / …) — cloud-agent contract is for cloud-agent + local dev sessions; set CLOUD_AGENT_FORCE_CHECK=1 to override"
+    elif CLOUD_AGENT_REPO_ROOT="$REPO_ROOT" \
+         dev-rules/templates/cloud-agent-bootstrap.sh --check > /tmp/preflight-cloud-agent.log 2>&1; then
         ok "cloud-agent env consistent (tools + required secrets present)"
     else
         cat /tmp/preflight-cloud-agent.log | sed 's/^/    /'
