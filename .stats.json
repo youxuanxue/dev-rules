@@ -3,8 +3,8 @@
   "_comment": "Source-of-truth registry for DESIGN CONTRACT numbers (caps, SLOs, budgets) that appear verbatim in prose. sync-stats.sh computes each value from the live repo and replaces the inner text of <!-- stat:NAME --> blocks. Vanity counts ('how many sections this script has', 'how many rules exist') do NOT belong here — for those, rewrite the prose to omit the number. See digital-clone-research.md §三 for the registration gate.",
   "stats": {
     "zwbrain.webui-pages-cap": {
-      "description": "zw-brain: WebUI core scenario page count cap (design contract: ≤ 10). Computed from P-rows in current authoritative baseline (v3 → v2 fallback).",
-      "compute": "if [ -f docs/approved/zw-brain-architecture-v3.md ]; then awk '/^### 5\\.2 /{flag=1; next} /^### |^## /{flag=0} flag' docs/approved/zw-brain-architecture-v3.md | grep -cE '^\\| P[0-9]+'; elif [ -f docs/approved/zw-brain-architecture-v2.md ]; then awk '/^### 5\\.2 /{flag=1; next} /^### |^## /{flag=0} flag' docs/approved/zw-brain-architecture-v2.md | grep -cE '^\\| P[0-9]+'; else echo 0; fi"
+      "description": "zw-brain: WebUI core scenario page count cap (design contract: ≤ 10). Computed from current authoritative baseline (v4 → v3 → v2 fallback).",
+      "compute": "if [ -f docs/approved/zw-brain-architecture-v4-gpt55.md ]; then awk '/^### 5\\.2 /{flag=1; next} /^### |^## /{flag=0} flag' docs/approved/zw-brain-architecture-v4-gpt55.md | grep -cE '^\\| P[0-9]+'; elif [ -f docs/approved/zw-brain-architecture-v3.md ]; then awk '/^### 5\\.2 /{flag=1; next} /^### |^## /{flag=0} flag' docs/approved/zw-brain-architecture-v3.md | grep -cE '^\\| P[0-9]+'; elif [ -f docs/approved/zw-brain-architecture-v2.md ]; then awk '/^### 5\\.2 /{flag=1; next} /^### |^## /{flag=0} flag' docs/approved/zw-brain-architecture-v2.md | grep -cE '^\\| P[0-9]+'; else echo 0; fi"
     }
   }
 }
