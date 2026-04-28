@@ -3,3 +3,4 @@
 # Per-machine local paths live in .local-projects (gitignored)
 zw-brain	git@github-feng:feng222666888/zw-brain.git
 sub2api	git@github.com:youxuanxue/sub2api.git
+traj	git@github.com:youxuanxue/traj.git
