@@ -71,7 +71,7 @@ esac
 if [ ! -d "$HOME_CANONICAL" ]; then
     echo "FAIL: $HOME_CANONICAL does not exist"
     echo "      clone the canonical mirror first:"
-    echo "        git clone git@github.com:youxuanxue/dev-rules.git $HOME_CANONICAL"
+    echo "        DEV_RULES_REMOTE_URL=... git clone \"\$DEV_RULES_REMOTE_URL\" $HOME_CANONICAL"
     exit 1
 fi
 

@@ -39,6 +39,8 @@
 | `scripts/check_approved_docs.py` | `docs/approved/*.md` frontmatter 不变量检查 |
 | `schemas/review.schema.json` | `/user:review` 输出契约（`/user:calibrate` 入口校验） |
 | `schemas/skill.schema.json` | 跨项目共享的 Skill manifest 规范（消费侧自行 validate；本仓库不内置 check） |
+| `docs/spec-methods-openspec-speckit.md` | OpenSpec / Spec Kit 的 spec-driven development 对比与借鉴 |
+| `docs/dev-rules-agent-context-improvement.md` | Harness、记忆结构与 OPC 专家团的进阶改进方案 |
 | `sync-stats.sh` + `.stats.json` | 文档数字/事实 drift 机械检查 |
 | `global/CLAUDE.md` | Claude Code 全局工作宪法 |
 | `.registered-projects` + `.local-projects` | 跨机器项目注册表 + 本机落地映射 |
@@ -49,7 +51,8 @@
 
 ```bash
 cd 项目根目录
-git submodule add git@github.com:youxuanxue/dev-rules.git dev-rules
+DEV_RULES_REMOTE_URL="${DEV_RULES_REMOTE_URL:?set DEV_RULES_REMOTE_URL}"
+git submodule add "$DEV_RULES_REMOTE_URL" dev-rules
 dev-rules/sync.sh --local
 git add .cursor/rules/ .gitmodules dev-rules
 git commit -m "chore: add dev-rules submodule and sync rules"
@@ -58,7 +61,8 @@ git commit -m "chore: add dev-rules submodule and sync rules"
 ### 本机首次安装
 
 ```bash
-git clone git@github.com:youxuanxue/dev-rules.git ~/Codes/dev-rules
+DEV_RULES_REMOTE_URL="${DEV_RULES_REMOTE_URL:?set DEV_RULES_REMOTE_URL}"
+git clone "$DEV_RULES_REMOTE_URL" ~/Codes/dev-rules
 ~/Codes/dev-rules/sync.sh
 bash ~/Codes/dev-rules/templates/install-launchagent.sh
 ```
@@ -89,4 +93,5 @@ git add dev-rules .cursor/rules/ && git commit -m "chore: sync dev-rules" && git
 - `~/Codes/dev-rules` 与 `~/.cursor/rules/` / `~/.claude/*` 使用 symlink，保证本机即时生效。
 - 项目内 `.cursor/rules/` 使用 real copy，保证云端 Agent 可读、可随项目版本化。
 - 需要完整背景时读 `digital-clone-research.md`；需要执行规则时读 `rules/*.mdc`、`commands/*.md`、`global/CLAUDE.md`。
+- 需要理解 Harness、记忆分层、spec delta、专家团取舍时读 `docs/dev-rules-agent-context-improvement.md`；它是设计依据，不替代执行规则。
 

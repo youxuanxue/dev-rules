@@ -23,7 +23,7 @@
 #
 # 架构说明：
 #
-#   github.com/youxuanxue/dev-rules         ← 远端真相（remote source of truth）
+#   DEV_RULES_REMOTE_URL                  ← required remote URL for first clone/submodule setup
 #        │ git push（手动） / git pull（LaunchAgent + --push 触发）
 #   ~/Codes/dev-rules/                      ← 本机规范副本（local canonical mirror）
 #   ├── rules/*.mdc                            symlink 与 fan-out 都从这里出发
@@ -67,13 +67,16 @@ LAUNCH_AGENT_PLIST="$HOME/Library/LaunchAgents/${LAUNCH_AGENT_LABEL}.plist"
 # Two registries (separation of cross-machine truth vs per-machine state):
 #
 #   .registered-projects (TSV: name\tgit_remote_url, git-tracked)
-#     Cross-machine canonical list of which projects belong to this dev-rules
-#     ecosystem. Pushed to GitHub so a freshly-cloned machine knows the set.
+#     Cross-machine canonical list of projects that should be discoverable on
+#     every machine.
 #
 #   .local-projects      (TSV: git_remote_url\tabsolute_local_path, .gitignore'd)
-#     Per-machine materialization map. Different on every machine because the
-#     same project lives at different paths (or isn't cloned at all).
+#     Per-machine materialization map. Projects can be local-only here when a
+#     repository should sync from ~/Codes/dev-rules without exposing the remote
+#     dev-rules URL or joining the cross-machine registry.
 #
+# Local fan-out is the union of both registries: any project with an existing
+# local path participates.
 # Always live under the canonical mirror so all submodule checkouts share them.
 PROJECTS_FILE="$HOME_CANONICAL/.registered-projects"
 LOCAL_PROJECTS_FILE="$HOME_CANONICAL/.local-projects"
@@ -85,15 +88,14 @@ LOCAL_PROJECTS_FILE="$HOME_CANONICAL/.local-projects"
 # Two registries with deliberate separation:
 #
 #   .registered-projects   — TSV `name<TAB>git_remote_url`, git-tracked.
-#                            The cross-machine canonical list. Pulling dev-rules
-#                            on a fresh machine gives you the full set.
+#                            Cross-machine canonical project set.
 #
 #   .local-projects        — TSV `git_remote_url<TAB>absolute_local_path`,
-#                            .gitignore'd. Per-machine state: same project lives
-#                            at different paths on different machines (or isn't
-#                            cloned at all).
+#                            .gitignore'd. Per-machine materialization map.
 #
-# Lookup at sync time = registered URL → local path; missing → skip with note.
+# Local fan-out uses the union of both registries: registered projects with a
+# local mapping, plus local-only projects recorded in .local-projects. Entries
+# without an existing local path are skipped.
 # Lines starting with '#' or empty lines in either file are treated as comments.
 
 project_git_url() {
@@ -158,33 +160,61 @@ add_registered() {
     fi
 }
 
-# Yield TSV lines `name<TAB>url<TAB>local_path` for every registered project that
-# is materialized on this machine. Entries lacking a local clone are silently
-# skipped. Empty stdout means nothing to iterate.
+# Yield TSV lines `name<TAB>url<TAB>local_path` for every project that should
+# receive local fan-out on this machine. This is the union of:
+#   1) .registered-projects entries with a matching .local-projects path
+#   2) .local-projects entries, including local-only projects not registered
+# Entries lacking an existing local directory are skipped. Duplicate paths are
+# emitted once.
 iter_local_projects() {
-    [ -f "$PROJECTS_FILE" ] && [ -s "$PROJECTS_FILE" ] || return 0
-    local line name url local_path
-    while IFS= read -r line; do
-        case "$line" in ''|'#'*) continue ;; esac
-        if [[ "$line" == *$'\t'* ]]; then
-            name="${line%%$'\t'*}"
-            url="${line#*$'\t'}"
-            local_path="$(local_path_for "$url")"
-        else
-            # Legacy bare-path row from pre-refactor .registered-projects
-            local_path="$line"
-            name="$(basename "$line")"
-            url=""
-        fi
-        [ -n "$local_path" ] && [ -d "$local_path" ] || continue
-        printf '%s\t%s\t%s\n' "$name" "$url" "$local_path"
-    done < "$PROJECTS_FILE"
+    local seen_file
+    seen_file="$(mktemp)" || return 0
+
+    if [ -f "$PROJECTS_FILE" ] && [ -s "$PROJECTS_FILE" ]; then
+        local line name url local_path
+        while IFS= read -r line; do
+            case "$line" in ''|'#'*) continue ;; esac
+            if [[ "$line" == *$'\t'* ]]; then
+                name="${line%%$'\t'*}"
+                url="${line#*$'\t'}"
+                local_path="$(local_path_for "$url")"
+            else
+                # Legacy bare-path row from pre-refactor .registered-projects
+                local_path="$line"
+                name="$(basename "$line")"
+                url=""
+            fi
+            [ -n "$local_path" ] && [ -d "$local_path" ] || continue
+            if ! grep -qxF "$local_path" "$seen_file" 2>/dev/null; then
+                printf '%s\n' "$local_path" >> "$seen_file"
+                printf '%s\t%s\t%s\n' "$name" "$url" "$local_path"
+            fi
+        done < "$PROJECTS_FILE"
+    fi
+
+    if [ -f "$LOCAL_PROJECTS_FILE" ] && [ -s "$LOCAL_PROJECTS_FILE" ]; then
+        local line url local_path name
+        while IFS= read -r line; do
+            case "$line" in ''|'#'*) continue ;; esac
+            [[ "$line" == *$'\t'* ]] || continue
+            url="${line%%$'\t'*}"
+            local_path="${line#*$'\t'}"
+            [ -n "$local_path" ] && [ -d "$local_path" ] || continue
+            if ! grep -qxF "$local_path" "$seen_file" 2>/dev/null; then
+                printf '%s\n' "$local_path" >> "$seen_file"
+                name="$(basename "$local_path")"
+                printf '%s\t%s\t%s\n' "$name" "$url" "$local_path"
+            fi
+        done < "$LOCAL_PROJECTS_FILE"
+    fi
+
+    rm -f "$seen_file"
 }
 
 sync_to_home() {
     if [ ! -d "$HOME_CANONICAL" ]; then
         echo "  WARN: $HOME_CANONICAL not found — skipping home sync"
-        echo "         (clone first: git clone git@github.com:youxuanxue/dev-rules.git $HOME_CANONICAL)"
+        echo "         (set DEV_RULES_REMOTE_URL, then clone: git clone \"\$DEV_RULES_REMOTE_URL\" $HOME_CANONICAL)"
         return 0
     fi
 
@@ -333,7 +363,7 @@ sync_push() {
     echo "=== [2/3] Pulling $HOME_CANONICAL ==="
     if [ ! -d "$HOME_CANONICAL/.git" ]; then
         echo "  WARN: $HOME_CANONICAL is not a git checkout — skipping mirror update"
-        echo "         (clone first: git clone git@github.com:youxuanxue/dev-rules.git $HOME_CANONICAL)"
+        echo "         (set DEV_RULES_REMOTE_URL, then clone: git clone \"\$DEV_RULES_REMOTE_URL\" $HOME_CANONICAL)"
     elif [ "$(cd "$SCRIPT_DIR" && pwd)" = "$HOME_CANONICAL" ]; then
         echo "  same as SCRIPT_DIR — already up to date"
     else
@@ -527,38 +557,48 @@ list_projects() {
     echo "=== Registered projects (.registered-projects, cross-machine) ==="
     if [ ! -f "$PROJECTS_FILE" ] || [ ! -s "$PROJECTS_FILE" ]; then
         echo "  (none — use ./sync.sh --register /path/to/project, or run --local in any project)"
-        return 0
+    else
+        local line name url local_path any=0
+        while IFS= read -r line; do
+            case "$line" in ''|'#'*) continue ;; esac
+            any=1
+            if [[ "$line" == *$'\t'* ]]; then
+                name="${line%%$'\t'*}"
+                url="${line#*$'\t'}"
+                local_path="$(local_path_for "$url")"
+            else
+                local_path="$line"
+                name="$(basename "$line")"
+                url="(legacy bare-path row)"
+            fi
+            if [ -n "$local_path" ] && [ -d "$local_path" ]; then
+                echo "  ✓ $name  ($url)"
+                echo "      local: $local_path"
+            elif [ -n "$local_path" ]; then
+                echo "  ✗ $name  ($url)"
+                echo "      stale local path: $local_path (directory missing)"
+            else
+                echo "  ⊘ $name  ($url)"
+                echo "      not cloned on this machine (run sync.sh --local in that clone to materialize)"
+            fi
+        done < "$PROJECTS_FILE"
+        [ "$any" -eq 0 ] && echo "  (none — only comment lines)"
     fi
-    local line name url local_path any=0
-    while IFS= read -r line; do
-        case "$line" in ''|'#'*) continue ;; esac
-        any=1
-        if [[ "$line" == *$'\t'* ]]; then
-            name="${line%%$'\t'*}"
-            url="${line#*$'\t'}"
-            local_path="$(local_path_for "$url")"
-        else
-            local_path="$line"
-            name="$(basename "$line")"
-            url="(legacy bare-path row)"
-        fi
-        if [ -n "$local_path" ] && [ -d "$local_path" ]; then
-            echo "  ✓ $name  ($url)"
-            echo "      local: $local_path"
-        elif [ -n "$local_path" ]; then
-            echo "  ✗ $name  ($url)"
-            echo "      stale local path: $local_path (directory missing)"
-        else
-            echo "  ⊘ $name  ($url)"
-            echo "      not cloned on this machine (run sync.sh --local in that clone to materialize)"
-        fi
-    done < "$PROJECTS_FILE"
-    [ "$any" -eq 0 ] && echo "  (none — only comment lines)"
+
+    echo ""
+    echo "=== Materialized fan-out targets (.registered-projects ∪ .local-projects) ==="
+    local materialized=0 target_name target_url target_path
+    while IFS=$'\t' read -r target_name target_url target_path; do
+        materialized=1
+        echo "  ✓ $target_name  ($target_url)"
+        echo "      local: $target_path"
+    done < <(iter_local_projects)
+    [ "$materialized" -eq 0 ] && echo "  (none on this machine)"
 }
 
 sync_all_projects() {
     echo ""
-    echo "=== Syncing to registered projects (real copies, source: $HOME_RULES_DIR) ==="
+    echo "=== Syncing to materialized projects (registered + local-only, source: $HOME_RULES_DIR) ==="
     local any=0 name url project
     while IFS=$'\t' read -r name url project; do
         any=1
@@ -566,7 +606,7 @@ sync_all_projects() {
     done < <(iter_local_projects)
     if [ "$any" -eq 0 ]; then
         echo "  (no materialized projects on this machine)"
-        echo "  (registered projects without a local clone are listed by --status / --list)"
+        echo "  (registered projects without a local clone, and local-only projects on other machines, are listed by --status / --list when materialized)"
     fi
 }
 
@@ -585,7 +625,7 @@ print_status() {
             echo "  ⚠ mirror @ $mirror_sha   submodule @ $submod_sha (run --pull to align home symlinks)"
         fi
     else
-        echo "  ✗ not a git checkout (clone: git clone git@github.com:youxuanxue/dev-rules.git $HOME_CANONICAL)"
+        echo "  ✗ not a git checkout (set DEV_RULES_REMOTE_URL, then clone: git clone \"\$DEV_RULES_REMOTE_URL\" $HOME_CANONICAL)"
     fi
     echo ""
     echo "Rules in mirror:"
