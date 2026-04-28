@@ -3,11 +3,11 @@
   dev-rules cross-machine sync agent.
 
   Why this exists:
-    The "single source of truth" for rules lives at ~/Codes/dev-rules/, mirroring
-    git@github.com:youxuanxue/dev-rules.git. When someone (or another machine)
-    pushes to that remote, this machine's local mirror — and therefore the
-    symlinks under ~/.cursor/rules and ~/.claude/ — silently fall behind unless
-    something pulls. That "something" is this LaunchAgent.
+    The single source of truth for rules lives at ~/Codes/dev-rules/. When
+    someone (or another machine) pushes to its configured origin, this machine's
+    local mirror — and therefore the symlinks under ~/.cursor/rules and ~/.claude/
+    — silently fall behind unless something pulls. That "something" is this
+    LaunchAgent.
 
   What it does:
     Every 30 minutes, runs `dev-rules/sync.sh --pull`, which:
