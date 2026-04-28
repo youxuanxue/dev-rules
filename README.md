@@ -39,6 +39,7 @@
 | `scripts/check_approved_docs.py` | `docs/approved/*.md` frontmatter 不变量检查 |
 | `schemas/review.schema.json` | `/user:review` 输出契约（`/user:calibrate` 入口校验） |
 | `schemas/skill.schema.json` | 跨项目共享的 Skill manifest 规范（消费侧自行 validate；本仓库不内置 check） |
+| `docs/spec-methods-openspec-speckit.md` | OpenSpec / Spec Kit 的 spec-driven development 对比与借鉴 |
 | `sync-stats.sh` + `.stats.json` | 文档数字/事实 drift 机械检查 |
 | `global/CLAUDE.md` | Claude Code 全局工作宪法 |
 | `.registered-projects` + `.local-projects` | 跨机器项目注册表 + 本机落地映射 |
