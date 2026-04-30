@@ -96,6 +96,12 @@ bash dev-rules/templates/install-hooks.sh    # 接到 .git/hooks/pre-commit
 
 完整软→硬映射见 `dev-rules/digital-clone-research.md §二`。
 
+### Agent Skills（禁止写入 `.claude/skills`）
+
+- **禁止**在项目仓库内创建或维护真实的 `.claude/skills/` 目录树（不向 `.claude/skills/**` 写入 SKILL、Markdown 或与 `.cursor/skills` 重复的副本）。
+- **允许的唯一形态**：仓库根的 `.claude/skills` 仅为指向 `.cursor/skills` 的 symlink，供 Claude Code 发现技能入口；正文只在 `.cursor/skills/` 编辑与提交。
+- **文档与示例**：路径叙述一律指向 `.cursor/skills/…`，禁止引导「写到 `.claude/skills`」。
+
 ## 5. Headless 模式（无人值守）
 
 `claude -p` 模式下额外纪律：
