@@ -105,8 +105,9 @@ bash dev-rules/templates/install-hooks.sh    # 接到 .git/hooks/pre-commit
 
 `claude -p` 模式下额外纪律：
 
-- 严格遵守 `--allowedTools` 限制
-- 产出写入文件而非 stdout（便于 Cursor Agent 拾取）
+- **必须传 `--allowedTools`**：省略时默认 `--permission-mode default`，在 CI 无人值守环境中 agent 会拒绝所有工具调用并静默完成（exit 0、零产出、无报错——最难感知的失败模式）
+- 产出用 `2>&1 | tee /tmp/out.txt` 同时输出到 stdout 和文件；**不存在** `--output` flag，禁止使用
+- 调用侧必须加 `set -o pipefail`，否则 `claude -p` 的非零退出码被 pipeline 吞掉
 - 预算不超过 `--max-budget-usd`
 - 失败以非零退出码报告，不输出"看起来成功"的文字
 - 云端 / 本地两端的运行环境（CLI + secrets）由 `dev-rules/templates/cloud-agent-bootstrap.sh` 统一安装与 `--check`；项目侧只在 `.cursor/cloud-agent.env` 声明工具与 secrets 契约（preflight 段 9 自动拦截不一致）
