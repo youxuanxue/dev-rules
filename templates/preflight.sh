@@ -276,6 +276,62 @@ else
     skip ".cursor/cloud-agent.env not present (cloud-agent contract not declared for this project)"
 fi
 
+# ---- 检查 10: 公共契约删除必须有显式说明锚点 ----
+section "contract deletion notice"
+if [ -f dev-rules/scripts/check_contract_deletion_notice.py ]; then
+    if "$PYTHON_BIN" dev-rules/scripts/check_contract_deletion_notice.py --base "${PREFLIGHT_BASE:-origin/main}" > /tmp/preflight-contract-delete.log 2>&1; then
+        ok "contract deletion notice check passed"
+    else
+        cat /tmp/preflight-contract-delete.log | sed 's/^/    /'
+        fail "contract deletion detected without explicit notice token"
+    fi
+else
+    skip "dev-rules/scripts/check_contract_deletion_notice.py not present"
+fi
+
+# ---- 检查 11: 分层依赖不可反转（配置驱动） ----
+section "layer dependency inversion"
+if [ -f .preflight/layer-deps.json ]; then
+    if [ -f dev-rules/scripts/check_layer_dependency_inversion.py ]; then
+        if "$PYTHON_BIN" dev-rules/scripts/check_layer_dependency_inversion.py --config .preflight/layer-deps.json > /tmp/preflight-layer-deps.log 2>&1; then
+            ok "layer dependency inversion check passed"
+        else
+            cat /tmp/preflight-layer-deps.log | sed 's/^/    /'
+            fail "layer dependency inversion detected"
+        fi
+    else
+        skip "dev-rules/scripts/check_layer_dependency_inversion.py not present"
+    fi
+else
+    skip ".preflight/layer-deps.json not present"
+fi
+
+# ---- 检查 12: 高风险改动必须绑定审批锚点 ----
+section "high-risk approval anchor"
+if [ -f dev-rules/scripts/check_high_risk_anchor.py ]; then
+    if "$PYTHON_BIN" dev-rules/scripts/check_high_risk_anchor.py --base "${PREFLIGHT_BASE:-origin/main}" > /tmp/preflight-high-risk-anchor.log 2>&1; then
+        ok "high-risk anchor check passed"
+    else
+        cat /tmp/preflight-high-risk-anchor.log | sed 's/^/    /'
+        fail "high-risk changes missing approval anchor"
+    fi
+else
+    skip "dev-rules/scripts/check_high_risk_anchor.py not present"
+fi
+
+# ---- 检查 13: release 语境禁止 skip-ci marker ----
+section "release skip-ci safety"
+if [ -f dev-rules/scripts/check_release_skip_ci_safety.py ]; then
+    if "$PYTHON_BIN" dev-rules/scripts/check_release_skip_ci_safety.py --base "${PREFLIGHT_BASE:-origin/main}" > /tmp/preflight-release-skip-ci.log 2>&1; then
+        ok "release skip-ci safety check passed"
+    else
+        cat /tmp/preflight-release-skip-ci.log | sed 's/^/    /'
+        fail "release-sensitive context contains forbidden skip-ci marker"
+    fi
+else
+    skip "dev-rules/scripts/check_release_skip_ci_safety.py not present"
+fi
+
 echo ""
 if [ $errors -eq 0 ]; then
     echo "=== preflight: PASS ==="

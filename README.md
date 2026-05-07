@@ -37,6 +37,10 @@
 | `templates/cloud-agent-bootstrap.sh` | 安装 + `--check` 云端/本地 agent 运行环境（claude/gh/jq、secrets） |
 | `templates/cloud-agent.env.example` | 项目声明 agent 运行契约（工具、必需/可选 secrets、Claude gateway） |
 | `scripts/check_approved_docs.py` | `docs/approved/*.md` frontmatter 不变量检查 |
+| `scripts/check_contract_deletion_notice.py` | 公共契约删除必须有显式 notice token（preflight 段 10） |
+| `scripts/check_layer_dependency_inversion.py` | 分层依赖不可反转（`.preflight/layer-deps.json` 存在时启用，preflight 段 11） |
+| `scripts/check_high_risk_anchor.py` | 高风险改动必须绑定审批锚点（preflight 段 12） |
+| `scripts/check_release_skip_ci_safety.py` | release 语境提交禁止 skip-ci marker（preflight 段 13） |
 | `schemas/review.schema.json` | `/user:review` 输出契约（`/user:calibrate` 入口校验） |
 | `schemas/skill.schema.json` | 跨项目共享的 Skill manifest 规范（消费侧自行 validate；本仓库不内置 check） |
 | `docs/spec-methods-openspec-speckit.md` | OpenSpec / Spec Kit 的 spec-driven development 对比与借鉴 |
