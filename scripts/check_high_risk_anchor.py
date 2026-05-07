@@ -8,13 +8,9 @@ import subprocess
 import sys
 
 DEFAULT_HIGH_RISK_PATTERNS = [
-    r"^migrations/",
-    r"^backend/ent/schema/",
-    r"^backend/internal/middleware/",
-    r"^backend/internal/service/",
-    r"^frontend/src/router/",
-    r"^frontend/src/views/",
-    r"^internal/server/routes/",
+    r"^migrations?/",
+    r"^db/migrations?/",
+    r"^schema/",
 ]
 
 DEFAULT_ANCHOR_PATTERNS = [
@@ -46,12 +42,15 @@ def parse_config(path: pathlib.Path | None) -> tuple[list[re.Pattern[str]], list
                 continue
             if s == "[high_risk_paths]":
                 mode = "high"
+                high = []
                 continue
             if s == "[anchor_paths]":
                 mode = "anchor"
+                anchors = []
                 continue
             if s == "[anchor_tokens]":
                 mode = "token"
+                tokens = []
                 continue
             if mode == "high":
                 high.append(s)
@@ -88,6 +87,13 @@ def main() -> int:
 
     cfg = pathlib.Path(args.rules)
     high_re, anchor_re, token_re = parse_config(cfg if cfg.exists() else None)
+
+    if not high_re:
+        if cfg.exists():
+            sys.stderr.write("[check_high_risk_anchor] config error: [high_risk_paths] is empty\n")
+            return 2
+        print("[check_high_risk_anchor] skip: no high-risk path patterns configured")
+        return 0
 
     try:
         paths = changed_paths(args.base)

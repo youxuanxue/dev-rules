@@ -307,6 +307,8 @@ else
 fi
 
 # ---- 检查 12: 高风险改动必须绑定审批锚点 ----
+# 默认只覆盖通用高风险目录（migrations/schema）；项目可通过
+# .preflight/high-risk-anchor.conf 覆写 [high_risk_paths]/[anchor_paths]/[anchor_tokens]。
 section "high-risk approval anchor"
 if [ -f dev-rules/scripts/check_high_risk_anchor.py ]; then
     if "$PYTHON_BIN" dev-rules/scripts/check_high_risk_anchor.py --base "${PREFLIGHT_BASE:-origin/main}" > /tmp/preflight-high-risk-anchor.log 2>&1; then
@@ -320,6 +322,7 @@ else
 fi
 
 # ---- 检查 13: release 语境禁止 skip-ci marker ----
+# 分支/标签模式与 marker 可通过 .preflight/release-skip-ci.conf 覆写。
 section "release skip-ci safety"
 if [ -f dev-rules/scripts/check_release_skip_ci_safety.py ]; then
     if "$PYTHON_BIN" dev-rules/scripts/check_release_skip_ci_safety.py --base "${PREFLIGHT_BASE:-origin/main}" > /tmp/preflight-release-skip-ci.log 2>&1; then
