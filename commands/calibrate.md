@@ -4,7 +4,7 @@ $ARGUMENTS
 
 ## 输入
 
-读取 `docs/review-*.json` 中所有审查报告，提取其中已标注 `human_verdict` 的 findings。
+读取 `.reviews/review-*.json` 中所有审查报告，提取其中已标注 `human_verdict` 的 findings。
 
 如果未指定范围，则汇总所有 review JSON；如果指定了日期范围（如 `2026-04-01 2026-04-15`），则只统计该范围内的报告。
 
@@ -12,13 +12,13 @@ $ARGUMENTS
 
 ### 强约束：JSON Schema 校验（前置步骤）
 
-在汇总指标前，对每个 `docs/review-*.json` 用 `dev-rules/schemas/review.schema.json` 做 JSON Schema 校验：
+在汇总指标前，对每个 `.reviews/review-*.json` 用 `dev-rules/schemas/review.schema.json` 做 JSON Schema 校验：
 
 ```bash
 # 推荐工具：ajv-cli（Node）或 check-jsonschema（Python）
-ajv validate -s dev-rules/schemas/review.schema.json -d "docs/review-*.json"
+ajv validate -s dev-rules/schemas/review.schema.json -d ".reviews/review-*.json"
 # 或
-check-jsonschema --schemafile dev-rules/schemas/review.schema.json docs/review-*.json
+check-jsonschema --schemafile dev-rules/schemas/review.schema.json .reviews/review-*.json
 ```
 
 - 校验失败的文件**必须排除出本次校准**，并在报告"数据完整性"小节列出
@@ -63,7 +63,7 @@ check-jsonschema --schemafile dev-rules/schemas/review.schema.json docs/review-*
 
 ## 输出
 
-输出到 `docs/calibration-$(date +%Y%m%d).md`：
+输出到 `.reviews/calibration-$(date +%Y%m%d).md`：
 
 ```markdown
 # 审查校准报告
@@ -105,7 +105,7 @@ check-jsonschema --schemafile dev-rules/schemas/review.schema.json docs/review-*
 [如果样本量不足，说明需要继续积累]
 ```
 
-同时输出 JSON 格式到 `docs/calibration-$(date +%Y%m%d).json`，包含所有原始计算数据，便于趋势追踪。
+同时输出 JSON 格式到 `.reviews/calibration-$(date +%Y%m%d).json`，包含所有原始计算数据，便于趋势追踪。
 
 ## 注意事项
 
