@@ -169,7 +169,7 @@ category 标记为 `design-quality`；severity 默认 medium，引入大量手�
 
 ## 输出格式
 
-将报告以 **JSON** 格式输出到 `docs/review-$(date +%Y%m%d).json`。默认输出保持精简；只有 `review_mode=full_conformance` 时，才要求完整符合性字段。
+将报告以 **JSON** 格式输出到 `.reviews/review-$(date +%Y%m%d).json`（`.reviews/` 由项目 `.gitignore` 排除，不进 git）。默认输出保持精简；只有 `review_mode=full_conformance` 时，才要求完整符合性字段。
 
 **强约束**：JSON 必须能通过 `dev-rules/schemas/review.schema.json`（JSON Schema Draft 2020-12）的校验。`/user:calibrate` 在汇总指标前会拒绝任何不合规文件。校验涵盖：必填字段、severity/category 枚举、`conformance` 类必须含 `reference`、`human_verdict` 结构，以及高风险模式下的额外字段。
 
@@ -237,7 +237,7 @@ category 标记为 `design-quality`；severity 默认 medium，引入大量手�
 
 标注完成后运行 `/user:calibrate` 命令自动汇总校准指标。
 
-同时生成一份人类可读的 Markdown 摘要到 `docs/review-$(date +%Y%m%d).md`。默认摘要保持短，只保留必须决策的信息：
+同时生成一份人类可读的 Markdown 摘要到 `.reviews/review-$(date +%Y%m%d).md`。默认摘要保持短，只保留必须决策的信息：
 
 ```markdown
 # 代码审查报告
