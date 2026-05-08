@@ -38,6 +38,7 @@
 | `templates/cloud-agent.env.example` | 项目声明 agent 运行契约（工具、必需/可选 secrets、Claude gateway） |
 | `scripts/check_approved_docs.py` | `docs/approved/*.md` frontmatter 不变量检查 |
 | `scripts/check_contract_deletion_notice.py` | 公共契约删除必须有显式 notice token（preflight: contract deletion notice） |
+| `scripts/check_web_surface_alignment.py` | 后端/业务逻辑改动必须有 Web/config/contract 对齐证据或 no-web-impact 说明（preflight: web surface alignment） |
 | `scripts/check_layer_dependency_inversion.py` | 分层依赖不可反转（`.preflight/layer-deps.json` 存在时启用；preflight: layer dependency inversion） |
 | `scripts/check_high_risk_anchor.py` | 高风险改动必须绑定审批锚点（通用默认 + `.preflight/high-risk-anchor.conf` 可覆写；preflight: high-risk approval anchor） |
 | `scripts/check_release_skip_ci_safety.py` | release 语境提交禁止 skip-ci marker（`.preflight/release-skip-ci.conf` 可覆写；preflight: release skip-ci safety） |
