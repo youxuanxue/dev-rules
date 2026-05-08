@@ -8,7 +8,7 @@ from .claude_runner import ClaudeRunResult
 from .initializer import init_workspace
 from .privacy import assert_no_private_leak
 from .evidence import classify_risk
-from .runtime import run_workspace
+from .runtime import run_workspace, write_human_response
 from .util import read_json, write_json
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -191,6 +191,13 @@ def run_fixture_validation() -> list[str]:
             errors.append("fixture did not run multiple supervisor turns")
         if run.get("metrics", {}).get("worker_turns", 0) < 1:
             errors.append("fixture completed without a worker turn")
+        review = run.get("human_review", {})
+        if not isinstance(review, dict):
+            errors.append("fixture run missing human_review object")
+        else:
+            actions = review.get("suggested_actions", [])
+            if not isinstance(actions, list) or len(actions) < 4:
+                errors.append("fixture run missing suggested human actions")
         if not any(call["role"] == "supervisor" and call["session_id"] == "supervisor-session" for call in runner.calls):
             errors.append("fixture did not resume supervisor session")
         worker_calls = [call for call in runner.calls if call["role"] == "worker"]
@@ -210,6 +217,16 @@ def run_fixture_validation() -> list[str]:
             errors.append("risk classifier flagged negated risk markers")
         if "force push" not in classify_risk("agent requested force push"):
             errors.append("risk classifier missed force push")
+
+        write_human_response(
+            workspace,
+            action="defer_feature",
+            feature_id="F-001",
+            note="fixture defer",
+        )
+        deferred_run = run_workspace(workspace, mode="supervised-normal", out=tmp_path / "run-defer.json", runner=runner)
+        if deferred_run.get("outcome") not in {"completed", "needs_human", "no_progress", "failed_validation"}:
+            errors.append(f"fixture defer run unexpected outcome: {deferred_run.get('outcome')}")
     return errors
 
 
