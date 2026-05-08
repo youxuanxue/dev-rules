@@ -48,7 +48,19 @@ def classify_risk(text: str) -> list[str]:
         marker_lower = marker.lower()
         if marker_lower not in lower:
             continue
-        if marker in {"新增依赖", "新依赖"} and any(negated in lower for negated in (f"不{marker_lower}", f"未{marker_lower}", f"无{marker_lower}")):
+        negated_forms = (
+            f"不{marker_lower}",
+            f"未{marker_lower}",
+            f"无{marker_lower}",
+            f"禁止{marker_lower}",
+            f"禁止 {marker_lower}",
+            f"no {marker_lower}",
+            f"not {marker_lower}",
+            f"never {marker_lower}",
+            f"do not {marker_lower}",
+            f"don't {marker_lower}",
+        )
+        if any(negated in lower for negated in negated_forms):
             continue
         risks.append(marker)
     return risks

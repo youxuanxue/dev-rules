@@ -7,6 +7,7 @@ from typing import Any
 from .claude_runner import ClaudeRunResult
 from .initializer import init_workspace
 from .privacy import assert_no_private_leak
+from .evidence import classify_risk
 from .runtime import run_workspace
 from .util import read_json, write_json
 
@@ -186,6 +187,10 @@ def run_fixture_validation() -> list[str]:
             errors.append("fixture ledger did not mark F-001 completed")
         if "turn 2" not in (workspace / "progress.md").read_text(encoding="utf-8"):
             errors.append("fixture progress did not record multiple turns")
+        if classify_risk("不新增依赖，禁止 force push，do not production deploy"):
+            errors.append("risk classifier flagged negated risk markers")
+        if "force push" not in classify_risk("agent requested force push"):
+            errors.append("risk classifier missed force push")
     return errors
 
 
