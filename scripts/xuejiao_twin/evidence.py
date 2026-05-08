@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -66,12 +68,69 @@ def classify_risk(text: str) -> list[str]:
     return risks
 
 
+def _iter_json_objects(text: str) -> list[dict[str, Any]]:
+    decoder = json.JSONDecoder()
+    objects: list[dict[str, Any]] = []
+    for index, char in enumerate(text):
+        if char != "{":
+            continue
+        try:
+            parsed, _ = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            objects.append(parsed)
+    return objects
+
+
+def _iter_validation_items(objects: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for item in objects:
+        if isinstance(item.get("validation"), list):
+            items.extend(child for child in item["validation"] if isinstance(child, dict))
+        if "command" in item:
+            items.append(item)
+    return items
+
+
+def _command_passed(command: str, evidence_text: str, objects: list[dict[str, Any]]) -> tuple[str, str]:
+    for item in _iter_validation_items(objects):
+        if str(item.get("command") or "").strip() != command:
+            continue
+        status = str(item.get("status") or "").strip().lower()
+        if status in {"passed", "failed", "attempted", "missing"}:
+            return status, f"structured status={status}"
+        returncode = item.get("returncode")
+        if returncode == 0 or str(returncode) == "0":
+            return "passed", "structured returncode=0"
+        if returncode is not None:
+            return "failed", f"structured returncode={returncode}"
+        return "attempted", "structured command observed"
+    escaped = re.escape(command)
+    pass_patterns = (
+        rf"(?im)^\s*PASS\s+{escaped}\s*$",
+        rf"(?im)^\s*{escaped}\s*(?:->|:|=)\s*(?:0|pass|passed)\s*$",
+        rf"(?im)^\s*validation:\s*{escaped}\s*(?:->|:|=)\s*(?:0|pass|passed)\s*$",
+    )
+    if any(re.search(pattern, evidence_text) for pattern in pass_patterns):
+        return "passed", "text pass marker"
+    if command in evidence_text:
+        return "attempted", "command mentioned without pass marker"
+    return "missing", "not observed"
+
+
+def validation_command_status(goal: dict[str, Any], evidence_text: str) -> list[dict[str, str]]:
+    objects = _iter_json_objects(evidence_text)
+    statuses: list[dict[str, str]] = []
+    for command in list(goal.get("validation_commands", [])):
+        status, evidence = _command_passed(str(command), evidence_text, objects)
+        statuses.append({"command": str(command), "status": status, "evidence": evidence})
+    return statuses
+
+
 def validation_coverage(goal: dict[str, Any], evidence_text: str) -> float:
-    commands = list(goal.get("validation_commands", []))
-    if not commands:
+    statuses = validation_command_status(goal, evidence_text)
+    if not statuses:
         return 1.0
-    matched = 0
-    for command in commands:
-        if command in evidence_text:
-            matched += 1
-    return matched / len(commands)
+    passed = sum(1 for item in statuses if item["status"] == "passed")
+    return passed / len(statuses)

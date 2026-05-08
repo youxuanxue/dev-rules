@@ -31,23 +31,13 @@ def ensure_twin_gitignore(project_root: Path) -> None:
 
 
 def feature_ledger(goal: dict[str, Any]) -> dict[str, Any]:
-    acceptance = list(goal.get("acceptance", []))
-    features = []
-    scope_items = list(goal.get("scope_in", [])) or [goal.get("goal", "Complete requested goal")]
-    for index, item in enumerate(scope_items, 1):
-        features.append({
-            "id": f"F-{index:03d}",
-            "description": str(item),
-            "status": "pending",
-            "acceptance": acceptance,
-            "validation_evidence": [],
-            "blocked_reason": None,
-        })
     return {
         "schema_version": SCHEMA_VERSION,
-        "features": features,
-        "current_focus": features[0]["id"] if features else None,
+        "features": [],
+        "current_focus": None,
         "last_verified_at": None,
+        "planning_status": "needs_draft",
+        "revision": 0,
     }
 
 
@@ -75,19 +65,32 @@ def init_workspace(goal_file: Path, persona_file: Path, out: Path | None = None)
         "",
     ]
     (workspace / "progress.md").write_text("\n".join(progress), encoding="utf-8")
+    current = [
+        "# xuejiao twin current",
+        "",
+        "- Status: initialized",
+        f"- Goal: {goal.get('goal', '')}",
+        "- Focus: none",
+        "- Ledger: revision=0 completed=0 pending=0 blocked=0",
+        "- Next: python3 -m scripts.xuejiao_twin run --workspace <workspace> --mode supervised-normal",
+        "",
+    ]
+    (workspace / "CURRENT.md").write_text("\n".join(current), encoding="utf-8")
 
     runbook = [
         "# xuejiao twin runbook",
         "",
         "1. Read `goal.yaml`, `persona.lock.json`, `feature_ledger.json`, and `progress.md`.",
-        "2. Run `dry-run` as a single supervisor preview; run supervised modes as a multi-turn loop until a stop condition.",
-        "3. Pick exactly one pending or in-progress ledger feature as current focus each turn.",
-        "4. Supervisor emits a JSON decision with action, instruction, feature updates, and reason.",
-        "5. Worker produces code changes and validation evidence when supervisor action is `continue`.",
-        "6. Update `feature_ledger.json` and append `progress.md` after each turn.",
-        "7. Worker may use Read/Edit/Write/Bash for bypass-like automation when goal allows it.",
-        "8. Runtime still injects disallowedTools for force push, reset/clean/rm, infra apply/destroy, production deploy, publish, docker push, and database drop.",
-        "9. Stop for human gates: architecture, security, data, dependencies, production deploy, force push, external side effects, destructive actions.",
+        "2. If `feature_ledger.json` is empty, run a plan-like ledger draft phase before implementation.",
+        "3. Worker proposes ledger draft JSON from `goal.yaml`; runtime writes `feature_ledger.json` only after supervisor review and validation.",
+        "4. Run `dry-run` as a single supervisor preview; run supervised modes as a multi-turn loop until a stop condition.",
+        "5. Pick exactly one pending or in-progress ledger feature as current focus during implementation turns.",
+        "6. Supervisor emits a JSON decision with action, instruction, feature updates, ledger updates, and reason.",
+        "7. Worker produces code changes and validation evidence when supervisor action is `continue` after ledger approval.",
+        "8. Runtime updates `feature_ledger.json` and appends `progress.md` after each turn.",
+        "9. Worker may use Read/Edit/Write/Bash for bypass-like automation when goal allows it; ledger draft turns stay read-only.",
+        "10. Runtime still injects disallowedTools for force push, reset/clean/rm, infra apply/destroy, production deploy, publish, docker push, and database drop.",
+        "11. Stop for human gates: architecture, security, data, dependencies, production deploy, force push, external side effects, destructive actions.",
         "",
         "Validation commands:",
     ]

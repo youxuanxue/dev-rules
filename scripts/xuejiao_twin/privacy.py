@@ -13,9 +13,8 @@ _SECRET_PATTERNS = (
     ("bearer_token", re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._\-]{12,}")),
     ("private_key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S)),
 )
-_PATH_RE = re.compile(r"/Users/[^\s\"'`,;:)]+")
-_SESSION_RE = re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")
 _URL_WITH_SECRET_RE = re.compile(r"https?://[^\s\"'`]+")
+_URL_SECRET_RE = re.compile(r"(?i)([?&](token|key|api[_-]?key|secret|password)=|://[^/\s:]+:[^/\s@]+@)")
 
 
 @dataclass
@@ -54,7 +53,7 @@ def redact_text(text: str, report: PrivacyReport | None = None) -> tuple[str, li
 
     def redact_url(match: re.Match[str]) -> str:
         url = match.group(0)
-        if any(marker in url.lower() for marker in ("token", "key", "secret", "password", "@")):
+        if _URL_SECRET_RE.search(url):
             flags.append("sensitive_url")
             if report:
                 report.add("sensitive_url")
@@ -62,18 +61,6 @@ def redact_text(text: str, report: PrivacyReport | None = None) -> tuple[str, li
         return url
 
     redacted = _URL_WITH_SECRET_RE.sub(redact_url, redacted)
-
-    redacted, path_count = _PATH_RE.subn("[USER_PATH_REDACTED]", redacted)
-    if path_count:
-        flags.append("user_path")
-        if report:
-            report.add("user_path", path_count)
-
-    redacted, session_count = _SESSION_RE.subn("[SESSION_ID_REDACTED]", redacted)
-    if session_count:
-        flags.append("session_id")
-        if report:
-            report.add("session_id", session_count)
 
     return redacted, sorted(set(flags))
 
@@ -91,11 +78,9 @@ def redact_value(value: Any, report: PrivacyReport | None = None) -> Any:
 def assert_no_private_leak(value: Any) -> list[str]:
     text = json.dumps(value, ensure_ascii=False, sort_keys=True)
     leaks: list[str] = []
-    if _PATH_RE.search(text):
-        leaks.append("user_path")
     for flag, pattern in _SECRET_PATTERNS:
         if pattern.search(text):
             leaks.append(flag)
-    if _SESSION_RE.search(text):
-        leaks.append("session_id")
+    if any(_URL_SECRET_RE.search(match.group(0)) for match in _URL_WITH_SECRET_RE.finditer(text)):
+        leaks.append("sensitive_url")
     return sorted(set(leaks))

@@ -14,6 +14,8 @@ class ClaudeRunResult:
     output_text: str
     returncode: int
     raw_events: list[dict[str, Any]]
+    cwd: str = ""
+    session_lost: bool = False
 
 
 def parse_stream_json(text: str) -> tuple[str, str, list[dict[str, Any]]]:
@@ -30,7 +32,9 @@ def parse_stream_json(text: str) -> tuple[str, str, list[dict[str, Any]]]:
             parts.append(line)
             continue
         events.append(event)
-        session_id = str(event.get("session_id") or event.get("sessionId") or session_id)
+        candidate = event.get("session_id") or event.get("sessionId")
+        if candidate:
+            session_id = str(candidate)
         if isinstance(event.get("result"), str):
             parts.append(event["result"])
         message = event.get("message")
@@ -54,6 +58,11 @@ def run_claude_headless(
     timeout_seconds: int = 3600,
     disallowed_tools: list[str] | None = None,
     permission_mode: str = "",
+    role: str = "",
+    extra_env: dict[str, str] | None = None,
+    append_system_prompt: str = "",
+    setting_sources: str = "project,local",
+    strict_mcp_config: bool = True,
 ) -> ClaudeRunResult:
     if dry_run:
         return ClaudeRunResult(
@@ -61,6 +70,7 @@ def run_claude_headless(
             output_text="DRY RUN: " + prompt[:1000],
             returncode=0,
             raw_events=[],
+            cwd=str(cwd),
         )
     cmd = [
         "claude",
@@ -74,6 +84,12 @@ def run_claude_headless(
         "--max-budget-usd",
         str(max_budget_usd),
     ]
+    if setting_sources:
+        cmd.extend(["--setting-sources", setting_sources])
+    if strict_mcp_config:
+        cmd.append("--strict-mcp-config")
+    if append_system_prompt:
+        cmd.extend(["--append-system-prompt", append_system_prompt])
     if disallowed_tools:
         cmd.extend(["--disallowedTools", ",".join(disallowed_tools)])
     if permission_mode:
@@ -81,6 +97,10 @@ def run_claude_headless(
     if session_id:
         cmd.extend(["--resume", session_id])
     env = os.environ.copy()
+    if role:
+        env["XUEJIAO_TWIN_ROLE"] = role
+    if extra_env:
+        env.update(extra_env)
     try:
         proc = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout_seconds)
     except subprocess.TimeoutExpired as exc:
@@ -92,13 +112,17 @@ def run_claude_headless(
             output_text=(str(output).strip() + f"\nTIMEOUT after {timeout_seconds}s").strip(),
             returncode=124,
             raw_events=[],
+            cwd=str(cwd),
         )
     parsed_session, output, events = parse_stream_json(proc.stdout)
     if proc.stderr.strip():
         output = (output + "\n" + proc.stderr.strip()).strip()
+    session_lost = bool(session_id) and bool(parsed_session) and parsed_session != session_id
     return ClaudeRunResult(
         session_id=parsed_session or session_id,
         output_text=output,
         returncode=proc.returncode,
         raw_events=events,
+        cwd=str(cwd),
+        session_lost=session_lost,
     )

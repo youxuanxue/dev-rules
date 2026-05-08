@@ -4,10 +4,11 @@ import argparse
 import sys
 from pathlib import Path
 
-from .initializer import init_workspace
+from .initializer import feature_ledger, init_workspace, load_goal
 from .replay import replay_run
 from .runtime import HUMAN_ACTIONS, run_workspace, write_human_response
 from .validate import run_fixture_validation, validate_run_dir
+from .util import now_utc, read_json, write_json
 
 
 def _cmd_init(args: argparse.Namespace) -> int:
@@ -74,6 +75,55 @@ def _cmd_respond(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_replan(args: argparse.Namespace) -> int:
+    workspace = Path(args.workspace).expanduser() if args.workspace else Path(args.project).expanduser() / ".xuejiao-twin"
+    goal = load_goal(workspace / "goal.yaml")
+    stamp = now_utc().replace(":", "").replace("-", "")
+    archive_dir = workspace / "runs" / "archive"
+
+    ledger_path = workspace / "feature_ledger.json"
+    if ledger_path.exists() and not args.no_archive:
+        write_json(archive_dir / f"feature_ledger-{stamp}.json", read_json(ledger_path))
+    write_json(ledger_path, feature_ledger(goal))
+
+    progress_path = workspace / "progress.md"
+    if progress_path.exists() and not args.no_archive:
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        (archive_dir / f"progress-{stamp}.md").write_text(progress_path.read_text(encoding="utf-8"), encoding="utf-8")
+    progress = [
+        "# xuejiao twin progress",
+        "",
+        f"Replanned: {now_utc()}",
+        f"Goal: {goal.get('goal', '')}",
+        "",
+        "## Current state",
+        "- Status: replanned",
+        "- Ledger: empty dynamic ledger, planning_status=needs_draft",
+        "- Next action: run supervised mode to draft and review a new ledger",
+        "",
+    ]
+    progress_path.write_text("\n".join(progress), encoding="utf-8")
+
+    current = [
+        "# xuejiao twin current",
+        "",
+        "- Status: replanned",
+        f"- Goal: {goal.get('goal', '')}",
+        "- Focus: none",
+        "- Ledger: revision=0 completed=0 pending=0 blocked=0",
+        f"- Next: python3 -m scripts.xuejiao_twin run --workspace {workspace} --mode supervised-normal",
+        "",
+    ]
+    (workspace / "CURRENT.md").write_text("\n".join(current), encoding="utf-8")
+
+    response_path = workspace / "human_response.json"
+    response_path.unlink(missing_ok=True)
+    print(f"feature_ledger_reset={ledger_path}")
+    print(f"current={workspace / 'CURRENT.md'}")
+    print(f"next=python3 -m scripts.xuejiao_twin run --workspace {workspace} --mode supervised-normal")
+    return 0
+
+
 def _cmd_replay(args: argparse.Namespace) -> int:
     print(replay_run(Path(args.run)), end="")
     return 0
@@ -116,6 +166,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_respond.add_argument("--run-id", default="")
     p_respond.add_argument("--note", default="")
     p_respond.set_defaults(func=_cmd_respond)
+
+    p_replan = sub.add_parser("replan")
+    p_replan.add_argument("--project", default="")
+    p_replan.add_argument("--workspace", default="")
+    p_replan.add_argument("--no-archive", action="store_true")
+    p_replan.set_defaults(func=_cmd_replan)
 
     p_replay = sub.add_parser("replay")
     p_replay.add_argument("run")
