@@ -9,7 +9,7 @@ from .initializer import init_workspace
 from .persona import derive_persona
 from .privacy import assert_no_private_leak
 from .runtime import run_workspace
-from .sources import build_index, fixture_paths
+from .sources import build_index, fixture_paths, matches_project, project_needles
 from .util import now_utc, read_json, write_json
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -100,6 +100,10 @@ def run_fixture_validation() -> list[str]:
     persona = derive_persona(index, generated_at=generated_at)
     errors.extend(validate_schema(persona, "xuejiao_twin.persona.schema.json"))
     errors.extend(f"persona privacy leak: {leak}" for leak in assert_no_private_leak(persona))
+
+    needles = project_needles("/Users/xuejiao/Codes/dev-rules")
+    if not matches_project(Path("/Users/xuejiao/.claude/projects/-Users-xuejiao-Codes-dev-rules/session.jsonl"), needles):
+        errors.append("project filter failed to match Claude/Cursor slugged history path")
 
     with tempfile.TemporaryDirectory(prefix="xuejiao-twin-") as tmp:
         tmp_path = Path(tmp)

@@ -166,6 +166,22 @@ def parse_cursor_store_metadata(path: Path) -> tuple[dict[str, Any], list[dict[s
     return source, []
 
 
+def project_needles(project: str) -> set[str]:
+    if not project:
+        return set()
+    resolved = str(Path(project).expanduser())
+    slug = resolved.strip("/").replace("/", "-")
+    basename = Path(resolved).name
+    return {resolved, slug, basename, stable_hash(resolved)}
+
+
+def matches_project(path: Path, needles: set[str]) -> bool:
+    if not needles:
+        return True
+    text = str(path)
+    return any(needle and needle in text for needle in needles)
+
+
 def fixture_paths(fixtures_dir: Path) -> list[tuple[str, Path]]:
     return [
         ("claude_project_jsonl", fixtures_dir / "claude_session.jsonl"),

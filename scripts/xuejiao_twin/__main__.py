@@ -9,7 +9,7 @@ from .initializer import init_workspace
 from .persona import derive_persona
 from .replay import replay_run
 from .runtime import run_workspace
-from .sources import build_index, discover_sources, fixture_paths
+from .sources import build_index, discover_sources, fixture_paths, matches_project, project_needles
 from .util import now_utc, read_json, write_json
 from .validate import FIXTURES_DIR, run_fixture_validation, validate_run_dir
 
@@ -39,8 +39,8 @@ def _cmd_index(args: argparse.Namespace) -> int:
     else:
         paths = list(discover_sources(Path.home(), include_cursor_store=not args.no_cursor_store))
         if args.project:
-            needle = str(Path(args.project).expanduser())
-            paths = [(typ, path) for typ, path in paths if needle in str(path)]
+            needles = project_needles(args.project)
+            paths = [(typ, path) for typ, path in paths if matches_project(path, needles)]
         paths = _filter_since(paths, args.since)
     index = build_index(paths, generated_at=now_utc())
     write_json(Path(args.out), index)
