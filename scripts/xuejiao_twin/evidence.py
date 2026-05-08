@@ -5,8 +5,11 @@ from pathlib import Path
 from typing import Any
 
 RISK_MARKERS = (
-    "git push",
-    "deploy",
+    "git push --force",
+    "push --force",
+    "force push",
+    "production deploy",
+    "prod deploy",
     "terraform apply",
     "rm -rf",
     "reset --hard",
@@ -30,6 +33,7 @@ def collect_project_evidence(project_root: Path) -> dict[str, Any]:
     status_code, status = _run(["git", "status", "--short"], project_root)
     diff_code, diff = _run(["git", "diff", "--stat"], project_root)
     return {
+        "commands_observed": ["git status --short", "git diff --stat"],
         "git_status": status[:4000],
         "git_status_exit": status_code,
         "git_diff_stat": diff[:4000],
@@ -39,7 +43,27 @@ def collect_project_evidence(project_root: Path) -> dict[str, Any]:
 
 def classify_risk(text: str) -> list[str]:
     lower = text.lower()
-    return [marker for marker in RISK_MARKERS if marker.lower() in lower]
+    risks: list[str] = []
+    for marker in RISK_MARKERS:
+        marker_lower = marker.lower()
+        if marker_lower not in lower:
+            continue
+        negated_forms = (
+            f"不{marker_lower}",
+            f"未{marker_lower}",
+            f"无{marker_lower}",
+            f"禁止{marker_lower}",
+            f"禁止 {marker_lower}",
+            f"no {marker_lower}",
+            f"not {marker_lower}",
+            f"never {marker_lower}",
+            f"do not {marker_lower}",
+            f"don't {marker_lower}",
+        )
+        if any(negated in lower for negated in negated_forms):
+            continue
+        risks.append(marker)
+    return risks
 
 
 def validation_coverage(goal: dict[str, Any], evidence_text: str) -> float:

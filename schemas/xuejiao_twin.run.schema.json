@@ -29,7 +29,15 @@
         "clarification_count": { "type": "integer", "minimum": 0 },
         "retry_count": { "type": "integer", "minimum": 0 },
         "blocked_risky_actions": { "type": "integer", "minimum": 0 },
-        "validation_coverage": { "type": "number", "minimum": 0, "maximum": 1 }
+        "validation_coverage": { "type": "number", "minimum": 0, "maximum": 1 },
+        "agent_call_count": { "type": "integer", "minimum": 0 },
+        "supervisor_turns": { "type": "integer", "minimum": 0 },
+        "worker_turns": { "type": "integer", "minimum": 0 },
+        "completed_feature_count": { "type": "integer", "minimum": 0 },
+        "pending_feature_count": { "type": "integer", "minimum": 0 },
+        "blocked_feature_count": { "type": "integer", "minimum": 0 },
+        "in_progress_feature_count": { "type": "integer", "minimum": 0 },
+        "event_count": { "type": "integer", "minimum": 0 }
       }
     },
     "privacy_report": { "type": "object", "additionalProperties": true },
