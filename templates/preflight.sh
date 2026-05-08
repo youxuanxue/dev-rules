@@ -1,25 +1,8 @@
 #!/usr/bin/env bash
 #
-# preflight.sh — 项目级提交前/CI 强约束门禁（模板）
-#
-# 把本文件复制到 项目/scripts/preflight.sh，按需启用各检查段。
-# 与 dev-rules/rules/* 一一对应：每条软规则都对应一个机械检查。
-#
-# 设计原则：
-#   - 默认门禁：大多数仓库、绝大多数 PR 都该承担的基础检查
-#   - 条件门禁：仅在项目真的引入了相应工件或高风险流程时才触发
-# 不要把所有项目都按最高流程负担执行。
-#
-# 用法：
-#   ./scripts/preflight.sh           # 默认运行所有启用的检查
-#   ./scripts/preflight.sh --fix     # 允许部分检查自动修复（如 sync）
-#
-# 退出码：0 = 全部通过；非 0 = 至少一项失败（CI 应当 fail）
-#
-# 推荐接入点：
-#   1. .git/hooks/pre-commit  （本地拦截）
-#   2. .github/workflows/preflight.yml （PR 阻断）
-#   3. agent 自检步骤（详见 product-dev.mdc 的「完成自检」节）
+# preflight.sh — 消费项目提交前/CI 门禁模板。
+# 各检查按前置工件自跳过；项目只有特异检查时才需要 wrapper。
+# 用法：./scripts/preflight.sh 或 ./scripts/preflight.sh --fix。
 
 set -u
 

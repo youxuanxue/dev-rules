@@ -7,7 +7,7 @@ alwaysApply: true
 
 ## 项目结构
 
-每个 IT 产品研发项目必须包含 `dev-rules` 作为 git submodule。每个工件的具体作用见 `dev-rules/README.md`「关键工件」节，不在此重复。
+每个 IT 产品研发项目必须包含 `dev-rules` 作为 git submodule。仓库入口索引见 `dev-rules/README.md`；接入、同步与门禁细节以本文件为准。
 
 ```
 项目根目录/
@@ -61,7 +61,7 @@ fan-out 使用 `.registered-projects` 与 `.local-projects` 的并集：跨机�
 - `rules/agent-contract-enforcement.mdc`：WebUI / API / CLI / MCP 契约、安全基线与跨端对齐。
 - `rules/test-philosophy.mdc`：Story 与测试强度的升级条件。
 - `commands/*.md`：命令执行步骤与输出契约，不承载新的长期规则体系。
-- `README.md`：索引、接入、日常用法；不展开哲学、风险分级或测试方法。
+- `README.md`：短入口索引；不展开接入细节、哲学、风险分级或测试方法。
 - `digital-clone-research.md §二`：软规则到硬检查的映射表；每行必须对应会失败的脚本或 schema。
 - `templates/` 与 `scripts/`：硬约束实现；反复出现的问题优先在这里落地。
 - `.registered-projects` / `.local-projects`：只表达项目落地状态；本机观察只有转成 sync / preflight / verify 检查或项目 wrapper debt 后，才进入长期规则。
@@ -105,7 +105,7 @@ LaunchAgent `local.dev-rules.sync` 每 30 分钟跑 `sync.sh --pull`，把其他
 3. **CI 同步运行**：在 GitHub Actions / GitLab CI 中追加一步 `./scripts/preflight.sh`（若存在）或 `./dev-rules/templates/preflight.sh`。
 4. **dev-rules 子模块自身**：源仓库内置 `scripts/preflight.sh`（调用 `./verify-rules.sh` + `./sync-stats.sh --check`），首次克隆后跑一次 `bash templates/install-hooks.sh` 即可让 pre-commit 自动拦截违例提交。**不要靠记忆手动跑 verify-rules.sh**——这条规则正是 OPC「自动化优先」要消灭的"自觉履约"。
 
-接入完成后，违反任何一条强约束的提交都会被 hook 拦截，违反者的 CI 会 fail。`/user:calibrate` 在汇总指标前会用 `dev-rules/schemas/review.schema.json` 校验所有 `.reviews/review-*.json`。
+接入完成后，违反任何一条强约束的提交都会被 hook 拦截，违反者的 CI 会 fail。`/user:calibrate` 默认读取历史 PR review 证据；只有离线 fallback 才校验 `.reviews/review-*.json`。
 
 如果某项检查段在该项目尚不可自动化（例如还没有 API 时跳过 contract drift），必须把缺口记入 `docs/preflight-debt.md` 并设定截止日期，**禁止悄悄降级为"靠自觉"**。
 

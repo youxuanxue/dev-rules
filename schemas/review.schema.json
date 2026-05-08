@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/youxuanxue/dev-rules/schemas/review.schema.json",
   "title": "Code Review Report",
-  "description": "Schema for /user:review JSON output. Default reports stay concise; high-risk reviews add conformance evidence.",
+  "description": "Schema for optional /user:review JSON records. Default review output stays in chat; PR comments are the preferred calibration source; high-risk records add conformance evidence.",
   "type": "object",
   "required": ["review_date", "scope", "risk_level", "review_mode", "decision", "summary", "findings"],
   "additionalProperties": true,
