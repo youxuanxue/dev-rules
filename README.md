@@ -97,6 +97,7 @@ git add dev-rules .cursor/rules/ && git commit -m "chore: sync dev-rules" && git
 
 - `~/Codes/dev-rules` 与 `~/.cursor/rules/` / `~/.claude/*` 使用 symlink，保证本机即时生效。
 - 项目内 `.cursor/rules/` 使用 real copy，保证云端 Agent 可读、可随项目版本化。
+- 规则载体分工见 `rules/dev-rules-convention.mdc`；避免把同一纪律在 README、global、rules、commands 里展开多遍。
 - 需要完整背景时读 `digital-clone-research.md`；需要执行规则时读 `rules/*.mdc`、`commands/*.md`、`global/CLAUDE.md`。
 - 需要理解 Harness、记忆分层、spec delta、专家团取舍时读 `docs/dev-rules-agent-context-improvement.md`；它是设计依据，不替代执行规则。
 
