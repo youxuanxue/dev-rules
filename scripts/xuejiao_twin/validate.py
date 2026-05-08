@@ -110,7 +110,14 @@ class FakeRunner:
     def __call__(self, prompt: str, **kwargs: Any) -> ClaudeRunResult:
         role = "worker" if "worker code agent" in prompt else "supervisor"
         session_id = str(kwargs.get("session_id") or f"{role}-session")
-        self.calls.append({"role": role, "session_id": str(kwargs.get("session_id") or ""), "dry_run": bool(kwargs.get("dry_run"))})
+        self.calls.append({
+            "role": role,
+            "session_id": str(kwargs.get("session_id") or ""),
+            "dry_run": bool(kwargs.get("dry_run")),
+            "allowed_tools": list(kwargs.get("allowed_tools") or []),
+            "disallowed_tools": list(kwargs.get("disallowed_tools") or []),
+            "permission_mode": str(kwargs.get("permission_mode") or ""),
+        })
         if kwargs.get("dry_run"):
             return ClaudeRunResult(session_id=session_id, output_text="先 dry-run fixture", returncode=0, raw_events=[])
         if role == "supervisor":
@@ -183,6 +190,15 @@ def run_fixture_validation() -> list[str]:
             errors.append("fixture completed without a worker turn")
         if not any(call["role"] == "supervisor" and call["session_id"] == "supervisor-session" for call in runner.calls):
             errors.append("fixture did not resume supervisor session")
+        worker_calls = [call for call in runner.calls if call["role"] == "worker"]
+        if not worker_calls or worker_calls[0]["allowed_tools"] != ["Read", "Edit", "Write", "Bash"]:
+            errors.append("fixture worker did not receive bypass-like allowed tools")
+        if not worker_calls or "Bash(git push --force *)" not in worker_calls[0]["disallowed_tools"]:
+            errors.append("fixture worker did not receive force-push disallowed tool")
+        if not worker_calls or "Bash(git reset --hard *)" not in worker_calls[0]["disallowed_tools"]:
+            errors.append("fixture worker did not receive destructive git disallowed tool")
+        if not worker_calls or "Bash(dropdb *)" not in worker_calls[0]["disallowed_tools"]:
+            errors.append("fixture worker did not receive database drop disallowed tool")
         if any(feature.get("id") == "F-001" and feature.get("status") == "completed" for feature in ledger.get("features", [])) is False:
             errors.append("fixture ledger did not mark F-001 completed")
         if "turn 2" not in (workspace / "progress.md").read_text(encoding="utf-8"):
