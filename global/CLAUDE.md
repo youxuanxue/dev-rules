@@ -40,6 +40,7 @@
 - PR 标题只写结果，不写过程清单
 - PR 描述默认只保留 `Summary`、`Risk`、`Validation`
 - review comment 默认只写阻塞问题、真实风险、缺失验证
+- 后端服务/业务逻辑改动若仓库存在 Web surface，必须同 PR 对齐 Web 页面、配置、契约或 Story；确无影响时在 commit message 写明 `no-web-impact` / `Web impact: none`
 - 设计、契约、迁移说明只在高风险变更中展开，且只放在一个主载体里
 
 ### 长时运行任务

@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import argparse
 import pathlib
-import re
 import subprocess
 import sys
+
+from preflight_common import changed_paths, commit_text, compile_patterns, matches_any
 
 DEFAULT_HIGH_RISK_PATTERNS = [
     r"^migrations?/",
@@ -23,12 +24,7 @@ DEFAULT_COMMIT_TOKENS = [
 ]
 
 
-def run_git(args: list[str]) -> str:
-    res = subprocess.run(["git", *args], check=True, text=True, capture_output=True)
-    return res.stdout
-
-
-def parse_config(path: pathlib.Path | None) -> tuple[list[re.Pattern[str]], list[re.Pattern[str]], list[re.Pattern[str]]]:
+def parse_config(path: pathlib.Path | None):
     high = list(DEFAULT_HIGH_RISK_PATTERNS)
     anchors = list(DEFAULT_ANCHOR_PATTERNS)
     tokens = list(DEFAULT_COMMIT_TOKENS)
@@ -60,19 +56,10 @@ def parse_config(path: pathlib.Path | None) -> tuple[list[re.Pattern[str]], list
                 tokens.append(s)
 
     return (
-        [re.compile(p) for p in high],
-        [re.compile(p) for p in anchors],
-        [re.compile(p, re.IGNORECASE) for p in tokens],
+        compile_patterns(high),
+        compile_patterns(anchors),
+        compile_patterns(tokens, ignore_case=True),
     )
-
-
-def changed_paths(base: str) -> list[str]:
-    out = run_git(["diff", "--name-only", f"{base}...HEAD"])
-    return [line.strip() for line in out.splitlines() if line.strip()]
-
-
-def commit_text(base: str) -> str:
-    return run_git(["log", "--format=%s%n%b", f"{base}..HEAD"]).lower()
 
 
 def main() -> int:
@@ -101,12 +88,12 @@ def main() -> int:
         sys.stderr.write(e.stderr)
         return 2
 
-    risky = [p for p in paths if any(rx.search(p) for rx in high_re)]
+    risky = [p for p in paths if matches_any(p, high_re)]
     if not risky:
         print("[check_high_risk_anchor] no high-risk paths changed")
         return 0
 
-    has_anchor_file = any(any(rx.search(p) for rx in anchor_re) for p in paths)
+    has_anchor_file = any(matches_any(p, anchor_re) for p in paths)
 
     try:
         text = commit_text(args.base)
@@ -114,7 +101,7 @@ def main() -> int:
         sys.stderr.write(e.stderr)
         return 2
 
-    has_anchor_token = any(rx.search(text) for rx in token_re)
+    has_anchor_token = matches_any(text, token_re)
 
     if has_anchor_file or has_anchor_token:
         print("[check_high_risk_anchor] anchor present")

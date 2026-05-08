@@ -50,6 +50,24 @@ fan-out 使用 `.registered-projects` 与 `.local-projects` 的并集：跨机�
 
 换机器时，跨机器项目重新 `--local` 一次即可重建本机映射；本机-only 项目需要在该机器写入 `.local-projects` 或手动执行 `sync.sh --project /path/to/project`。
 
+## 规则载体分工（防复杂度膨胀）
+
+<!-- rule-carrier-partition-anchor -->
+
+系统级审视结论只落到既有载体，不新增流程型散文档：
+
+- `global/CLAUDE.md`：会话级硬纪律，只写 Agent 每次都要执行的短规则。
+- `rules/product-dev.mdc`：研发路径、风险分级、PR / commit 形状与完成自检。
+- `rules/agent-contract-enforcement.mdc`：WebUI / API / CLI / MCP 契约、安全基线与跨端对齐。
+- `rules/test-philosophy.mdc`：Story 与测试强度的升级条件。
+- `commands/*.md`：命令执行步骤与输出契约，不承载新的长期规则体系。
+- `README.md`：索引、接入、日常用法；不展开哲学、风险分级或测试方法。
+- `digital-clone-research.md §二`：软规则到硬检查的映射表；每行必须对应会失败的脚本或 schema。
+- `templates/` 与 `scripts/`：硬约束实现；反复出现的问题优先在这里落地。
+- `.registered-projects` / `.local-projects`：只表达项目落地状态；本机观察只有转成 sync / preflight / verify 检查或项目 wrapper debt 后，才进入长期规则。
+
+同一约束只在一个主载体展开；其它载体最多保留一句索引或检查入口。若暂时无法机械化，放进 review finding 或项目 `docs/preflight-debt.md`，不要新增“靠阅读自觉”的长期流程文档。
+
 ## 编辑与提交规则
 
 涉及 `dev-rules/` 的变更**必须**先在子模块完成 commit + push，再在父仓库提交子模块指针与 `.cursor/rules/`。颠倒顺序会让父仓库指向一个远端不存在的 SHA，协作者与 CI 都会失败。

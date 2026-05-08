@@ -100,6 +100,18 @@ else
     done
 fi
 
+# ── rule carrier partition anchor ─────────────────────────────────────
+# Prevent the system-level simplification rule from drifting into another
+# prose-only promise. The detailed partition belongs in dev-rules-convention;
+# README/global/commands may only point at it.
+section "rule carrier partition anchor"
+if grep -q '<!-- rule-carrier-partition-anchor -->' "$RULES_DIR/dev-rules-convention.mdc" && \
+   grep -q '<!-- rule-carrier-partition-pointer -->' "$README"; then
+    ok "rule carrier partition has one documented anchor and README pointer"
+else
+    fail "rule carrier partition marker missing from dev-rules-convention.mdc or README"
+fi
+
 # ── LaunchAgent reality matches doc promise (macOS dev only) ───────────
 # §三 anti-drift: a doc claim ("agent runs every 30 min") has to be
 # observable in launchctl, otherwise the cross-machine sync is fiction.

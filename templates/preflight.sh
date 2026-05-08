@@ -289,7 +289,20 @@ else
     skip "dev-rules/scripts/check_contract_deletion_notice.py not present"
 fi
 
-# ---- 检查 11: 分层依赖不可反转（配置驱动） ----
+# ---- 检查 11: 后端/业务逻辑改动必须对齐 Web surface ----
+section "web surface alignment"
+if [ -f dev-rules/scripts/check_web_surface_alignment.py ]; then
+    if "$PYTHON_BIN" dev-rules/scripts/check_web_surface_alignment.py --base "${PREFLIGHT_BASE:-origin/main}" > /tmp/preflight-web-surface.log 2>&1; then
+        ok "web surface alignment check passed"
+    else
+        cat /tmp/preflight-web-surface.log | sed 's/^/    /'
+        fail "backend/business-logic changes missing Web/config/contract alignment evidence"
+    fi
+else
+    skip "dev-rules/scripts/check_web_surface_alignment.py not present"
+fi
+
+# ---- 检查 12: 分层依赖不可反转（配置驱动） ----
 section "layer dependency inversion"
 if [ -f .preflight/layer-deps.json ]; then
     if [ -f dev-rules/scripts/check_layer_dependency_inversion.py ]; then
@@ -306,7 +319,7 @@ else
     skip ".preflight/layer-deps.json not present"
 fi
 
-# ---- 检查 12: 高风险改动必须绑定审批锚点 ----
+# ---- 检查 13: 高风险改动必须绑定审批锚点 ----
 # 默认只覆盖通用高风险目录（migrations/schema）；项目可通过
 # .preflight/high-risk-anchor.conf 覆写 [high_risk_paths]/[anchor_paths]/[anchor_tokens]。
 section "high-risk approval anchor"
@@ -321,7 +334,7 @@ else
     skip "dev-rules/scripts/check_high_risk_anchor.py not present"
 fi
 
-# ---- 检查 13: release 语境禁止 skip-ci marker ----
+# ---- 检查 14: release 语境禁止 skip-ci marker ----
 # 分支/标签模式与 marker 可通过 .preflight/release-skip-ci.conf 覆写。
 section "release skip-ci safety"
 if [ -f dev-rules/scripts/check_release_skip_ci_safety.py ]; then

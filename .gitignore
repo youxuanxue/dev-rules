@@ -1,5 +1,6 @@
 .DS_Store
 *.bak.*
+.reviews/
 
 # Per-machine project materialization map (git-tracked counterpart is .registered-projects)
 .local-projects
