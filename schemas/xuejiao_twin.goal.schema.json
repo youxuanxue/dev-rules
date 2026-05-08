@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/youxuanxue/dev-rules/schemas/xuejiao_twin.goal.schema.json",
+  "title": "xuejiao twin goal",
+  "type": "object",
+  "required": ["project_root", "goal", "scope_in", "scope_out", "acceptance", "risk_policy", "mode", "agent_backend", "limits", "allowed_tools", "approval_policy", "validation_commands"],
+  "additionalProperties": true,
+  "properties": {
+    "project_root": { "type": "string", "minLength": 1 },
+    "goal": { "type": "string", "minLength": 1 },
+    "scope_in": { "type": "array", "items": { "type": "string" } },
+    "scope_out": { "type": "array", "items": { "type": "string" } },
+    "acceptance": { "type": "array", "items": { "type": "string" } },
+    "risk_policy": { "type": "string", "enum": ["auto", "low", "normal", "high"] },
+    "mode": { "type": "string", "enum": ["dry-run", "supervised-low", "supervised-normal", "supervised-high"] },
+    "agent_backend": { "type": "string", "enum": ["claude-code-headless-dual-session"] },
+    "limits": {
+      "type": "object",
+      "required": ["max_turns", "max_wall_minutes", "max_budget_usd"],
+      "additionalProperties": true,
+      "properties": {
+        "max_turns": { "type": "integer", "minimum": 1 },
+        "max_wall_minutes": { "type": "integer", "minimum": 1 },
+        "max_budget_usd": { "type": "number", "minimum": 0 }
+      }
+    },
+    "allowed_tools": { "type": "object", "additionalProperties": true },
+    "approval_policy": { "type": "object", "additionalProperties": true },
+    "validation_commands": { "type": "array", "items": { "type": "string" } }
+  }
+}

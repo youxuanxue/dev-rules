@@ -34,6 +34,14 @@ else
     fail "./sync-stats.sh missing or not executable"
 fi
 
+section "xuejiao_twin fixtures (schema, privacy, dry-run)"
+if python3 -m scripts.xuejiao_twin validate --fixtures > /tmp/dev-rules-xuejiao-twin.log 2>&1; then
+    ok "xuejiao_twin fixture validation passes"
+else
+    cat /tmp/dev-rules-xuejiao-twin.log | sed 's/^/    /'
+    fail "xuejiao_twin fixture validation failed"
+fi
+
 echo ""
 if [ "$errors" -eq 0 ]; then
     echo "=== preflight: PASS ==="

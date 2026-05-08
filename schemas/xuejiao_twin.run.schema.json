@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/youxuanxue/dev-rules/schemas/xuejiao_twin.run.schema.json",
+  "title": "xuejiao twin run",
+  "type": "object",
+  "required": ["schema_version", "run_id", "goal_ref", "persona_ref", "ledger_ref", "events_ref", "supervisor_session_id", "worker_session_id", "outcome", "stop_reason", "metrics", "privacy_report", "validation_report"],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": { "type": "string", "minLength": 1 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "goal_ref": { "type": "string", "minLength": 1 },
+    "persona_ref": { "type": "string", "minLength": 1 },
+    "ledger_ref": { "type": "string", "minLength": 1 },
+    "events_ref": { "type": "string", "minLength": 1 },
+    "supervisor_session_id": { "type": "string" },
+    "worker_session_id": { "type": "string" },
+    "outcome": {
+      "type": "string",
+      "enum": ["completed", "needs_human", "budget_exceeded", "no_progress", "failed_validation", "privacy_blocked", "agent_failed", "dry_run"]
+    },
+    "stop_reason": { "type": "string", "minLength": 1 },
+    "metrics": {
+      "type": "object",
+      "required": ["turns", "human_gate_count", "clarification_count", "retry_count", "blocked_risky_actions", "validation_coverage"],
+      "additionalProperties": true,
+      "properties": {
+        "turns": { "type": "integer", "minimum": 0 },
+        "human_gate_count": { "type": "integer", "minimum": 0 },
+        "clarification_count": { "type": "integer", "minimum": 0 },
+        "retry_count": { "type": "integer", "minimum": 0 },
+        "blocked_risky_actions": { "type": "integer", "minimum": 0 },
+        "validation_coverage": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "privacy_report": { "type": "object", "additionalProperties": true },
+    "validation_report": { "type": "object", "additionalProperties": true }
+  }
+}

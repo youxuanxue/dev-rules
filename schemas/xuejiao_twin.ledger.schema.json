@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/youxuanxue/dev-rules/schemas/xuejiao_twin.ledger.schema.json",
+  "title": "xuejiao twin feature ledger",
+  "type": "object",
+  "required": ["schema_version", "features", "current_focus", "last_verified_at"],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": { "type": "string", "minLength": 1 },
+    "features": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "description", "status", "acceptance", "validation_evidence", "blocked_reason"],
+        "additionalProperties": true,
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "description": { "type": "string", "minLength": 1 },
+          "status": { "type": "string", "enum": ["pending", "in_progress", "blocked", "completed", "deferred"] },
+          "acceptance": { "type": "array", "items": { "type": "string" } },
+          "validation_evidence": { "type": "array", "items": { "type": "string" } },
+          "blocked_reason": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "current_focus": { "type": ["string", "null"] },
+    "last_verified_at": { "type": ["string", "null"] }
+  }
+}
