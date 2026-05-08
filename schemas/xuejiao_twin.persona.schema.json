@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/youxuanxue/dev-rules/schemas/xuejiao_twin.persona.schema.json",
+  "title": "xuejiao twin persona",
+  "type": "object",
+  "required": ["schema_version", "generated_at", "derived_from", "style", "interaction_policy", "confidence", "known_limits"],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": { "type": "string", "minLength": 1 },
+    "generated_at": { "type": "string", "minLength": 1 },
+    "derived_from": {
+      "type": "object",
+      "required": ["source_hashes", "session_count", "turn_count"],
+      "additionalProperties": true,
+      "properties": {
+        "source_hashes": { "type": "array", "items": { "type": "string" } },
+        "session_count": { "type": "integer", "minimum": 0 },
+        "turn_count": { "type": "integer", "minimum": 0 },
+        "date_range": { "type": "object", "additionalProperties": true }
+      }
+    },
+    "style": {
+      "type": "object",
+      "required": ["language", "typical_length", "directness", "common_instruction_forms"],
+      "additionalProperties": true,
+      "properties": {
+        "language": { "type": "string", "minLength": 1 },
+        "typical_length": { "type": "string", "minLength": 1 },
+        "directness": { "type": "string", "minLength": 1 },
+        "common_instruction_forms": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "interaction_policy": {
+      "type": "object",
+      "required": ["kickoff", "scope_control", "evidence_requests", "review_preflight_policy", "retry_policy", "stop_policy", "human_gate_policy"],
+      "additionalProperties": true,
+      "properties": {
+        "kickoff": { "type": "array", "items": { "type": "string" } },
+        "scope_control": { "type": "array", "items": { "type": "string" } },
+        "evidence_requests": { "type": "array", "items": { "type": "string" } },
+        "review_preflight_policy": { "type": "array", "items": { "type": "string" } },
+        "retry_policy": { "type": "array", "items": { "type": "string" } },
+        "stop_policy": { "type": "array", "items": { "type": "string" } },
+        "human_gate_policy": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "confidence": {
+      "type": "object",
+      "required": ["support_counts", "low_confidence_warnings"],
+      "additionalProperties": true,
+      "properties": {
+        "support_counts": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+        "low_confidence_warnings": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "known_limits": { "type": "array", "items": { "type": "string" } }
+  }
+}

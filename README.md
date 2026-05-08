@@ -19,6 +19,7 @@
 | `commands/decompose.md` | `/user:decompose [需求描述]` | 先做风险分级，再拆解任务与 PR 形状 |
 | `commands/review.md` | `/user:review [范围]` | 默认对话内精简审查；按需写 PR comment / 严格记录 |
 | `commands/calibrate.md` | `/user:calibrate [日期范围]` | 从历史 PR review 证据校准审查噪音与漏报 |
+| `commands/twin.md` | `/user:twin index|derive|init|run|validate|replay` | 运行本机 xuejiao 分身 supervisor harness |
 
 ## 关键入口
 
@@ -34,6 +35,8 @@
 | `scripts/preflight.sh` | dev-rules 源仓库自己的提交门禁 |
 | `schemas/review.schema.json` | `/user:review` 输出契约 |
 | `schemas/skill.schema.json` | 跨项目共享的 Skill manifest 规范 |
+| `schemas/xuejiao_twin.*.schema.json` | xuejiao 分身索引、画像、目标、ledger、run 输出契约 |
+| `scripts/xuejiao_twin/` | 本机 xuejiao supervisor harness CLI 与 fixtures |
 | `global/CLAUDE.md` | Claude Code 全局工作宪法 |
 
 ## 接入与日常使用

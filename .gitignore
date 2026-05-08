@@ -1,6 +1,9 @@
 .DS_Store
 *.bak.*
+__pycache__/
+*.pyc
 .reviews/
+.xuejiao-twin/
 
 # Per-machine project materialization map (git-tracked counterpart is .registered-projects)
 .local-projects
