@@ -8,6 +8,7 @@ from typing import Any, Iterable
 from . import REDACTION_VERSION, SCHEMA_VERSION
 from .extract import label_text, summarize_tool_content
 from .privacy import PrivacyReport, redact_text, stable_hash
+from .util import date_range, normalize_timestamp
 
 SOURCE_PATTERNS = (
     ("cursor_agent_transcript", ".cursor/projects", "**/agent-transcripts/**/*.jsonl"),
@@ -55,7 +56,7 @@ def _line_to_turn(obj: dict[str, Any], source_ref: str, line_no: int, report: Pr
         "turn_id": f"{source_ref}:{line_no}",
         "source_ref": source_ref,
         "role": role if role in {"user", "assistant", "system"} else "unknown",
-        "timestamp": obj.get("timestamp"),
+        "timestamp": normalize_timestamp(obj.get("timestamp")),
         "text_redacted": redacted[:600],
         "content_hash": stable_hash(text),
         "tool_summary": summarize_tool_content(content),
@@ -65,7 +66,6 @@ def _line_to_turn(obj: dict[str, Any], source_ref: str, line_no: int, report: Pr
 
 
 def _source_record(source_type: str, path: Path, source_ref: str, turns: list[dict[str, Any]]) -> dict[str, Any]:
-    timestamps = [t.get("timestamp") for t in turns if t.get("timestamp")]
     session_basis = source_ref
     return {
         "source_ref": source_ref,
@@ -74,10 +74,7 @@ def _source_record(source_type: str, path: Path, source_ref: str, turns: list[di
         "session_hash": stable_hash(session_basis),
         "project_hash": stable_hash(str(path.parent)),
         "turn_count": len(turns),
-        "time_range": {
-            "start": min(timestamps) if timestamps else None,
-            "end": max(timestamps) if timestamps else None,
-        },
+        "time_range": date_range([turn.get("timestamp") for turn in turns]),
         "coverage_status": "parsed" if turns else "metadata_only",
     }
 
@@ -128,7 +125,7 @@ def parse_claude_history(path: Path, report: PrivacyReport) -> tuple[dict[str, A
                     "turn_id": f"{source_ref}:{line_no}",
                     "source_ref": source_ref,
                     "role": "user",
-                    "timestamp": obj.get("timestamp"),
+                    "timestamp": normalize_timestamp(obj.get("timestamp")),
                     "text_redacted": redacted[:600],
                     "content_hash": stable_hash(text),
                     "tool_summary": {"tool_count": 0, "tools": []},

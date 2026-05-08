@@ -49,9 +49,13 @@ def _cmd_index(args: argparse.Namespace) -> int:
 
 
 def _cmd_derive(args: argparse.Namespace) -> int:
-    index = read_json(Path(args.index))
+    index_path = Path(args.index).expanduser().resolve()
+    out_path = Path(args.out).expanduser().resolve()
+    if index_path == out_path:
+        raise SystemExit("derive --out must differ from --index; write persona to a separate file")
+    index = read_json(index_path)
     persona = derive_persona(index, generated_at=now_utc())
-    write_json(Path(args.out), persona)
+    write_json(out_path, persona)
     print(f"derived persona out={args.out}")
     return 0
 

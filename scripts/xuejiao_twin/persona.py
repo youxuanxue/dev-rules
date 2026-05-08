@@ -4,6 +4,7 @@ from typing import Any
 
 from . import SCHEMA_VERSION
 from .extract import first_policy_line, support_counts
+from .util import date_range
 
 POLICY_BUCKETS = {
     "kickoff": ["kickoff_minimal"],
@@ -30,7 +31,7 @@ def derive_persona(index: dict[str, Any], *, generated_at: str) -> dict[str, Any
     turns = list(index.get("turns", []))
     counts = support_counts(turns)
     source_hashes = [str(source.get("source_hash")) for source in index.get("sources", [])]
-    timestamps = [turn.get("timestamp") for turn in turns if turn.get("timestamp")]
+    timestamp_range = date_range([turn.get("timestamp") for turn in turns])
 
     policy: dict[str, list[str]] = {}
     warnings: list[str] = []
@@ -53,10 +54,7 @@ def derive_persona(index: dict[str, Any], *, generated_at: str) -> dict[str, Any
             "source_hashes": sorted(set(source_hashes)),
             "session_count": len(source_hashes),
             "turn_count": len(turns),
-            "date_range": {
-                "start": min(timestamps) if timestamps else None,
-                "end": max(timestamps) if timestamps else None,
-            },
+            "date_range": timestamp_range,
         },
         "style": {
             "language": "Chinese-first with terse engineering terms",

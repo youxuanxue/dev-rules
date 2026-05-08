@@ -97,6 +97,17 @@ def run_fixture_validation() -> list[str]:
     leaks = assert_no_private_leak(index)
     errors.extend(f"history_index privacy leak: {leak}" for leak in leaks)
 
+    index["turns"].append({
+        "turn_id": "numeric-timestamp-fixture",
+        "source_ref": index["sources"][0]["source_ref"],
+        "role": "user",
+        "timestamp": 1714564800000,
+        "text_redacted": "先跑 preflight 给我验证结果",
+        "content_hash": "numericfixture",
+        "tool_summary": {"tool_count": 0, "tools": []},
+        "behavior_labels": ["evidence_request"],
+        "privacy_flags": [],
+    })
     persona = derive_persona(index, generated_at=generated_at)
     errors.extend(validate_schema(persona, "xuejiao_twin.persona.schema.json"))
     errors.extend(f"persona privacy leak: {leak}" for leak in assert_no_private_leak(persona))
