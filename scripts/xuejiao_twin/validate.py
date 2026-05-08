@@ -100,6 +100,11 @@ def fixture_persona() -> dict[str, Any]:
             "during_task": ["要求 diff summary 和验证证据"],
             "human_gates": ["架构、安全、数据、依赖、外部副作用停给真人"],
         },
+        "interaction_policy": {
+            "worker_instruction_style": "直接、干练、面向实现",
+            "first_turn_policy": "首轮除非触发门禁，否则请 worker 直接实现目标，不要先盘点或等确认。",
+            "subsequent_turn_policy": "后续轮根据上一轮证据推进下一个最小可验证改动，不要重复盘点。",
+        },
     }
 
 
@@ -117,6 +122,7 @@ class FakeRunner:
             "allowed_tools": list(kwargs.get("allowed_tools") or []),
             "disallowed_tools": list(kwargs.get("disallowed_tools") or []),
             "permission_mode": str(kwargs.get("permission_mode") or ""),
+            "prompt": prompt,
         })
         if kwargs.get("dry_run"):
             return ClaudeRunResult(session_id=session_id, output_text="先 dry-run fixture", returncode=0, raw_events=[])
@@ -210,7 +216,14 @@ def run_fixture_validation() -> list[str]:
             errors.append("fixture did not resume supervisor session")
         if not any(call["role"] == "worker" and call["session_id"] == "worker-session" for call in runner.calls):
             errors.append("fixture did not resume worker session")
+        supervisor_calls = [call for call in runner.calls if call["role"] == "supervisor"]
+        if not supervisor_calls or "首轮除非触发门禁" not in supervisor_calls[0]["prompt"]:
+            errors.append("fixture supervisor first turn missing persona first_turn_policy")
+        if len(supervisor_calls) < 2 or "后续轮根据上一轮证据" not in supervisor_calls[1]["prompt"]:
+            errors.append("fixture supervisor subsequent turn missing persona subsequent_turn_policy")
         worker_calls = [call for call in runner.calls if call["role"] == "worker"]
+        if not worker_calls or "直接、干练、面向实现" not in worker_calls[0]["prompt"]:
+            errors.append("fixture worker missing persona instruction style")
         if not worker_calls or worker_calls[0]["allowed_tools"] != ["Read", "Edit", "Write", "Bash"]:
             errors.append("fixture worker did not receive bypass-like allowed tools")
         if not worker_calls or "Bash(git push --force *)" not in worker_calls[0]["disallowed_tools"]:

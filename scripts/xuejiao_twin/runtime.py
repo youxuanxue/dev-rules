@@ -98,6 +98,25 @@ def _feature_status_counts(ledger: dict[str, Any]) -> dict[str, int]:
     return counts
 
 
+def _persona_instruction_policy(persona: dict[str, Any], turn_index: int) -> dict[str, Any]:
+    interaction = persona.get("interaction_policy", {})
+    if not isinstance(interaction, dict):
+        interaction = {}
+    decision = persona.get("decision_policy", {})
+    if not isinstance(decision, dict):
+        decision = {}
+    if turn_index == 1:
+        turn_policy = interaction.get("first_turn_policy") or interaction.get("first_turn_instruction") or decision.get("start_task")
+    else:
+        turn_policy = interaction.get("subsequent_turn_policy") or interaction.get("next_turn_policy") or decision.get("during_task")
+    return {
+        "turn": "first" if turn_index == 1 else "subsequent",
+        "worker_instruction_style": interaction.get("worker_instruction_style") or interaction.get("instruction_style") or "",
+        "all_turns_policy": interaction.get("all_turns_policy") or interaction.get("instruction_policy") or "",
+        "turn_policy": turn_policy or "",
+    }
+
+
 def _supervisor_prompt(
     goal: dict[str, Any],
     persona: dict[str, Any],
@@ -108,13 +127,14 @@ def _supervisor_prompt(
 ) -> str:
     feature = _next_feature(ledger)
     focus = feature.get("description") if feature else goal.get("goal")
+    persona_instruction_policy = _persona_instruction_policy(persona, turn_index)
     return json.dumps({
         "role": "xuejiao supervisor",
-        "contract": "Return JSON only. Do not edit code. Stop for architecture/security/data/dependency/production deploy/force push/destructive/external side effects.",
+        "contract": "Return JSON only. Do not edit code. Be direct: on continue, instruct the worker to implement the current focus now. Stop only for architecture/security/data/dependency/production deploy/force push/destructive/external side effects.",
         "decision_contract": {
             "action": "continue | stop | needs_human",
             "current_focus": "feature id such as F-001",
-            "instruction": "one concise Chinese worker instruction",
+            "instruction": "one direct Chinese worker instruction that starts with 请直接实现, not a plan, inventory, or confirmation request",
             "feature_updates": [{
                 "id": "feature id",
                 "status": "in_progress | blocked | completed | deferred",
@@ -131,9 +151,11 @@ def _supervisor_prompt(
         "current_focus": focus,
         "feature_ledger": ledger,
         "persona_policy": persona.get("interaction_policy", {}),
+        "persona_instruction_policy": persona_instruction_policy,
         "project_evidence": evidence,
         "run_history": run_history or [],
         "branch_policy": "Never auto-commit or push on main/master. Non-main branch commit/push/PR/local deployment is allowed only when goal/tools explicitly allow it.",
+        "execution_bias": "Default to action=continue with an implementation instruction. Do not ask the worker to perform read-only inventory, write a plan, or wait for confirmation when the goal already authorizes implementation.",
         "output_contract": "JSON only. If human input is required, use action=needs_human and explain reason.",
     }, ensure_ascii=False, indent=2)
 
@@ -141,14 +163,16 @@ def _supervisor_prompt(
 def _fallback_instruction(goal: dict[str, Any], ledger: dict[str, Any]) -> str:
     feature = _next_feature(ledger)
     if feature:
-        return f"先聚焦 {feature['description']}，只做最小可验证改动，完成后给 diff summary 和验证结果。"
-    return f"目标看起来已完成，跑验证命令并给出最终 diff summary：{goal.get('goal', '')}"
+        return f"请直接实现：{feature['description']}。做最小可验证改动，不要先写计划或等确认；完成后给 diff summary 和验证结果。"
+    return f"请直接验证目标已完成，运行验证命令并给出最终 diff summary：{goal.get('goal', '')}"
 
 
-def _worker_prompt(instruction: str, goal: dict[str, Any]) -> str:
+def _worker_prompt(instruction: str, goal: dict[str, Any], persona_instruction_policy: dict[str, Any]) -> str:
     return json.dumps({
         "role": "worker code agent",
         "instruction_from_xuejiao_supervisor": instruction,
+        "persona_instruction_policy": persona_instruction_policy,
+        "execution_contract": "Implement now. Do not stop to ask for confirmation, write a separate plan, or do read-only inventory unless the instruction explicitly requires it or a hard rule is triggered.",
         "goal": goal.get("goal"),
         "scope_in": goal.get("scope_in", []),
         "scope_out": goal.get("scope_out", []),
@@ -159,6 +183,7 @@ def _worker_prompt(instruction: str, goal: dict[str, Any]) -> str:
             "Non-main branch commit/push/PR/local deployment is allowed only when goal/tools explicitly allow it.",
             "Do not introduce dependencies unless explicitly approved.",
             "Stop and report if architecture/security/data decisions are required.",
+            "If implementation is authorized by the goal, start editing instead of asking for approval.",
             "Produce evidence: changed files, tests/preflight attempted, failures, and next blocker if any.",
         ],
     }, ensure_ascii=False, indent=2)
@@ -739,7 +764,7 @@ def run_workspace(
                     decision["instruction"] = decision.get("instruction") or "只读复核 supervisor 已收集的证据，运行允许的验证命令并返回结果。"
 
                 worker_result = runner(
-                    _worker_prompt(str(decision.get("instruction") or ""), goal),
+                    _worker_prompt(str(decision.get("instruction") or ""), goal, _persona_instruction_policy(persona, turn_index)),
                     cwd=project_root,
                     allowed_tools=_allowed_tools(goal, "worker"),
                     max_budget_usd=max_budget_usd,
