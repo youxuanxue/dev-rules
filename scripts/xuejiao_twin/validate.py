@@ -170,6 +170,9 @@ def run_fixture_validation() -> list[str]:
         )
         write_json(persona_path, fixture_persona())
         workspace = init_workspace(goal_path, persona_path, out=tmp_path / "workspace")
+        gitignore = (project_root / ".gitignore").read_text(encoding="utf-8")
+        if ".xuejiao-twin*" not in gitignore.splitlines():
+            errors.append("fixture init did not add .xuejiao-twin* to .gitignore")
         ledger = read_json(workspace / "feature_ledger.json")
         errors.extend(validate_schema(ledger, "xuejiao_twin.ledger.schema.json"))
         dry_run = run_workspace(workspace, mode="dry-run", out=tmp_path / "dry-run.json", runner=FakeRunner())
