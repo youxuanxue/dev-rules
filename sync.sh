@@ -64,39 +64,11 @@ CLAUDE_GLOBAL_MD="$HOME/.claude/CLAUDE.md"
 LAUNCH_AGENT_LABEL="local.dev-rules.sync"
 LAUNCH_AGENT_PLIST="$HOME/Library/LaunchAgents/${LAUNCH_AGENT_LABEL}.plist"
 
-# Two registries (separation of cross-machine truth vs per-machine state):
-#
-#   .registered-projects (TSV: name\tgit_remote_url, git-tracked)
-#     Cross-machine canonical list of projects that should be discoverable on
-#     every machine.
-#
-#   .local-projects      (TSV: git_remote_url\tabsolute_local_path, .gitignore'd)
-#     Per-machine materialization map. Projects can be local-only here when a
-#     repository should sync from ~/Codes/dev-rules without exposing the remote
-#     dev-rules URL or joining the cross-machine registry.
-#
-# Local fan-out is the union of both registries: any project with an existing
-# local path participates.
-# Always live under the canonical mirror so all submodule checkouts share them.
+# Project registries live under the canonical mirror so submodule checkouts share them.
 PROJECTS_FILE="$HOME_CANONICAL/.registered-projects"
 LOCAL_PROJECTS_FILE="$HOME_CANONICAL/.local-projects"
 
-# ---------------------------------------------------------------------------
-# Registry helpers
-# ---------------------------------------------------------------------------
-#
-# Two registries with deliberate separation:
-#
-#   .registered-projects   — TSV `name<TAB>git_remote_url`, git-tracked.
-#                            Cross-machine canonical project set.
-#
-#   .local-projects        — TSV `git_remote_url<TAB>absolute_local_path`,
-#                            .gitignore'd. Per-machine materialization map.
-#
-# Local fan-out uses the union of both registries: registered projects with a
-# local mapping, plus local-only projects recorded in .local-projects. Entries
-# without an existing local path are skipped.
-# Lines starting with '#' or empty lines in either file are treated as comments.
+# Registry helpers. Local fan-out uses existing paths from `.registered-projects` + `.local-projects`.
 
 project_git_url() {
     git -C "$1" remote get-url origin 2>/dev/null

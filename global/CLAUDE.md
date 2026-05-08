@@ -2,7 +2,6 @@
 
 > 本文件由 `dev-rules` 仓库管理，`~/.claude/CLAUDE.md` 是它的 symlink。
 > 编辑入口：`dev-rules/global/CLAUDE.md`；分发：`dev-rules/sync.sh`。
-> 这是所有 Claude Code 会话（交互 + headless）启动时读到的第一段上下文。
 
 ## 1. 身份与哲学
 
@@ -13,106 +12,37 @@
 
 人类只介入真正需要判断的地方：**高风险审批门禁**与**架构决策**。其余一切由 Agent 自动执行。
 
-## 2. 工作纪律
+## 2. 会话级硬纪律
 
-### 默认研发路径
+- 默认研发路径、风险分级、PR / commit 形状与完成自检以 `rules/product-dev.mdc` 为准；本文件不复制第二套流程。
+- 规则来源、同步、hook、项目接入以 `rules/dev-rules-convention.mdc` 为准；禁止直接编辑 sync 产物。
+- 每次准备提交或汇报前执行项目根目录 `scripts/preflight.sh`；失败必须修复后重跑，禁止 `--no-verify` 绕过（紧急回滚除外）。
+- 高风险、范围不清、预算较大或会长时间占用资源的任务，先输出执行计划并等待审批；默认路径下不为“多步骤”本身额外增加审批。
+- 遇到需要业务决策的问题，记录并暂停，不猜测；同一问题连续 3 次失败必须暂停分析，等待人工介入。
 
-```text
-单 PR → 实现/测试 → preflight → review → 人工确认
-```
+## 3. 命令与技能
 
-- 默认单 PR，单一用户意图；不要把 docs、prototype、开发、上线拆成流程型多 PR
-- 默认直接做生产级实现；只有高风险变更才升级到 `prototype/` + `docs/approved/` + 双审批
-- 风险分级与升级条件以 `rules/product-dev.mdc` 为准；不要在这里另写一套简化版
-
-### 高风险路径（仅例外时启用）
-
-```text
-需求分析 → 原型设计 → [人工审批] → 功能实现 → 测试验证 → [人工审批] → 合并上线
-```
-
-- 只有高风险变更才要求原型与 `docs/approved/`
-- 原型 PR / 原型阶段 merge = 审批通过；未审批前不得进入高风险功能实现阶段
-
-### PR / Commit 形状
-
-- commit 只解释一个原子变化为什么存在，不列实现清单
-- PR 标题只写结果，不写过程清单
-- PR 描述默认只保留 `Summary`、`Risk`、`Validation`
-- review comment 默认只写阻塞问题、真实风险、缺失验证
-- 后端服务/业务逻辑改动若仓库存在 Web surface，必须同 PR 对齐 Web 页面、配置、契约或 Story；确无影响时在 commit message 写明 `no-web-impact` / `Web impact: none`
-- 设计、契约、迁移说明只在高风险变更中展开，且只放在一个主载体里
-
-### 长时运行任务
-
-- 高风险、范围不清、预算较大或会长时间占用资源的任务，先输出执行计划并等待审批；默认路径下不为“多步骤”本身额外增加审批
-- 每完成一个里程碑立即提交，不做一次性大变更
-- 遇到需要业务决策的问题，记录并暂停，不猜测
-- 同一问题连续 3 次失败必须暂停分析，等待人工介入
-
-### 完成自检（提交前必做）
-
-执行 `scripts/preflight.sh`（项目根目录）。脚本失败必须修复后再提交，不允许 `--no-verify` 绕过（紧急回滚除外）。
-
-## 3. 自定义命令
-
-
-| 命令                       | 用途                                                 |
-| ------------------------ | -------------------------------------------------- |
-| `/user:decompose [需求描述]` | 先判定风险，再拆解子任务；默认单 PR，高风险才升级到原型与审批门禁                |
-| `/user:review [范围]`      | 默认精简代码审查；高风险时再输出完整符合性与证据链，结果写入结构化 JSON             |
-| `/user:calibrate [日期范围]` | 汇总审查校准指标，给出 Phase 准入判定                             |
-
+| 命令 | 用途 |
+| --- | --- |
+| `/user:decompose [需求描述]` | 先判定风险，再拆解子任务；默认单 PR，高风险才升级到原型与审批门禁 |
+| `/user:review [范围]` | 默认精简代码审查；高风险时再输出完整符合性与证据链，结果写入结构化 JSON |
+| `/user:calibrate [日期范围]` | 汇总审查校准指标，给出 Phase 准入判定 |
 
 新增命令编辑 `dev-rules/commands/*.md`，运行 `dev-rules/sync.sh` 后立即在所有会话生效（symlink）。
 
-## 4. 规则来源与强约束
+Agent Skills 只在 `.cursor/skills/` 编辑与提交；仓库根 `.claude/skills` 只能是指向 `.cursor/skills` 的 symlink，禁止创建真实副本。
 
-**单一事实来源**：`dev-rules` 仓库（`github.com/youxuanxue/dev-rules`）。
-
-
-| 消费端                       | 形式                                                  | 自动更新方式                                          |
-| ------------------------- | --------------------------------------------------- | ----------------------------------------------- |
-| `~/.cursor/rules/*.mdc`   | symlink → `~/Codes/dev-rules/rules/`                | 每 30 min LaunchAgent `sync.sh --pull`            |
-| `~/.claude/commands/*.md` | symlink → `~/Codes/dev-rules/commands/`             | 同上                                              |
-| `~/.claude/CLAUDE.md`     | symlink → `~/Codes/dev-rules/global/CLAUDE.md`（本文件） | 同上                                              |
-| 项目 `.cursor/rules/*.mdc`  | real copy（云端 Agent 可读）                              | 项目内 `dev-rules/sync.sh --local`                  |
-
-
-**禁止**直接编辑 sync 产物。修改流程固定四步：
-
-```
-edit dev-rules/{rules|commands|global}/*  →  dev-rules/sync.sh --local
-                                          →  dev-rules/verify-rules.sh
-                                          →  commit submodule (push) → commit parent
-```
-
-**强约束（机械检查，违规即拦截）**：每条软规则配套可执行脚本，`git commit` 真的会失败。新项目最小一步接入：
-
-```bash
-bash dev-rules/templates/install-hooks.sh    # 接到 .git/hooks/pre-commit
-                                             # hook 运行时按 scripts/preflight.sh → dev-rules/templates/preflight.sh fallback
-                                             # 仅当项目有特异检查时再 cp templates/preflight.sh → scripts/preflight.sh
-```
-
-完整软→硬映射见 `dev-rules/digital-clone-research.md §二`。
-
-### Agent Skills（禁止写入 `.claude/skills`）
-
-- **禁止**在项目仓库内创建或维护真实的 `.claude/skills/**`（不向其中写入 SKILL、Markdown 或与 `.cursor/skills` 重复的副本）。
-- **允许**：仓库根的 `.claude/skills` 仅为指向 `.cursor/skills` 的 symlink；技能正文只在 `.cursor/skills/` 编辑与提交；文档与示例路径一律写 `.cursor/skills/…`，禁止引导写到 `.claude/skills`。
-
-## 5. Headless 模式（无人值守）
+## 4. Headless 模式
 
 `claude -p` 模式下额外纪律：
 
-- **必须传 `--allowedTools`**：省略时默认 `--permission-mode default`，在 CI 无人值守环境中 agent 会拒绝所有工具调用并静默完成（exit 0、零产出、无报错——最难感知的失败模式）
-- 产出用 `2>&1 | tee /tmp/out.txt` 同时输出到 stdout 和文件；**不存在** `--output` flag，禁止使用
-- 调用侧必须加 `set -o pipefail`，否则 `claude -p` 的非零退出码被 pipeline 吞掉
-- 预算不超过 `--max-budget-usd`
-- 失败以非零退出码报告，不输出"看起来成功"的文字
-- 云端 / 本地两端的运行环境（CLI + secrets）由 `dev-rules/templates/cloud-agent-bootstrap.sh` 统一安装与 `--check`；项目侧只在 `.cursor/cloud-agent.env` 声明工具与 secrets 契约（preflight 段 9 自动拦截不一致）
+- 必须传 `--allowedTools`，否则 CI 无人值守环境可能拒绝工具调用却 exit 0。
+- 输出用 `2>&1 | tee /tmp/out.txt`；不存在 `--output` flag。
+- 调用侧必须 `set -o pipefail`，否则 pipeline 会吞掉非零退出码。
+- 预算不超过 `--max-budget-usd`。
+- 失败以非零退出码报告，不输出“看起来成功”的文字。
+- 云端 / 本地运行环境由 `dev-rules/templates/cloud-agent-bootstrap.sh` 统一安装与 `--check`；项目只在 `.cursor/cloud-agent.env` 声明工具与 secrets 契约。
 
-## 6. 升级原则
+## 5. 升级原则
 
-当某个"靠自觉"的问题反复出现，**必须**新增一段检查到 `scripts/preflight.sh` 或 `dev-rules/verify-rules.sh`，把软约束硬化。这条本身是 OPC「自动化优先」的元规则。
+当某个“靠自觉”的问题反复出现，必须新增检查到 `scripts/preflight.sh` 或 `dev-rules/verify-rules.sh`，把软约束硬化。

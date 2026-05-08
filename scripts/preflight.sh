@@ -1,27 +1,5 @@
 #!/usr/bin/env bash
-#
-# scripts/preflight.sh — dev-rules SOURCE repo's own commit gate.
-#
-# Why this exists:
-#   templates/preflight.sh is generic and assumes a consumer-project layout
-#   (`dev-rules/sync.sh`, `dev-rules/sync-stats.sh`, …). Inside the source
-#   repo those paths collapse to `./sync.sh` etc., so the template skips the
-#   most important checks and the dev-rules repo would silently bypass its
-#   own discipline. install-hooks.sh's fallback chain (project wrapper →
-#   template) lets us plug a source-repo-aware wrapper in here.
-#
-# Checks (mechanical — no "remember to run X"):
-#   1. verify-rules.sh                — repo integrity (frontmatter, README
-#                                       coverage, ghost paths, LaunchAgent)
-#   2. sync-stats.sh --check          — every <!-- stat:NAME --> block in
-#                                       prose matches the live computed value
-#
-# Both gates are also wired so consumer projects' preflight § 3 + § 8 catch
-# them, but inside the source repo we run them directly because the
-# preflight template can't reach `./verify-rules.sh` (it looks for the
-# submodule path).
-#
-# Bypass with --no-verify is reserved for emergency reverts only.
+# dev-rules 源仓库自己的提交门禁；消费项目使用 templates/preflight.sh。
 
 set -u
 

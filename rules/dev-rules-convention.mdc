@@ -7,7 +7,7 @@ alwaysApply: true
 
 ## 项目结构
 
-每个 IT 产品研发项目必须包含 `dev-rules` 作为 git submodule。每个工件的具体作用见 `dev-rules/README.md`「关键工件」节，不在此重复。
+每个 IT 产品研发项目必须包含 `dev-rules` 作为 git submodule。仓库入口索引见 `dev-rules/README.md`；接入、同步与门禁细节以本文件为准。
 
 ```
 项目根目录/
@@ -61,7 +61,7 @@ fan-out 使用 `.registered-projects` 与 `.local-projects` 的并集：跨机�
 - `rules/agent-contract-enforcement.mdc`：WebUI / API / CLI / MCP 契约、安全基线与跨端对齐。
 - `rules/test-philosophy.mdc`：Story 与测试强度的升级条件。
 - `commands/*.md`：命令执行步骤与输出契约，不承载新的长期规则体系。
-- `README.md`：索引、接入、日常用法；不展开哲学、风险分级或测试方法。
+- `README.md`：短入口索引；不展开接入细节、哲学、风险分级或测试方法。
 - `digital-clone-research.md §二`：软规则到硬检查的映射表；每行必须对应会失败的脚本或 schema。
 - `templates/` 与 `scripts/`：硬约束实现；反复出现的问题优先在这里落地。
 - `.registered-projects` / `.local-projects`：只表达项目落地状态；本机观察只有转成 sync / preflight / verify 检查或项目 wrapper debt 后，才进入长期规则。
