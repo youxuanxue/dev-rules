@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import argparse
 import pathlib
-import re
 import subprocess
 import sys
+
+from preflight_common import changed_paths, commit_text, compile_patterns, matches_any, run_git
 
 DEFAULT_BACKEND_PATTERNS = [
     r"^backend/",
@@ -71,11 +72,6 @@ DEFAULT_JUSTIFICATION_TOKENS = [
 ]
 
 
-def run_git(args: list[str]) -> str:
-    res = subprocess.run(["git", *args], check=True, text=True, capture_output=True)
-    return res.stdout
-
-
 def parse_config(path: pathlib.Path | None) -> tuple[list[str], list[str], list[str], list[str], list[str]]:
     backend = list(DEFAULT_BACKEND_PATTERNS)
     web_surface = list(DEFAULT_WEB_SURFACE_PATTERNS)
@@ -124,23 +120,6 @@ def parse_config(path: pathlib.Path | None) -> tuple[list[str], list[str], list[
     return backend, web_surface, alignment, web_roots, tokens
 
 
-def compile_all(patterns: list[str], *, ignore_case: bool = False) -> list[re.Pattern[str]]:
-    flags = re.IGNORECASE if ignore_case else 0
-    return [re.compile(p, flags) for p in patterns]
-
-
-def changed_paths(base: str) -> list[str]:
-    out = run_git(["diff", "--name-only", f"{base}...HEAD"])
-    return [line.strip() for line in out.splitlines() if line.strip()]
-
-
-def commit_text(base: str) -> str:
-    text = run_git(["log", "--format=%s%n%b", f"{base}..HEAD"])
-    if not text.strip():
-        text = run_git(["log", "-1", "--format=%s%n%b"])
-    return text.lower()
-
-
 def repo_paths() -> list[str]:
     out = run_git(["ls-files"])
     paths = [line.strip() for line in out.splitlines() if line.strip()]
@@ -150,10 +129,6 @@ def repo_paths() -> list[str]:
         for idx in range(1, min(len(parts), 4) + 1):
             roots.add("/".join(parts[:idx]))
     return sorted(set(paths) | roots)
-
-
-def matches_any(value: str, patterns: list[re.Pattern[str]]) -> bool:
-    return any(rx.search(value) for rx in patterns)
 
 
 def main() -> int:
@@ -178,22 +153,7 @@ def main() -> int:
         sys.stderr.write("[check_web_surface_alignment] config error: [web_roots] is empty\n")
         return 2
 
-    backend_re = compile_all(backend_raw)
-    web_surface_re = compile_all(web_surface_raw)
-    alignment_re = compile_all(alignment_raw)
-    web_root_re = compile_all(web_roots_raw)
-    token_re = compile_all(tokens_raw, ignore_case=True)
-
-    try:
-        all_paths = repo_paths()
-    except subprocess.CalledProcessError as e:
-        sys.stderr.write(e.stderr)
-        return 2
-
-    has_web_surface = any(matches_any(p, web_root_re) or matches_any(p, web_surface_re) for p in all_paths)
-    if not has_web_surface:
-        print("[check_web_surface_alignment] skip: no Web surface detected")
-        return 0
+    backend_re = compile_patterns(backend_raw)
 
     try:
         paths = changed_paths(args.base)
@@ -206,17 +166,32 @@ def main() -> int:
         print("[check_web_surface_alignment] no backend/business-logic paths changed")
         return 0
 
+    web_surface_re = compile_patterns(web_surface_raw)
+    web_root_re = compile_patterns(web_roots_raw)
+    try:
+        all_paths = repo_paths()
+    except subprocess.CalledProcessError as e:
+        sys.stderr.write(e.stderr)
+        return 2
+
+    has_web_surface = any(matches_any(p, web_root_re) or matches_any(p, web_surface_re) for p in all_paths)
+    if not has_web_surface:
+        print("[check_web_surface_alignment] skip: no Web surface detected")
+        return 0
+
+    alignment_re = compile_patterns(alignment_raw)
     alignment_changed = [p for p in paths if matches_any(p, alignment_re)]
     if alignment_changed:
         print("[check_web_surface_alignment] Web/config/contract alignment evidence present")
         return 0
 
     try:
-        text = commit_text(args.base)
+        text = commit_text(args.base, fallback_head=True)
     except subprocess.CalledProcessError as e:
         sys.stderr.write(e.stderr)
         return 2
 
+    token_re = compile_patterns(tokens_raw, ignore_case=True)
     if any(rx.search(text) for rx in token_re):
         print("[check_web_surface_alignment] explicit no-web-impact justification present")
         return 0

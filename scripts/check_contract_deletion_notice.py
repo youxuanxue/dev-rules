@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import argparse
 import pathlib
-import re
 import subprocess
 import sys
+
+from preflight_common import commit_text, compile_patterns, matches_any, run_git
 
 DEFAULT_PATTERNS = [
     r"^docs/agent_integration\.md$",
@@ -23,12 +24,7 @@ NOTICE_PATTERNS = [
 ]
 
 
-def run_git(args: list[str]) -> str:
-    res = subprocess.run(["git", *args], check=True, text=True, capture_output=True)
-    return res.stdout
-
-
-def load_patterns(path: pathlib.Path | None) -> tuple[list[re.Pattern[str]], list[re.Pattern[str]]]:
+def load_patterns(path: pathlib.Path | None):
     contract_raw = list(DEFAULT_PATTERNS)
     notice_raw = list(NOTICE_PATTERNS)
 
@@ -53,7 +49,7 @@ def load_patterns(path: pathlib.Path | None) -> tuple[list[re.Pattern[str]], lis
             elif in_notice:
                 notice_raw.append(s)
 
-    return [re.compile(p) for p in contract_raw], [re.compile(p, re.IGNORECASE) for p in notice_raw]
+    return compile_patterns(contract_raw), compile_patterns(notice_raw, ignore_case=True)
 
 
 def pick_base(base_arg: str | None) -> str:
@@ -81,11 +77,6 @@ def deleted_paths(base: str) -> list[str]:
     return paths
 
 
-def collect_commit_text(base: str) -> str:
-    subject_body = run_git(["log", "--format=%s%n%b", f"{base}..HEAD"])
-    return subject_body.lower()
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Require explicit notice token when public contract files are deleted."
@@ -108,20 +99,18 @@ def main() -> int:
         sys.stderr.write(e.stderr)
         return 2
 
-    contract_deleted = [
-        p for p in deleted if any(rx.search(p) for rx in contract_re)
-    ]
+    contract_deleted = [p for p in deleted if matches_any(p, contract_re)]
     if not contract_deleted:
         print("[check_contract_deletion_notice] no contract deletion detected")
         return 0
 
     try:
-        text = collect_commit_text(base)
+        text = commit_text(base)
     except subprocess.CalledProcessError as e:
         sys.stderr.write(e.stderr)
         return 2
 
-    if any(rx.search(text) for rx in notice_re):
+    if matches_any(text, notice_re):
         print("[check_contract_deletion_notice] notice token present")
         return 0
 

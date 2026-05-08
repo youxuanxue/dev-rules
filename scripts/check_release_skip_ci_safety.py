@@ -7,6 +7,8 @@ import re
 import subprocess
 import sys
 
+from preflight_common import commit_text, run_git
+
 DEFAULT_SKIP_MARKERS = ("[skip ci]", "[ci skip]")
 DEFAULT_RELEASE_BRANCH_PATTERNS = (
     r"^main$",
@@ -17,11 +19,6 @@ DEFAULT_RELEASE_BRANCH_PATTERNS = (
 DEFAULT_RELEASE_TAG_PATTERNS = (
     r"^v\d+\.\d+\.\d+",
 )
-
-
-def run_git(args: list[str]) -> str:
-    res = subprocess.run(["git", *args], check=True, text=True, capture_output=True)
-    return res.stdout.strip()
 
 
 def parse_config(path: pathlib.Path | None) -> tuple[list[str], list[str], list[str]]:
@@ -69,13 +66,6 @@ def is_release_context(branch: str, tags: list[str], force: bool, branch_pattern
     return False
 
 
-def collect_messages(base: str) -> str:
-    text = run_git(["log", "--format=%s%n%b", f"{base}..HEAD"])
-    if not text:
-        text = run_git(["log", "-1", "--format=%s%n%b"])
-    return text.lower()
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description="Block skip-ci markers in release-sensitive context.")
     parser.add_argument("--base", default="origin/main")
@@ -88,8 +78,8 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        branch = run_git(["rev-parse", "--abbrev-ref", "HEAD"])
-        tags_text = run_git(["tag", "--points-at", "HEAD"])
+        branch = run_git(["rev-parse", "--abbrev-ref", "HEAD"], strip=True)
+        tags_text = run_git(["tag", "--points-at", "HEAD"], strip=True)
         tags = [t.strip() for t in tags_text.splitlines() if t.strip()]
     except subprocess.CalledProcessError as e:
         sys.stderr.write(e.stderr)
@@ -107,7 +97,7 @@ def main() -> int:
         return 0
 
     try:
-        msg = collect_messages(args.base)
+        msg = commit_text(args.base, fallback_head=True)
     except subprocess.CalledProcessError as e:
         sys.stderr.write(e.stderr)
         return 2

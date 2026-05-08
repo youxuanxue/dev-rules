@@ -86,7 +86,7 @@ $ARGUMENTS
 - 是否遵循分层依赖（entry → command → domain → shared）
 - 是否有反向依赖或循环引用
 - 如果触达公共契约，是否同步更新了契约文档
-- 若后端服务/业务逻辑改动发生在有 Web surface 的仓库，是否同 PR 对齐了 Web 页面、配置、契约或 Story；无影响时是否有 `no-web-impact` / `Web impact: none` 说明
+- 若后端服务/业务逻辑改动发生在有 Web surface 的仓库，是否同 PR 对齐了 Web 页面、配置、契约或 Story；无影响时 commit message 是否有 `no-web-impact` / `Web impact: none` 说明
 
 #### 5. 原型 vs 生产代码检查
 

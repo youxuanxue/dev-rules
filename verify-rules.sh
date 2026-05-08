@@ -105,11 +105,11 @@ fi
 # prose-only promise. The detailed partition belongs in dev-rules-convention;
 # README/global/commands may only point at it.
 section "rule carrier partition anchor"
-if grep -q "^## 规则载体分工（防复杂度膨胀）" "$RULES_DIR/dev-rules-convention.mdc" && \
-   grep -q '规则载体分工见 `rules/dev-rules-convention.mdc`' "$README"; then
+if grep -q '<!-- rule-carrier-partition-anchor -->' "$RULES_DIR/dev-rules-convention.mdc" && \
+   grep -q '<!-- rule-carrier-partition-pointer -->' "$README"; then
     ok "rule carrier partition has one documented anchor and README pointer"
 else
-    fail "rule carrier partition anchor missing from dev-rules-convention.mdc or README pointer"
+    fail "rule carrier partition marker missing from dev-rules-convention.mdc or README"
 fi
 
 # ── LaunchAgent reality matches doc promise (macOS dev only) ───────────

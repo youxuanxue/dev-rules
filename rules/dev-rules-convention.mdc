@@ -52,6 +52,8 @@ fan-out 使用 `.registered-projects` 与 `.local-projects` 的并集：跨机�
 
 ## 规则载体分工（防复杂度膨胀）
 
+<!-- rule-carrier-partition-anchor -->
+
 系统级审视结论只落到既有载体，不新增流程型散文档：
 
 - `global/CLAUDE.md`：会话级硬纪律，只写 Agent 每次都要执行的短规则。
