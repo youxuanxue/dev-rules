@@ -25,8 +25,8 @@
 | 命令 | 用途 |
 | --- | --- |
 | `/user:decompose [需求描述]` | 先判定风险，再拆解子任务；默认单 PR，高风险才升级到原型与审批门禁 |
-| `/user:review [范围]` | 默认精简代码审查；高风险时再输出完整符合性与证据链，结果写入结构化 JSON |
-| `/user:calibrate [日期范围]` | 汇总审查校准指标，给出 Phase 准入判定 |
+| `/user:review [范围]` | 默认对话内精简代码审查；高风险或明确要求时再留 PR comment / 结构化记录 |
+| `/user:calibrate [日期范围]` | 从历史 PR review 证据校准审查噪音、误报与漏报 |
 
 新增命令编辑 `dev-rules/commands/*.md`，运行 `dev-rules/sync.sh` 后立即在所有会话生效（symlink）。
 
