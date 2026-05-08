@@ -105,10 +105,11 @@ def run_workspace(workspace: Path, *, mode: str, out: Path | None = None) -> dic
         instruction = _fallback_instruction(goal, ledger)
 
     instruction_redacted, instruction_flags = redact_text(instruction, report)
+    supervisor_session_hash = stable_hash(supervisor_result.session_id) if supervisor_result.session_id else ""
     events = [{
         "timestamp": now_utc(),
         "type": "supervisor_instruction",
-        "session_id": supervisor_result.session_id,
+        "session_hash": supervisor_session_hash,
         "text_redacted": instruction_redacted,
         "privacy_flags": instruction_flags,
     }]
@@ -127,7 +128,7 @@ def run_workspace(workspace: Path, *, mode: str, out: Path | None = None) -> dic
         events.append({
             "timestamp": now_utc(),
             "type": "worker_result",
-            "session_id": worker_result.session_id,
+            "session_hash": stable_hash(worker_result.session_id) if worker_result.session_id else "",
             "returncode": worker_result.returncode,
             "text_redacted": worker_redacted[:2000],
             "privacy_flags": worker_flags,
@@ -153,8 +154,8 @@ def run_workspace(workspace: Path, *, mode: str, out: Path | None = None) -> dic
         "persona_ref": "persona.lock.json",
         "ledger_ref": "feature_ledger.json",
         "events_ref": events_ref,
-        "supervisor_session_id": supervisor_result.session_id,
-        "worker_session_id": worker_result.session_id if worker_result else "",
+        "supervisor_session_id": supervisor_session_hash,
+        "worker_session_id": stable_hash(worker_result.session_id) if worker_result and worker_result.session_id else "",
         "outcome": outcome,
         "stop_reason": stop_reason,
         "metrics": {
