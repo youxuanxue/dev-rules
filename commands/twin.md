@@ -16,6 +16,7 @@ $ARGUMENTS
 ```text
 /user:twin init --goal-file goal.yaml --persona ~/.xuejiao-twin/persona.json
 /user:twin run --project /abs/path --mode supervised-normal
+/user:twin respond --project /abs/path --action approve_and_continue --feature F-003 --note "复用现有模型"
 /user:twin validate [--fixtures | .xuejiao-twin/runs/<run_id>]
 /user:twin replay .xuejiao-twin/runs/<run_id>/run.json
 ```
@@ -72,6 +73,21 @@ python3 -m scripts.xuejiao_twin run --project /abs/project --mode supervised-nor
 python3 -m scripts.xuejiao_twin replay .xuejiao-twin/runs/<run_id>/run.json
 python3 -m scripts.xuejiao_twin validate .xuejiao-twin/runs/<run_id>
 ```
+
+6. 若 run 进入 `needs_human`，在同一 CLI 会话快速决策并续跑：
+
+```bash
+python3 -m scripts.xuejiao_twin respond --project /abs/project --action approve_and_continue --feature F-003 --note "复用现有模型，不新增表"
+python3 -m scripts.xuejiao_twin run --project /abs/project --mode supervised-normal
+```
+
+`respond --action` 可选：
+- `approve_and_continue`
+- `request_plan_delta`
+- `defer_feature`
+- `stop_session`
+
+可与 `/loop 5m` 结合：loop 周期执行 `run`，你在 blocked 时执行一次 `respond`，下一轮自动消费并继续。
 
 ## 机械验证
 

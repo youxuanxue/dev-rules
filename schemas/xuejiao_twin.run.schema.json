@@ -41,6 +41,43 @@
       }
     },
     "privacy_report": { "type": "object", "additionalProperties": true },
-    "validation_report": { "type": "object", "additionalProperties": true }
+    "validation_report": { "type": "object", "additionalProperties": true },
+    "human_review": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "needed": { "type": "boolean" },
+        "trigger": { "type": "string" },
+        "current_focus": { "type": ["string", "null"] },
+        "summary": { "type": "string" },
+        "blocked_features": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "id": { "type": "string" },
+              "description": { "type": "string" },
+              "blocked_reason": { "type": "string" },
+              "acceptance": { "type": "array", "items": { "type": "string" } },
+              "validation_evidence": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "suggested_actions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "id": { "type": "string" },
+              "label": { "type": "string" },
+              "effect": { "type": "string" },
+              "cli_hint": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
   }
 }

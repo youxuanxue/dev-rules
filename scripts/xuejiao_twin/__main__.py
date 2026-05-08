@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .initializer import init_workspace
 from .replay import replay_run
-from .runtime import run_workspace
+from .runtime import HUMAN_ACTIONS, run_workspace, write_human_response
 from .validate import run_fixture_validation, validate_run_dir
 
 
@@ -16,11 +16,62 @@ def _cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_human_review(run: dict[str, object]) -> None:
+    review = run.get("human_review")
+    if not isinstance(review, dict) or not bool(review.get("needed")):
+        return
+    print("Human Review:")
+    print(f"- trigger: {review.get('trigger', '')}")
+    print(f"- current_focus: {review.get('current_focus', '')}")
+    print(f"- summary: {review.get('summary', '')}")
+    blocked = review.get("blocked_features")
+    if isinstance(blocked, list) and blocked:
+        print("- blocked_features:")
+        for item in blocked:
+            if not isinstance(item, dict):
+                continue
+            print(f"  - {item.get('id', '')}: {item.get('description', '')}")
+            reason = str(item.get("blocked_reason") or "")
+            if reason:
+                print(f"    reason: {reason}")
+    actions = review.get("suggested_actions")
+    if isinstance(actions, list) and actions:
+        print("- suggested_actions:")
+        for index, item in enumerate(actions, 1):
+            if not isinstance(item, dict):
+                continue
+            print(f"  {index}. {item.get('id', '')} - {item.get('label', '')}")
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     workspace = Path(args.workspace) if args.workspace else Path(args.project).expanduser() / ".xuejiao-twin"
     run = run_workspace(workspace, mode=args.mode, out=Path(args.out) if args.out else None)
-    print(f"run_id={run['run_id']} outcome={run['outcome']} stop_reason={run['stop_reason']}")
+    if args.json:
+        import json
+
+        print(json.dumps(run, ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        print(f"run_id={run['run_id']} outcome={run['outcome']} stop_reason={run['stop_reason']}")
+        if not args.no_human_hints:
+            _print_human_review(run)
     return 0 if run["outcome"] in {"completed", "dry_run", "needs_human"} else 1
+
+
+def _cmd_respond(args: argparse.Namespace) -> int:
+    workspace = Path(args.workspace) if args.workspace else Path(args.project).expanduser() / ".xuejiao-twin"
+    try:
+        target = write_human_response(
+            workspace,
+            action=str(args.action),
+            feature_id=str(args.feature),
+            run_id=str(args.run_id),
+            note=str(args.note),
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    print(f"human_response_written={target}")
+    return 0
 
 
 def _cmd_replay(args: argparse.Namespace) -> int:
@@ -53,7 +104,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--workspace", default="")
     p_run.add_argument("--mode", default="dry-run", choices=["dry-run", "supervised-low", "supervised-normal", "supervised-high"])
     p_run.add_argument("--out", default="")
+    p_run.add_argument("--json", action="store_true")
+    p_run.add_argument("--no-human-hints", action="store_true")
     p_run.set_defaults(func=_cmd_run)
+
+    p_respond = sub.add_parser("respond")
+    p_respond.add_argument("--project", default="")
+    p_respond.add_argument("--workspace", default="")
+    p_respond.add_argument("--action", required=True, choices=sorted(HUMAN_ACTIONS))
+    p_respond.add_argument("--feature", default="")
+    p_respond.add_argument("--run-id", default="")
+    p_respond.add_argument("--note", default="")
+    p_respond.set_defaults(func=_cmd_respond)
 
     p_replay = sub.add_parser("replay")
     p_replay.add_argument("run")
