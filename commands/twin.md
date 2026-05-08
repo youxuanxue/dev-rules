@@ -35,8 +35,10 @@ python3 -m scripts.xuejiao_twin <subcommand> ...
 ## 默认安全边界
 
 - 默认输出写入目标项目 gitignored `.xuejiao-twin/`。
-- `run` 首版支持 `dry-run` 与 supervised 模式，不自动 merge / push / deploy / 创建 PR。
-- 遇到架构、安全、数据、依赖、外部副作用或破坏性操作，必须停止并报告 `needs_human`。
+- `dry-run` 只生成一轮 supervisor 预览；`supervised-*` 会在 `goal.limits` 内多轮运行直到完成、失败、无进展或需要人工。
+- main / master 受保护，不在 main / master 上自动 commit 或 push。
+- 非 main 工作分支可按 `goal.allowed_tools` 自动 commit、push、创建 PR 和本地部署验证。
+- 遇到架构、安全、数据、依赖、生产发布、force push、外部副作用或破坏性操作，必须停止并报告 `needs_human`。
 
 ## 推荐流程
 

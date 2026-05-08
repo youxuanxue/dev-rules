@@ -51,6 +51,7 @@ def run_claude_headless(
     max_budget_usd: float,
     session_id: str = "",
     dry_run: bool = False,
+    timeout_seconds: int = 3600,
 ) -> ClaudeRunResult:
     if dry_run:
         return ClaudeRunResult(
@@ -74,7 +75,18 @@ def run_claude_headless(
     if session_id:
         cmd.extend(["--resume", session_id])
     env = os.environ.copy()
-    proc = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=3600)
+    try:
+        proc = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        output = (exc.stdout or "") + (exc.stderr or "")
+        if isinstance(output, bytes):
+            output = output.decode(errors="replace")
+        return ClaudeRunResult(
+            session_id=session_id,
+            output_text=(str(output).strip() + f"\nTIMEOUT after {timeout_seconds}s").strip(),
+            returncode=124,
+            raw_events=[],
+        )
     parsed_session, output, events = parse_stream_json(proc.stdout)
     if proc.stderr.strip():
         output = (output + "\n" + proc.stderr.strip()).strip()

@@ -4,6 +4,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from .claude_runner import ClaudeRunResult
 from .initializer import init_workspace
 from .privacy import assert_no_private_leak
 from .runtime import run_workspace
@@ -101,18 +102,90 @@ def fixture_persona() -> dict[str, Any]:
     }
 
 
+class FakeRunner:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def __call__(self, prompt: str, **kwargs: Any) -> ClaudeRunResult:
+        role = "worker" if "worker code agent" in prompt else "supervisor"
+        session_id = str(kwargs.get("session_id") or f"{role}-session")
+        self.calls.append({"role": role, "session_id": str(kwargs.get("session_id") or ""), "dry_run": bool(kwargs.get("dry_run"))})
+        if kwargs.get("dry_run"):
+            return ClaudeRunResult(session_id=session_id, output_text="先 dry-run fixture", returncode=0, raw_events=[])
+        if role == "supervisor":
+            turn = sum(1 for call in self.calls if call["role"] == "supervisor")
+            if turn == 1:
+                output = {
+                    "action": "continue",
+                    "current_focus": "F-001",
+                    "instruction": "读取项目状态并运行 git status --short，返回验证证据。",
+                    "feature_updates": [{"id": "F-001", "status": "completed", "validation_evidence": []}],
+                    "reason": "开始第一个 feature",
+                }
+            else:
+                output = {
+                    "action": "stop",
+                    "current_focus": "F-001",
+                    "instruction": "",
+                    "feature_updates": [{"id": "F-001", "status": "completed", "validation_evidence": ["npm test", "./scripts/preflight.sh"]}],
+                    "reason": "fixture evidence complete",
+                }
+            return ClaudeRunResult(session_id="supervisor-session", output_text=json_dumps(output), returncode=0, raw_events=[])
+        return ClaudeRunResult(
+            session_id="worker-session",
+            output_text="changed files: none\nvalidation: git status --short\nnpm test\n./scripts/preflight.sh",
+            returncode=0,
+            raw_events=[],
+        )
+
+
+def json_dumps(value: Any) -> str:
+    import json
+
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
 def run_fixture_validation() -> list[str]:
     errors: list[str] = []
     with tempfile.TemporaryDirectory(prefix="xuejiao-twin-") as tmp:
         tmp_path = Path(tmp)
         persona_path = tmp_path / "persona.json"
+        project_root = tmp_path / "fixture-project"
+        project_root.mkdir()
+        goal_path = tmp_path / "goal.yaml"
+        goal_path.write_text(
+            (FIXTURES_DIR / "goal.yaml").read_text(encoding="utf-8").replace(
+                "project_root: /tmp/xuejiao-twin-fixture-project",
+                f"project_root: {project_root}",
+            ),
+            encoding="utf-8",
+        )
         write_json(persona_path, fixture_persona())
-        workspace = init_workspace(FIXTURES_DIR / "goal.yaml", persona_path, out=tmp_path / "workspace")
+        workspace = init_workspace(goal_path, persona_path, out=tmp_path / "workspace")
         ledger = read_json(workspace / "feature_ledger.json")
         errors.extend(validate_schema(ledger, "xuejiao_twin.ledger.schema.json"))
-        run = run_workspace(workspace, mode="dry-run", out=tmp_path / "run.json")
+        dry_run = run_workspace(workspace, mode="dry-run", out=tmp_path / "dry-run.json", runner=FakeRunner())
+        errors.extend(validate_schema(dry_run, "xuejiao_twin.run.schema.json"))
+        errors.extend(f"dry-run privacy leak: {leak}" for leak in assert_no_private_leak(dry_run))
+
+        runner = FakeRunner()
+        run = run_workspace(workspace, mode="supervised-normal", out=tmp_path / "run.json", runner=runner)
         errors.extend(validate_schema(run, "xuejiao_twin.run.schema.json"))
         errors.extend(f"run privacy leak: {leak}" for leak in assert_no_private_leak(run))
+        ledger = read_json(workspace / "feature_ledger.json")
+        errors.extend(validate_schema(ledger, "xuejiao_twin.ledger.schema.json"))
+        if run.get("outcome") != "completed":
+            errors.append(f"fixture outcome: expected completed, got {run.get('outcome')}")
+        if run.get("metrics", {}).get("supervisor_turns", 0) < 2:
+            errors.append("fixture did not run multiple supervisor turns")
+        if run.get("metrics", {}).get("worker_turns", 0) < 1:
+            errors.append("fixture completed without a worker turn")
+        if not any(call["role"] == "supervisor" and call["session_id"] == "supervisor-session" for call in runner.calls):
+            errors.append("fixture did not resume supervisor session")
+        if any(feature.get("id") == "F-001" and feature.get("status") == "completed" for feature in ledger.get("features", [])) is False:
+            errors.append("fixture ledger did not mark F-001 completed")
+        if "turn 2" not in (workspace / "progress.md").read_text(encoding="utf-8"):
+            errors.append("fixture progress did not record multiple turns")
     return errors
 
 
