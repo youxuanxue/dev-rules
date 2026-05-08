@@ -12,8 +12,21 @@
     "persona_ref": { "type": "string", "minLength": 1 },
     "ledger_ref": { "type": "string", "minLength": 1 },
     "events_ref": { "type": "string", "minLength": 1 },
+    "session_state_ref": { "type": "string" },
     "supervisor_session_id": { "type": "string" },
     "worker_session_id": { "type": "string" },
+    "headless": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "resume_used": { "type": "boolean" },
+        "worker_cwd": { "type": "string" },
+        "worker_branch": { "type": "string" },
+        "worker_isolation": { "type": "string" },
+        "supervisor_session_hash": { "type": "string" },
+        "worker_session_hash": { "type": "string" }
+      }
+    },
     "outcome": {
       "type": "string",
       "enum": ["completed", "needs_human", "budget_exceeded", "no_progress", "failed_validation", "privacy_blocked", "agent_failed", "dry_run"]
@@ -41,7 +54,24 @@
       }
     },
     "privacy_report": { "type": "object", "additionalProperties": true },
-    "validation_report": { "type": "object", "additionalProperties": true },
+    "validation_report": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "validation_commands": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "command": { "type": "string" },
+              "status": { "type": "string", "enum": ["passed", "failed", "attempted", "missing"] },
+              "evidence": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
     "human_review": {
       "type": "object",
       "additionalProperties": true,

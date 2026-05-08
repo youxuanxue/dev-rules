@@ -27,6 +27,13 @@
     "allowed_tools": { "type": "object", "additionalProperties": true },
     "disallowed_tools": { "type": "object", "additionalProperties": true },
     "permission_mode": { "type": ["string", "object"] },
+    "worker_isolation": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "mode": { "type": "string", "enum": ["auto", "required", "off"] }
+      }
+    },
     "approval_policy": { "type": "object", "additionalProperties": true },
     "validation_commands": { "type": "array", "items": { "type": "string" } }
   }
