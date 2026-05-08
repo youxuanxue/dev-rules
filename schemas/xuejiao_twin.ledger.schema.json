@@ -24,6 +24,11 @@
       }
     },
     "current_focus": { "type": ["string", "null"] },
-    "last_verified_at": { "type": ["string", "null"] }
+    "last_verified_at": { "type": ["string", "null"] },
+    "planning_status": { "type": "string", "enum": ["needs_draft", "drafted", "approved"] },
+    "generated_at": { "type": ["string", "null"] },
+    "reviewed_at": { "type": ["string", "null"] },
+    "updated_at": { "type": ["string", "null"] },
+    "revision": { "type": "integer", "minimum": 0 }
   }
 }

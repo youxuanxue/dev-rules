@@ -35,7 +35,7 @@
 | `scripts/preflight.sh` | dev-rules 源仓库自己的提交门禁 |
 | `schemas/review.schema.json` | `/user:review` 输出契约 |
 | `schemas/skill.schema.json` | 跨项目共享的 Skill manifest 规范 |
-| `schemas/xuejiao_twin.*.schema.json` | xuejiao 分身目标、ledger、run 输出契约 |
+| `schemas/xuejiao_twin.*.schema.json` | xuejiao 分身目标、ledger、run 与 agent 输出契约 |
 | `scripts/xuejiao_twin/` | 本机 xuejiao supervisor harness CLI 与 fixtures |
 | `global/CLAUDE.md` | Claude Code 全局工作宪法 |
 

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
+import subprocess
 import time
 import uuid
 from pathlib import Path
@@ -9,14 +11,20 @@ from typing import Any, Callable
 
 from . import SCHEMA_VERSION
 from .claude_runner import ClaudeRunResult, run_claude_headless
-from .evidence import classify_risk, collect_project_evidence, validation_coverage
+from .evidence import classify_risk, collect_project_evidence, validation_command_status, validation_coverage
 from .initializer import load_goal
 from .privacy import PrivacyReport, redact_text, redact_value, stable_hash
+from .schema_contract import load_schema, validate_schema
 from .util import now_utc, read_json, write_json
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
 Runner = Callable[..., ClaudeRunResult]
-_ACTIONS = {"continue", "stop", "needs_human"}
+_ACTIONS = {"draft_ledger", "continue", "stop", "needs_human"}
 _FEATURE_STATUSES = {"pending", "in_progress", "blocked", "completed", "deferred"}
+_LEDGER_PLANNING_STATUSES = {"needs_draft", "drafted", "approved"}
+_MAX_DRAFT_FEATURES = 20
+_PROCESS_FEATURE_PREFIXES = ("先盘点", "盘点", "了解", "分析", "确认", "梳理", "输出缺口矩阵", "生成计划", "制定计划")
 _BLOCKING_PRIVACY_FLAGS = {"secret_assignment", "bearer_token", "private_key", "sensitive_url"}
 _FALLBACK_STARTS = ("先", "不要", "跑", "给", "修", "定位", "写", "NEEDS_HUMAN")
 _DEFAULT_DISALLOWED_TOOLS = {
@@ -58,12 +66,16 @@ _DEFAULT_DISALLOWED_TOOLS = {
 }
 
 HUMAN_RESPONSE_FILE = "human_response.json"
+SESSION_STATE_FILE = "session_state.json"
 HUMAN_ACTIONS = {
     "approve_and_continue",
     "request_plan_delta",
     "defer_feature",
     "stop_session",
 }
+SUPERVISOR_DECISION_SCHEMA = "xuejiao_twin.supervisor_decision.schema.json"
+LEDGER_DRAFT_SCHEMA = "xuejiao_twin.ledger_draft.schema.json"
+WORKER_RESULT_SCHEMA = "xuejiao_twin.worker_result.schema.json"
 
 
 def _next_feature(ledger: dict[str, Any]) -> dict[str, Any] | None:
@@ -98,6 +110,285 @@ def _feature_status_counts(ledger: dict[str, Any]) -> dict[str, int]:
     return counts
 
 
+def _ledger_is_empty(ledger: dict[str, Any]) -> bool:
+    features = ledger.get("features", [])
+    return not isinstance(features, list) or not features
+
+
+def _ledger_planning_status(ledger: dict[str, Any]) -> str:
+    status = str(ledger.get("planning_status") or "").strip()
+    if status in _LEDGER_PLANNING_STATUSES:
+        return status
+    return "needs_draft" if _ledger_is_empty(ledger) else "approved"
+
+
+def _requires_ledger_review(ledger: dict[str, Any]) -> bool:
+    return _ledger_planning_status(ledger) == "drafted"
+
+
+def _touch_ledger(ledger: dict[str, Any], *, field: str = "updated_at") -> None:
+    ledger[field] = now_utc()
+    try:
+        ledger["revision"] = int(ledger.get("revision") or 0) + 1
+    except (TypeError, ValueError):
+        ledger["revision"] = 1
+
+
+def _normalize_current_focus(ledger: dict[str, Any]) -> None:
+    current = ledger.get("current_focus")
+    feature = _feature_by_id(ledger, str(current or "")) if current else None
+    if feature and feature.get("status") in {"pending", "in_progress", "blocked"}:
+        ledger["current_focus"] = feature.get("id")
+        return
+    next_feature = _next_feature(ledger)
+    ledger["current_focus"] = next_feature.get("id") if next_feature else None
+
+
+def _next_feature_id(ledger: dict[str, Any]) -> str:
+    highest = 0
+    for feature in ledger.get("features", []):
+        feature_id = str(feature.get("id") or "")
+        if len(feature_id) == 5 and feature_id.startswith("F-") and feature_id[2:].isdigit():
+            highest = max(highest, int(feature_id[2:]))
+    return f"F-{highest + 1:03d}"
+
+
+def _redact_string(value: Any, report: PrivacyReport) -> str:
+    return redact_text(str(value or ""), report)[0].strip()
+
+
+def _normalize_acceptance(value: Any, goal: dict[str, Any], report: PrivacyReport) -> list[str]:
+    source = value if isinstance(value, list) and value else goal.get("acceptance", [])
+    return _redact_list(source, report)
+
+
+def _normalize_feature(raw: dict[str, Any], index: int, goal: dict[str, Any], report: PrivacyReport, used_ids: set[str]) -> dict[str, Any] | None:
+    description = _redact_string(raw.get("description"), report)
+    if not description:
+        return None
+    feature_id = _redact_string(raw.get("id"), report)
+    if not (len(feature_id) == 5 and feature_id.startswith("F-") and feature_id[2:].isdigit()) or feature_id in used_ids:
+        feature_id = f"F-{index:03d}"
+        while feature_id in used_ids:
+            index += 1
+            feature_id = f"F-{index:03d}"
+    used_ids.add(feature_id)
+    blocked_reason = raw.get("blocked_reason")
+    return {
+        "id": feature_id,
+        "description": description,
+        "status": "pending",
+        "acceptance": _normalize_acceptance(raw.get("acceptance"), goal, report),
+        "validation_evidence": [],
+        "blocked_reason": _redact_string(blocked_reason, report) if blocked_reason is not None else None,
+    }
+
+
+def _audit_like_goal(goal: dict[str, Any]) -> bool:
+    text = "\n".join(str(goal.get(key, "")) for key in ("goal", "risk_policy", "mode"))
+    return any(marker in text.lower() for marker in ("audit", "review", "盘点", "审计", "复核"))
+
+
+def _same_string_list(left: Any, right: Any) -> bool:
+    if not isinstance(left, list) or not isinstance(right, list):
+        return False
+    return [str(item).strip() for item in left] == [str(item).strip() for item in right]
+
+
+def _lint_ledger(ledger: dict[str, Any], goal: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    features = ledger.get("features")
+    if not isinstance(features, list):
+        return ["features must be a list"]
+    if not features:
+        errors.append("features must not be empty after draft")
+    if len(features) > _MAX_DRAFT_FEATURES:
+        errors.append(f"features must not exceed {_MAX_DRAFT_FEATURES}")
+    seen: set[str] = set()
+    for index, feature in enumerate(features, 1):
+        if not isinstance(feature, dict):
+            errors.append(f"feature {index} must be an object")
+            continue
+        feature_id = str(feature.get("id") or "")
+        if not feature_id:
+            errors.append(f"feature {index} missing id")
+        elif feature_id in seen:
+            errors.append(f"duplicate feature id: {feature_id}")
+        seen.add(feature_id)
+        description = str(feature.get("description") or "").strip()
+        if not description:
+            errors.append(f"{feature_id or index} missing description")
+        elif not _audit_like_goal(goal) and description.startswith(_PROCESS_FEATURE_PREFIXES):
+            errors.append(f"{feature_id or index} is a process step, not a deliverable feature")
+        elif description == str(goal.get("goal") or "").strip() or len(description) > 240:
+            errors.append(f"{feature_id or index} is too broad for one feature")
+        if feature.get("status") not in _FEATURE_STATUSES:
+            errors.append(f"{feature_id or index} has invalid status")
+        if not isinstance(feature.get("acceptance"), list) or not any(str(item).strip() for item in feature.get("acceptance", [])):
+            errors.append(f"{feature_id or index} missing acceptance")
+        elif _same_string_list(feature.get("acceptance"), goal.get("acceptance", [])):
+            errors.append(f"{feature_id or index} copies global acceptance instead of feature-specific acceptance")
+        if not isinstance(feature.get("validation_evidence"), list):
+            errors.append(f"{feature_id or index} validation_evidence must be a list")
+    current = ledger.get("current_focus")
+    if current is not None and str(current) not in seen:
+        errors.append("current_focus must reference an existing feature")
+    return errors
+
+
+def _parse_ledger_draft(text: str, goal: dict[str, Any], report: PrivacyReport) -> tuple[dict[str, Any] | None, list[str]]:
+    parsed = _json_from_text(text)
+    if parsed is None:
+        return None, ["worker did not return JSON ledger draft"]
+    schema_errors = _schema_errors(parsed, LEDGER_DRAFT_SCHEMA)
+    if schema_errors:
+        return None, schema_errors
+    raw_features = parsed.get("features", [])
+    if not isinstance(raw_features, list):
+        return None, ["draft features must be a list"]
+    if len(raw_features) > _MAX_DRAFT_FEATURES:
+        return None, [f"draft features must not exceed {_MAX_DRAFT_FEATURES}"]
+    used_ids: set[str] = set()
+    features: list[dict[str, Any]] = []
+    for index, raw_feature in enumerate(raw_features[:_MAX_DRAFT_FEATURES], 1):
+        if not isinstance(raw_feature, dict):
+            continue
+        feature = _normalize_feature(raw_feature, index, goal, report, used_ids)
+        if feature:
+            features.append(feature)
+    ledger = {
+        "schema_version": SCHEMA_VERSION,
+        "features": features,
+        "current_focus": str(parsed.get("current_focus") or (features[0]["id"] if features else "")) or None,
+        "last_verified_at": None,
+        "planning_status": "drafted",
+        "generated_at": now_utc(),
+        "updated_at": now_utc(),
+        "revision": 1,
+    }
+    _normalize_current_focus(ledger)
+    errors = _lint_ledger(ledger, goal)
+    return (None, errors) if errors else (ledger, [])
+
+
+def _apply_ledger_updates(ledger: dict[str, Any], decision: dict[str, Any], goal: dict[str, Any], report: PrivacyReport) -> bool:
+    before = stable_hash(ledger)
+    updates = decision.get("ledger_updates", {})
+    if not isinstance(updates, dict):
+        return False
+    features = ledger.setdefault("features", [])
+    if not isinstance(features, list):
+        ledger["features"] = []
+        features = ledger["features"]
+    used_ids = {str(feature.get("id")) for feature in features if isinstance(feature, dict) and feature.get("id")}
+    for raw_feature in updates.get("add_features", []) if isinstance(updates.get("add_features", []), list) else []:
+        if not isinstance(raw_feature, dict):
+            continue
+        feature = _normalize_feature(raw_feature, len(features) + 1, goal, report, used_ids)
+        if feature:
+            features.append(feature)
+    for raw_update in updates.get("update_features", []) if isinstance(updates.get("update_features", []), list) else []:
+        if not isinstance(raw_update, dict):
+            continue
+        feature = _feature_by_id(ledger, str(raw_update.get("id") or ""))
+        if not feature or feature.get("status") == "completed":
+            continue
+        if "description" in raw_update:
+            description = _redact_string(raw_update.get("description"), report)
+            if description:
+                feature["description"] = description
+        if "acceptance" in raw_update:
+            acceptance = _normalize_acceptance(raw_update.get("acceptance"), goal, report)
+            if acceptance:
+                feature["acceptance"] = acceptance
+        status = str(raw_update.get("status") or "").strip()
+        if status in _FEATURE_STATUSES:
+            feature["status"] = status
+        if "blocked_reason" in raw_update:
+            reason = raw_update.get("blocked_reason")
+            feature["blocked_reason"] = _redact_string(reason, report) if reason is not None else None
+    current_focus = updates.get("current_focus")
+    if current_focus is not None:
+        ledger["current_focus"] = _redact_string(current_focus, report) or None
+    _normalize_current_focus(ledger)
+    changed = stable_hash(ledger) != before
+    if changed:
+        _touch_ledger(ledger)
+    return changed
+
+
+def _approve_ledger_if_ready(ledger: dict[str, Any]) -> bool:
+    if _requires_ledger_review(ledger):
+        ledger["planning_status"] = "approved"
+        ledger["reviewed_at"] = now_utc()
+        _touch_ledger(ledger)
+        return True
+    return False
+
+
+def _persona_instruction_policy(persona: dict[str, Any], turn_index: int) -> dict[str, Any]:
+    interaction = persona.get("interaction_policy", {})
+    if not isinstance(interaction, dict):
+        interaction = {}
+    decision = persona.get("decision_policy", {})
+    if not isinstance(decision, dict):
+        decision = {}
+    if turn_index == 1:
+        turn_policy = interaction.get("first_turn_policy") or interaction.get("first_turn_instruction") or decision.get("start_task")
+    else:
+        turn_policy = interaction.get("subsequent_turn_policy") or interaction.get("next_turn_policy") or decision.get("during_task")
+    return {
+        "turn": "first" if turn_index == 1 else "subsequent",
+        "worker_instruction_style": interaction.get("worker_instruction_style") or interaction.get("instruction_style") or "",
+        "all_turns_policy": interaction.get("all_turns_policy") or interaction.get("instruction_policy") or "",
+        "turn_policy": turn_policy or "",
+    }
+
+
+def _supervisor_system(goal: dict[str, Any], persona: dict[str, Any]) -> str:
+    payload = {
+        "role": "xuejiao supervisor",
+        "contract": "Return exactly one JSON object matching output_schema. No markdown, no prose. Do not edit code. Actions: draft_ledger | continue | stop | needs_human. Stop for human gates; otherwise keep work moving.",
+        "output_schema_name": SUPERVISOR_DECISION_SCHEMA,
+        "output_schema": load_schema(SUPERVISOR_DECISION_SCHEMA),
+        "goal": goal.get("goal"),
+        "acceptance": goal.get("acceptance", []),
+        "validation_commands": goal.get("validation_commands", []),
+        "scope_out": goal.get("scope_out", []),
+        "persona_policy": persona.get("interaction_policy", {}),
+    }
+    return "xuejiao supervisor stable contract:\n" + json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def _supervisor_user(
+    ledger: dict[str, Any],
+    evidence: dict[str, Any],
+    turn_index: int,
+    run_history: list[dict[str, Any]] | None = None,
+    validation_gap: bool = False,
+) -> str:
+    feature = _next_feature(ledger)
+    planning_status = _ledger_planning_status(ledger)
+    if validation_gap:
+        phase = "validation_gap: completed ledger lacks goal validation evidence; add ledger feature(s) or needs_human."
+    elif _ledger_is_empty(ledger) or planning_status == "needs_draft":
+        phase = "needs_draft: use draft_ledger before implementation."
+    elif planning_status == "drafted":
+        phase = "drafted: review ledger; continue approves it, draft_ledger revises it."
+    else:
+        phase = "approved: continue implementation; use ledger_updates only for real structural gaps."
+    return json.dumps({
+        "phase": phase,
+        "output_schema_name": SUPERVISOR_DECISION_SCHEMA,
+        "turn_index": turn_index,
+        "current_focus": feature.get("id") if feature else None,
+        "ledger_planning_status": planning_status,
+        "feature_ledger": ledger,
+        "project_evidence": evidence,
+        "run_history": run_history or [],
+    }, ensure_ascii=False, indent=2)
+
+
 def _supervisor_prompt(
     goal: dict[str, Any],
     persona: dict[str, Any],
@@ -105,63 +396,99 @@ def _supervisor_prompt(
     evidence: dict[str, Any],
     turn_index: int,
     run_history: list[dict[str, Any]] | None = None,
-) -> str:
-    feature = _next_feature(ledger)
-    focus = feature.get("description") if feature else goal.get("goal")
-    return json.dumps({
-        "role": "xuejiao supervisor",
-        "contract": "Return JSON only. Do not edit code. Stop for architecture/security/data/dependency/production deploy/force push/destructive/external side effects.",
-        "decision_contract": {
-            "action": "continue | stop | needs_human",
-            "current_focus": "feature id such as F-001",
-            "instruction": "one concise Chinese worker instruction",
-            "feature_updates": [{
-                "id": "feature id",
-                "status": "in_progress | blocked | completed | deferred",
-                "validation_evidence": ["commands or evidence observed"],
-                "blocked_reason": None,
-            }],
-            "reason": "short Chinese reason",
-        },
-        "goal": goal.get("goal"),
-        "scope_in": goal.get("scope_in", []),
-        "scope_out": goal.get("scope_out", []),
-        "acceptance": goal.get("acceptance", []),
-        "turn_index": turn_index,
-        "current_focus": focus,
-        "feature_ledger": ledger,
-        "persona_policy": persona.get("interaction_policy", {}),
-        "project_evidence": evidence,
-        "run_history": run_history or [],
-        "branch_policy": "Never auto-commit or push on main/master. Non-main branch commit/push/PR/local deployment is allowed only when goal/tools explicitly allow it.",
-        "output_contract": "JSON only. If human input is required, use action=needs_human and explain reason.",
-    }, ensure_ascii=False, indent=2)
+    validation_gap: bool = False,
+) -> tuple[str, str]:
+    return (
+        _supervisor_system(goal, persona),
+        _supervisor_user(ledger, evidence, turn_index, run_history, validation_gap),
+    )
 
 
 def _fallback_instruction(goal: dict[str, Any], ledger: dict[str, Any]) -> str:
+    if _ledger_is_empty(ledger) or _ledger_planning_status(ledger) == "needs_draft":
+        return "请基于 goal.yaml 和只读项目证据生成 feature_ledger 草案 JSON，不要改代码，不要写文件。"
     feature = _next_feature(ledger)
     if feature:
-        return f"先聚焦 {feature['description']}，只做最小可验证改动，完成后给 diff summary 和验证结果。"
-    return f"目标看起来已完成，跑验证命令并给出最终 diff summary：{goal.get('goal', '')}"
+        return f"请直接实现：{feature['description']}。做最小可验证改动，不要先写计划或等确认；完成后给 diff summary 和验证结果。"
+    return f"请直接验证目标已完成，运行验证命令并给出最终 diff summary：{goal.get('goal', '')}"
 
 
-def _worker_prompt(instruction: str, goal: dict[str, Any]) -> str:
-    return json.dumps({
-        "role": "worker code agent",
-        "instruction_from_xuejiao_supervisor": instruction,
+def _ledger_draft_system(goal: dict[str, Any]) -> str:
+    payload = {
+        "role": "worker ledger planner",
+        "contract": "Read only. No edits, no file writes. Return exactly one JSON object matching output_schema. No markdown, no prose.",
+        "output_schema_name": LEDGER_DRAFT_SCHEMA,
+        "output_schema": load_schema(LEDGER_DRAFT_SCHEMA),
         "goal": goal.get("goal"),
         "scope_in": goal.get("scope_in", []),
         "scope_out": goal.get("scope_out", []),
         "acceptance": goal.get("acceptance", []),
         "validation_commands": goal.get("validation_commands", []),
+        "rules": [
+            "features are deliverables, not planning/inventory steps",
+            "each feature is independently verifiable",
+            "no secrets or private raw data",
+        ],
+    }
+    return "xuejiao twin ledger planner stable contract:\n" + json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def _ledger_draft_user(
+    instruction: str,
+    ledger: dict[str, Any],
+    evidence: dict[str, Any],
+    run_history: list[dict[str, Any]],
+) -> str:
+    return json.dumps({
+        "instruction": instruction,
+        "output_schema_name": LEDGER_DRAFT_SCHEMA,
+        "current_ledger": ledger,
+        "project_evidence": evidence,
+        "run_history": run_history,
+    }, ensure_ascii=False, indent=2)
+
+
+def _ledger_draft_prompt(
+    instruction: str,
+    goal: dict[str, Any],
+    ledger: dict[str, Any],
+    evidence: dict[str, Any],
+    run_history: list[dict[str, Any]],
+) -> tuple[str, str]:
+    return (
+        _ledger_draft_system(goal),
+        _ledger_draft_user(instruction, ledger, evidence, run_history),
+    )
+
+
+def _worker_system(goal: dict[str, Any]) -> str:
+    payload = {
+        "role": "worker code agent",
+        "contract": "Implement now. Do not ask for confirmation or write a separate plan unless blocked by hard rules. Return exactly one JSON object matching output_schema. No markdown, no prose.",
+        "output_schema_name": WORKER_RESULT_SCHEMA,
+        "output_schema": load_schema(WORKER_RESULT_SCHEMA),
+        "goal": goal.get("goal"),
+        "scope_out": goal.get("scope_out", []),
+        "validation_commands": goal.get("validation_commands", []),
         "hard_rules": [
             "Do not modify or push main/master.",
-            "Non-main branch commit/push/PR/local deployment is allowed only when goal/tools explicitly allow it.",
             "Do not introduce dependencies unless explicitly approved.",
-            "Stop and report if architecture/security/data decisions are required.",
-            "Produce evidence: changed files, tests/preflight attempted, failures, and next blocker if any.",
+            "Stop and report architecture/security/data decisions.",
+            "Return changed files, validation attempted, failures, and blockers.",
         ],
+    }
+    return "xuejiao twin worker stable contract:\n" + json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def _worker_user(instruction: str) -> str:
+    return json.dumps({
+        "instruction": instruction,
+        "output_schema_name": WORKER_RESULT_SCHEMA,
     }, ensure_ascii=False, indent=2)
+
+
+def _worker_prompt(instruction: str, goal: dict[str, Any]) -> tuple[str, str]:
+    return _worker_system(goal), _worker_user(instruction)
 
 
 def _role_tools(goal: dict[str, Any], field: str, role: str) -> list[str]:
@@ -200,6 +527,18 @@ def _permission_mode(goal: dict[str, Any], role: str) -> str:
     return str(configured or "")
 
 
+def _ledger_draft_allowed_tools(goal: dict[str, Any]) -> list[str]:
+    return [tool for tool in _allowed_tools(goal, "supervisor") if tool not in {"Edit", "Write"}]
+
+
+def _ledger_draft_disallowed_tools(goal: dict[str, Any]) -> list[str]:
+    tools = list(_disallowed_tools(goal, "worker"))
+    for tool in ["Edit", "Write"]:
+        if tool not in tools:
+            tools.append(tool)
+    return tools
+
+
 def _json_from_text(text: str) -> dict[str, Any] | None:
     stripped = text.strip()
     if stripped.startswith("```"):
@@ -223,7 +562,23 @@ def _json_from_text(text: str) -> dict[str, Any] | None:
     for parsed in reversed(parsed_objects):
         if "action" in parsed:
             return parsed
+    for parsed in reversed(parsed_objects):
+        if isinstance(parsed.get("features"), list):
+            return parsed
+    for parsed in reversed(parsed_objects):
+        if "summary" in parsed and isinstance(parsed.get("validation"), list):
+            return parsed
     return parsed_objects[-1] if parsed_objects else None
+
+
+def _schema_errors(value: dict[str, Any] | None, schema_name: str) -> list[str]:
+    if value is None:
+        return ["missing JSON object"]
+    return validate_schema(value, schema_name)
+
+
+def _schema_error_text(schema_name: str, errors: list[str]) -> str:
+    return f"{schema_name}: " + "; ".join(errors[:5])
 
 
 def _parse_supervisor_decision(text: str, goal: dict[str, Any], ledger: dict[str, Any]) -> dict[str, Any]:
@@ -236,21 +591,38 @@ def _parse_supervisor_decision(text: str, goal: dict[str, Any], ledger: dict[str
             "current_focus": fallback_focus,
             "instruction": "",
             "feature_updates": [],
+            "ledger_updates": {},
             "reason": stripped,
         }
     parsed = _json_from_text(stripped)
+    force_draft = _ledger_is_empty(ledger) or _ledger_planning_status(ledger) == "needs_draft"
     if parsed is None:
         instruction = stripped if stripped else _fallback_instruction(goal, ledger)
         return {
-            "action": "continue",
+            "action": "draft_ledger" if force_draft else "continue",
             "current_focus": fallback_focus,
             "instruction": instruction,
             "feature_updates": [],
+            "ledger_updates": {},
             "reason": "plain text supervisor instruction",
+            "schema_errors": ["missing JSON object"],
+        }
+    errors = _schema_errors(parsed, SUPERVISOR_DECISION_SCHEMA)
+    if errors:
+        return {
+            "action": "needs_human" if classify_risk(stripped) or "NEEDS_HUMAN" in stripped else "stop",
+            "current_focus": fallback_focus,
+            "instruction": "",
+            "feature_updates": [],
+            "ledger_updates": {"add_features": [], "update_features": [], "current_focus": None},
+            "reason": _schema_error_text(SUPERVISOR_DECISION_SCHEMA, errors),
+            "schema_errors": errors,
         }
     action = str(parsed.get("action") or "continue").strip().lower()
     if action not in _ACTIONS:
         action = "continue"
+    if force_draft and action not in {"draft_ledger", "needs_human", "stop"}:
+        action = "draft_ledger"
     current_focus = parsed.get("current_focus") or fallback_focus
     if current_focus is not None:
         current_focus = str(current_focus)
@@ -259,16 +631,35 @@ def _parse_supervisor_decision(text: str, goal: dict[str, Any], ledger: dict[str
     updates = parsed.get("feature_updates", [])
     if not isinstance(updates, list):
         updates = []
+    ledger_updates = parsed.get("ledger_updates", {})
+    if not isinstance(ledger_updates, dict):
+        ledger_updates = {}
     instruction = str(parsed.get("instruction") or "").strip()
-    if action == "continue" and not instruction:
+    if action in {"continue", "draft_ledger"} and not instruction:
         instruction = _fallback_instruction(goal, ledger)
     return {
         "action": action,
         "current_focus": current_focus,
         "instruction": instruction,
         "feature_updates": [update for update in updates if isinstance(update, dict)],
+        "ledger_updates": ledger_updates,
         "reason": str(parsed.get("reason") or ""),
+        "schema_errors": [],
     }
+
+
+def _parse_worker_result(text: str) -> tuple[dict[str, Any] | None, list[str]]:
+    parsed = _json_from_text(text)
+    if parsed is None:
+        return None, ["worker did not return JSON result"]
+    errors = _schema_errors(parsed, WORKER_RESULT_SCHEMA)
+    return (None, errors) if errors else (parsed, [])
+
+
+def _worker_evidence_text(worker: dict[str, Any] | None, raw_text: str) -> str:
+    if worker is None:
+        return raw_text
+    return json.dumps(worker, ensure_ascii=False, sort_keys=True)
 
 
 def _redact_list(values: Any, report: PrivacyReport) -> list[str]:
@@ -323,6 +714,170 @@ def _apply_feature_updates(ledger: dict[str, Any], decision: dict[str, Any], rep
     return stable_hash(ledger) != before
 
 
+def _git_subprocess_env() -> dict[str, str]:
+    env = os.environ.copy()
+    for key in list(env):
+        if key.startswith("GIT_"):
+            del env[key]
+    return env
+
+
+def _run_git(args: list[str], cwd: Path, timeout: int = 30) -> tuple[int, str]:
+    try:
+        proc = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout, env=_git_subprocess_env())
+    except Exception as exc:
+        return 1, str(exc)
+    return proc.returncode, (proc.stdout + proc.stderr).strip()
+
+
+def _is_git_repo(path: Path) -> bool:
+    code, _ = _run_git(["rev-parse", "--is-inside-work-tree"], path)
+    return code == 0
+
+
+def _current_branch(path: Path) -> str:
+    code, text = _run_git(["branch", "--show-current"], path)
+    return text.strip() if code == 0 else ""
+
+
+def _safe_base_dirty(project_root: Path) -> tuple[bool, str]:
+    code, status = _run_git(["status", "--short"], project_root)
+    if code != 0:
+        return False, status
+    unsafe: list[str] = []
+    for line in status.splitlines():
+        path = line[3:].strip() if len(line) > 3 else line.strip()
+        if path in {".gitignore"}:
+            continue
+        if path.startswith(".xuejiao-twin"):
+            continue
+        unsafe.append(line)
+    return not unsafe, "\n".join(unsafe)
+
+
+def _hook_settings_path(workspace: Path) -> Path:
+    return workspace / "hooks" / "settings.json"
+
+
+def _hook_settings() -> dict[str, Any]:
+    command = f"python3 {shlex.quote(str(REPO_ROOT / 'scripts' / 'xuejiao_twin' / 'hook_gate.py'))}"
+    tool_matcher = [{"matcher": "*", "hooks": [{"type": "command", "command": command}]}]
+    plain = [{"hooks": [{"type": "command", "command": command}]}]
+    return {
+        "hooks": {
+            "PreToolUse": tool_matcher,
+            "PostToolUse": tool_matcher,
+            "SessionStart": plain,
+            "PreCompact": plain,
+        }
+    }
+
+
+def _write_hook_settings(workspace: Path) -> Path:
+    path = _hook_settings_path(workspace)
+    write_json(path, _hook_settings())
+    return path
+
+
+def _install_project_hook_settings(worker_root: Path) -> Path:
+    path = worker_root / ".claude" / "settings.local.json"
+    write_json(path, _hook_settings())
+    return path
+
+
+def _worker_claude_md(goal: dict[str, Any]) -> str:
+    scope_out = list(goal.get("scope_out", []) or [])
+    validation_commands = list(goal.get("validation_commands", []) or [])
+    lines = [
+        "# xuejiao twin worker contract",
+        "",
+        "This directory is a xuejiao-twin managed worker worktree.",
+        "A supervisor process is monitoring this session.",
+        "",
+        "## Hard rules",
+        "",
+        "- Do not modify or push main/master.",
+        "- Do not introduce dependencies unless explicitly approved.",
+        "- Stop and report architecture, security, data, dependency, production deploy, external side-effect, or destructive decisions.",
+        "- Return exactly one JSON object matching the schema for the role you are in. No markdown, no prose.",
+        "",
+        "## Output schemas",
+        "",
+        "- Worker turns: `xuejiao_twin.worker_result.schema.json`",
+        "- Ledger planner turns (read only): `xuejiao_twin.ledger_draft.schema.json`",
+        "",
+        "## Goal",
+        "",
+        f"- {goal.get('goal', '')}",
+    ]
+    if scope_out:
+        lines.extend(["", "## Scope out", ""])
+        for item in scope_out:
+            lines.append(f"- {item}")
+    if validation_commands:
+        lines.extend(["", "## Validation commands", ""])
+        for command in validation_commands:
+            lines.append(f"- `{command}`")
+    return "\n".join(lines) + "\n"
+
+
+def _install_worker_claude_md(worker_root: Path, goal: dict[str, Any]) -> Path:
+    path = worker_root / ".claude" / "CLAUDE.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_worker_claude_md(goal), encoding="utf-8")
+    return path
+
+
+def _session_state_path(workspace: Path) -> Path:
+    return workspace / SESSION_STATE_FILE
+
+
+def _read_session_state(workspace: Path) -> dict[str, Any]:
+    path = _session_state_path(workspace)
+    if not path.exists():
+        return {}
+    try:
+        data = read_json(path)
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_session_state(workspace: Path, state: dict[str, Any]) -> None:
+    state["updated_at"] = now_utc()
+    write_json(_session_state_path(workspace), state)
+
+
+def _worker_isolation_mode(goal: dict[str, Any]) -> str:
+    configured = goal.get("worker_isolation", {})
+    if isinstance(configured, dict):
+        mode = str(configured.get("mode") or "auto")
+    else:
+        mode = str(configured or "auto")
+    return mode if mode in {"auto", "required", "off"} else "auto"
+
+
+def _ensure_worker_root(workspace: Path, project_root: Path, goal: dict[str, Any], state: dict[str, Any]) -> tuple[Path, str, str, str]:
+    mode = _worker_isolation_mode(goal)
+    if mode == "off":
+        return project_root, "in_place_off", _current_branch(project_root), ""
+    if not _is_git_repo(project_root):
+        if mode == "required":
+            return project_root, "needs_human", "", "worker_isolation required but project_root is not a git repo"
+        return project_root, "in_place_non_git", "", ""
+    safe, dirty = _safe_base_dirty(project_root)
+    if not safe:
+        return project_root, "needs_human", _current_branch(project_root), "base checkout has existing changes:\n" + dirty
+    worker_root = Path(str(state.get("worker_cwd") or workspace / "worktrees" / "worker"))
+    branch = str(state.get("worker_branch") or f"xuejiao-twin/{stable_hash(str(workspace), length=10)}")
+    if worker_root.exists():
+        return worker_root, "worktree", branch, ""
+    code, output = _run_git(["worktree", "add", "-B", branch, str(worker_root), "HEAD"], project_root, timeout=120)
+    if code != 0:
+        return project_root, "needs_human", branch, "failed to create worker worktree: " + output
+    return worker_root, "worktree", branch, ""
+
+
 def _collect_project_evidence(project_root: Path, report: PrivacyReport) -> dict[str, Any]:
     raw = collect_project_evidence(project_root) if project_root.exists() else {"project_missing": str(project_root)}
     return redact_value(raw, report)
@@ -332,6 +887,28 @@ def _record_event(events: list[dict[str, Any]], events_path: Path, event: dict[s
     events.append(event)
     with events_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def _count_hook_events(path: Path) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    if not path.exists():
+        return counts
+    try:
+        text = path.read_text(encoding="utf-8")
+    except Exception:
+        return counts
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        kind = str(event.get("type") or "").strip()
+        if kind:
+            counts[kind] = counts.get(kind, 0) + 1
+    return counts
 
 
 def _blocking_privacy(flags: list[str]) -> list[str]:
@@ -352,6 +929,55 @@ def _remaining_timeout(started_at: float, max_wall_seconds: int) -> int:
     return max(1, min(3600, remaining))
 
 
+def _write_current(
+    workspace: Path,
+    *,
+    status: str,
+    goal: dict[str, Any],
+    ledger: dict[str, Any],
+    run: dict[str, Any] | None = None,
+    next_action: str = "",
+    validation_statuses: list[dict[str, str]] | None = None,
+    worker_cwd: str = "",
+) -> None:
+    focus_id = ledger.get("current_focus")
+    focus = _feature_by_id(ledger, str(focus_id or "")) if focus_id else None
+    counts = _feature_status_counts(ledger)
+    lines = [
+        "# xuejiao twin current",
+        "",
+        f"- Status: {status}",
+        f"- Goal: {goal.get('goal', '')}",
+        f"- Focus: {focus_id or 'none'}" + (f" — {focus.get('description')}" if focus else ""),
+        f"- Ledger: revision={ledger.get('revision', 'n/a')} completed={counts['completed']} pending={counts['pending']} blocked={counts['blocked']}",
+    ]
+    if run:
+        lines.extend([
+            f"- Last run: {run.get('run_id', '')}",
+            f"- Outcome: {run.get('outcome', '')}",
+            f"- Stop reason: {run.get('stop_reason', '')}",
+            f"- Events: {run.get('events_ref', '')}",
+        ])
+    headless = run.get("headless", {}) if isinstance(run, dict) else {}
+    worker_path = worker_cwd or (str(headless.get("worker_cwd") or "") if isinstance(headless, dict) else "")
+    if worker_path:
+        lines.append(f"- Worker cwd: {worker_path}")
+    if validation_statuses:
+        lines.append("- Validation:")
+        for item in validation_statuses:
+            lines.append(f"  - {item['command']}: {item['status']} ({item['evidence']})")
+    blockers = []
+    for feature in ledger.get("features", []):
+        if isinstance(feature, dict) and feature.get("status") in {"blocked", "deferred"}:
+            blockers.append(f"{feature.get('id')}: {feature.get('blocked_reason') or feature.get('description')}")
+    if blockers:
+        lines.append("- Blockers:")
+        lines.extend(f"  - {item}" for item in blockers)
+    if next_action:
+        lines.append(f"- Next: {next_action}")
+    (workspace / "CURRENT.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def _append_progress(
     workspace: Path,
     *,
@@ -361,20 +987,46 @@ def _append_progress(
     worker_result: ClaudeRunResult | None,
     coverage: float,
     stop_reason: str,
+    ledger: dict[str, Any] | None = None,
+    validation_statuses: list[dict[str, str]] | None = None,
 ) -> None:
     if not turn_index:
         return
+    if ledger is None:
+        try:
+            ledger = read_json(workspace / "feature_ledger.json")
+        except Exception:
+            ledger = None
+    if validation_statuses is None and ledger is not None:
+        validation_statuses = []
     action = decision.get("action") if decision else "none"
     focus = decision.get("current_focus") if decision else "none"
     worker_code = "not_run" if worker_result is None else str(worker_result.returncode)
+    ledger_line = "unknown"
+    if ledger:
+        counts = _feature_status_counts(ledger)
+        ledger_line = f"focus={ledger.get('current_focus')} revision={ledger.get('revision', 'n/a')} completed={counts['completed']} pending={counts['pending']} blocked={counts['blocked']}"
+    validation_line = "none"
+    if validation_statuses:
+        validation_line = "; ".join(f"{item['command']}={item['status']}" for item in validation_statuses)
+    changed_line = "unknown"
+    if worker_result and worker_result.output_text:
+        for line in worker_result.output_text.splitlines():
+            lower = line.lower()
+            if "changed files" in lower or "changed_files" in lower:
+                changed_line = line.strip()[:300]
+                break
     lines = [
         "",
         f"## {run_id} turn {turn_index}",
         f"- focus: {focus}",
         f"- supervisor_action: {action}",
         f"- worker_returncode: {worker_code}",
+        f"- changed: {changed_line}",
+        f"- ledger: {ledger_line}",
+        f"- validation: {validation_line}",
         f"- validation_coverage: {coverage:.2f}",
-        f"- stop_or_next: {stop_reason or 'continue'}",
+        f"- next: {stop_reason or 'continue'}",
     ]
     with (workspace / "progress.md").open("a", encoding="utf-8") as handle:
         handle.write("\n".join(lines) + "\n")
@@ -469,6 +1121,100 @@ def _consume_human_response(
     return response, changed
 
 
+def _latest_run(workspace: Path) -> dict[str, Any] | None:
+    runs = sorted((workspace / "runs").glob("run-*/run.json"), key=lambda path: path.stat().st_mtime, reverse=True)
+    for path in runs:
+        try:
+            data = read_json(path)
+        except Exception:
+            continue
+        if isinstance(data, dict):
+            data.setdefault("run_path", str(path))
+            return data
+    return None
+
+
+def _ledger_quality_errors(ledger: dict[str, Any], goal: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    features = ledger.get("features", [])
+    if features and not ledger.get("planning_status"):
+        errors.append("legacy ledger missing planning_status")
+    goal_acceptance = goal.get("acceptance", [])
+    copied_acceptance = 0
+    for feature in features if isinstance(features, list) else []:
+        if not isinstance(feature, dict):
+            continue
+        if _same_string_list(feature.get("acceptance"), goal_acceptance):
+            copied_acceptance += 1
+        description = str(feature.get("description") or "")
+        if description == str(goal.get("goal") or "").strip() or len(description) > 240:
+            errors.append(f"{feature.get('id')}: feature is too broad")
+        if len(feature.get("validation_evidence", [])) > 20:
+            errors.append(f"{feature.get('id')}: evidence is too noisy")
+    if features and copied_acceptance == len(features):
+        errors.append("all features copy global acceptance")
+    return errors
+
+
+def _has_unresolved_human_gate(run: dict[str, Any] | None, ledger: dict[str, Any]) -> bool:
+    if not run:
+        return False
+    if run.get("outcome") == "needs_human":
+        return True
+    for feature in ledger.get("features", []):
+        if isinstance(feature, dict) and feature.get("status") == "blocked":
+            return True
+    return False
+
+
+def _blocked_latch_result(workspace: Path, goal: dict[str, Any], ledger: dict[str, Any], last_run: dict[str, Any]) -> dict[str, Any]:
+    report = PrivacyReport()
+    counts = _feature_status_counts(ledger)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "run_id": f"blocked-latch-{stable_hash(str(last_run.get('run_id') or last_run.get('run_path') or workspace), length=10)}",
+        "goal_ref": "goal.yaml",
+        "persona_ref": "persona.lock.json",
+        "ledger_ref": "feature_ledger.json",
+        "events_ref": str(last_run.get("events_ref") or ""),
+        "supervisor_session_id": str(last_run.get("supervisor_session_id") or ""),
+        "worker_session_id": str(last_run.get("worker_session_id") or ""),
+        "outcome": "needs_human",
+        "stop_reason": f"blocked latch: waiting for human_response.json after {last_run.get('run_id', 'previous run')}",
+        "human_review": _human_review_summary(
+            outcome="needs_human",
+            stop_reason=str(last_run.get("stop_reason") or "waiting for human response"),
+            ledger=ledger,
+            risk_markers=[],
+            privacy_blocks=[],
+            report=report,
+        ),
+        "metrics": {
+            "turns": 0,
+            "agent_call_count": 0,
+            "supervisor_turns": 0,
+            "worker_turns": 0,
+            "human_gate_count": 1,
+            "clarification_count": 0,
+            "retry_count": 0,
+            "blocked_risky_actions": 0,
+            "validation_coverage": validation_coverage(goal, json.dumps(ledger, ensure_ascii=False)),
+            "completed_feature_count": counts["completed"],
+            "pending_feature_count": counts["pending"],
+            "blocked_feature_count": counts["blocked"],
+            "in_progress_feature_count": counts["in_progress"],
+            "event_count": 0,
+        },
+        "privacy_report": report.as_dict(),
+        "validation_report": {
+            "risk_markers": [],
+            "mode": "blocked-latch",
+            "privacy_blocks": [],
+            "validation_commands": validation_command_status(goal, json.dumps(ledger, ensure_ascii=False)),
+        },
+    }
+
+
 def _human_review_summary(
     *,
     outcome: str,
@@ -544,6 +1290,33 @@ def run_workspace(
     goal = load_goal(workspace / "goal.yaml")
     persona = read_json(workspace / "persona.lock.json")
     ledger = read_json(workspace / "feature_ledger.json")
+    if mode != "dry-run" and not _human_response_path(workspace).exists():
+        latest_run = _latest_run(workspace)
+        if _has_unresolved_human_gate(latest_run, ledger):
+            result = _blocked_latch_result(workspace, goal, ledger, latest_run or {})
+            _write_current(workspace, status="needs_human", goal=goal, ledger=ledger, run=result, next_action="write human_response.json via `python3 -m scripts.xuejiao_twin respond ...`")
+            return result
+    quality_errors = _ledger_quality_errors(ledger, goal)
+    if mode != "dry-run" and quality_errors and _ledger_planning_status(ledger) == "approved":
+        report = PrivacyReport()
+        result = {
+            "schema_version": SCHEMA_VERSION,
+            "run_id": f"bad-ledger-{stable_hash(quality_errors, length=10)}",
+            "goal_ref": "goal.yaml",
+            "persona_ref": "persona.lock.json",
+            "ledger_ref": "feature_ledger.json",
+            "events_ref": "",
+            "supervisor_session_id": "",
+            "worker_session_id": "",
+            "outcome": "needs_human",
+            "stop_reason": "ledger quality is poor; run replan before continuing: " + "; ".join(quality_errors[:3]),
+            "human_review": _human_review_summary(outcome="needs_human", stop_reason="run replan before continuing", ledger=ledger, risk_markers=[], privacy_blocks=[], report=report),
+            "metrics": {"turns": 0, "agent_call_count": 0, "supervisor_turns": 0, "worker_turns": 0, "human_gate_count": 1, "clarification_count": 0, "retry_count": 0, "blocked_risky_actions": 0, "validation_coverage": validation_coverage(goal, json.dumps(ledger, ensure_ascii=False)), "event_count": 0},
+            "privacy_report": report.as_dict(),
+            "validation_report": {"risk_markers": [], "mode": "bad-ledger", "privacy_blocks": [], "validation_commands": validation_command_status(goal, json.dumps(ledger, ensure_ascii=False)), "ledger_quality_errors": quality_errors},
+        }
+        _write_current(workspace, status="needs_replan", goal=goal, ledger=ledger, run=result, next_action="python3 -m scripts.xuejiao_twin replan --workspace <workspace>")
+        return result
     project_root = Path(str(goal["project_root"])).expanduser()
     limits = goal.get("limits", {}) if isinstance(goal.get("limits", {}), dict) else {}
     max_turns = max(1, int(limits.get("max_turns", 1) or 1))
@@ -555,6 +1328,12 @@ def run_workspace(
     events_path = run_dir / "events.jsonl"
     events_path.touch(exist_ok=True)
     run_path = out or run_dir / "run.json"
+    session_state = _read_session_state(workspace)
+    supervisor_session_id = str(session_state.get("supervisor_session_id") or "")
+    worker_session_id = str(session_state.get("worker_session_id") or "")
+    worker_root = project_root
+    worker_isolation = "not_started"
+    worker_branch = ""
 
     report = PrivacyReport()
     events: list[dict[str, Any]] = []
@@ -562,8 +1341,6 @@ def run_workspace(
     risk_markers: list[str] = []
     privacy_blocks: list[str] = []
     pending_supervisor_note = ""
-    supervisor_session_id = ""
-    worker_session_id = ""
     supervisor_turns = 0
     worker_turns = 0
     agent_call_count = 0
@@ -577,12 +1354,14 @@ def run_workspace(
     last_decision: dict[str, Any] | None = None
     last_worker_result: ClaudeRunResult | None = None
     run_history: list[dict[str, Any]] = []
+    validation_gap_count = 0
     started_at = time.monotonic()
 
     if mode == "dry-run":
         project_evidence = _collect_project_evidence(project_root, report)
+        supervisor_system, supervisor_user_text = _supervisor_prompt(goal, persona, ledger, project_evidence, 1, [])
         supervisor_result = runner(
-            _supervisor_prompt(goal, persona, ledger, project_evidence, 1, []),
+            supervisor_user_text,
             cwd=project_root if project_root.exists() else workspace,
             allowed_tools=_allowed_tools(goal, "supervisor"),
             max_budget_usd=max_budget_usd,
@@ -590,6 +1369,9 @@ def run_workspace(
             timeout_seconds=_remaining_timeout(started_at, max_wall_seconds),
             disallowed_tools=_disallowed_tools(goal, "supervisor"),
             permission_mode=_permission_mode(goal, "supervisor"),
+            append_system_prompt=supervisor_system,
+            setting_sources="project,local",
+            strict_mcp_config=True,
         )
         supervisor_turns = 1
         agent_call_count = 1
@@ -619,6 +1401,34 @@ def run_workspace(
         outcome = "budget_exceeded"
         stop_reason = "max_budget_usd must be greater than zero"
     else:
+        worker_root, worker_isolation, worker_branch, isolation_error = _ensure_worker_root(workspace, project_root, goal, session_state)
+        if isolation_error:
+            outcome = "needs_human"
+            stop_reason = isolation_error
+            human_gate_count += 1
+        else:
+            session_state.update({
+                "worker_cwd": str(worker_root),
+                "worker_branch": worker_branch,
+                "worker_isolation": worker_isolation,
+                "resume_used": bool(supervisor_session_id or worker_session_id),
+                "last_run_id": run_id,
+            })
+            _write_session_state(workspace, session_state)
+        hook_settings_ref = str(_write_hook_settings(workspace))
+        project_hook_settings = str(_install_project_hook_settings(worker_root)) if worker_isolation == "worktree" else ""
+        worker_claude_md_ref = str(_install_worker_claude_md(worker_root, goal)) if worker_isolation == "worktree" else ""
+        session_state["hook_settings_ref"] = hook_settings_ref
+        session_state["project_hook_settings"] = project_hook_settings
+        session_state["worker_claude_md_ref"] = worker_claude_md_ref
+        _write_session_state(workspace, session_state)
+        runner_env = {
+            "XUEJIAO_TWIN_WORKSPACE": str(workspace),
+            "XUEJIAO_TWIN_PROJECT_ROOT": str(project_root),
+            "XUEJIAO_TWIN_WORKER_ROOT": str(worker_root),
+            "XUEJIAO_TWIN_RUN_EVENTS": str(run_dir / "hook_events.jsonl"),
+            "XUEJIAO_TWIN_RUN_ID": run_id,
+        }
         response, response_changed = _consume_human_response(workspace, ledger, report)
         if response_changed:
             write_json(workspace / "feature_ledger.json", ledger)
@@ -654,25 +1464,51 @@ def run_workspace(
                     )
                     break
 
-                project_evidence = _collect_project_evidence(project_root, report)
+                project_evidence = _collect_project_evidence(worker_root, report)
                 evidence_parts.append(json.dumps(project_evidence, ensure_ascii=False, sort_keys=True))
+                validation_gap = _all_features_completed(ledger) and final_coverage < 1.0 and worker_turns > 0
+                supervisor_system, supervisor_user_text = _supervisor_prompt(goal, persona, ledger, project_evidence, turn_index, run_history[-8:], validation_gap=validation_gap)
+                requested_supervisor_session = supervisor_session_id
                 supervisor_result = runner(
-                    _supervisor_prompt(goal, persona, ledger, project_evidence, turn_index, run_history[-8:]),
-                    cwd=project_root,
+                    supervisor_user_text,
+                    cwd=worker_root,
                     allowed_tools=_allowed_tools(goal, "supervisor"),
                     max_budget_usd=max_budget_usd,
                     session_id=supervisor_session_id,
                     timeout_seconds=_remaining_timeout(started_at, max_wall_seconds),
                     disallowed_tools=_disallowed_tools(goal, "supervisor"),
                     permission_mode=_permission_mode(goal, "supervisor"),
+                    role="supervisor",
+                    extra_env=runner_env,
+                    append_system_prompt=supervisor_system,
+                    setting_sources="project,local",
+                    strict_mcp_config=True,
                 )
                 supervisor_turns += 1
                 agent_call_count += 1
+                if supervisor_result.session_lost:
+                    _record_event(events, events_path, {
+                        "timestamp": now_utc(),
+                        "type": "session_lost",
+                        "role": "supervisor",
+                        "turn_index": turn_index,
+                        "requested_session_hash": stable_hash(requested_supervisor_session) if requested_supervisor_session else "",
+                        "actual_session_hash": stable_hash(supervisor_result.session_id) if supervisor_result.session_id else "",
+                    })
+                    outcome = "needs_human"
+                    stop_reason = "supervisor session was silently reset by Claude Code; run replan or replay before continuing"
+                    human_gate_count += 1
+                    _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=None, worker_result=None, coverage=final_coverage, stop_reason=stop_reason)
+                    break
                 if supervisor_result.session_id:
                     supervisor_session_id = supervisor_result.session_id
+                    session_state["supervisor_session_id"] = supervisor_session_id
+                    session_state["last_run_id"] = run_id
+                    _write_session_state(workspace, session_state)
                 supervisor_text = supervisor_result.output_text.strip()
                 evidence_parts.append(supervisor_text)
                 decision = _parse_supervisor_decision(supervisor_text, goal, ledger)
+                schema_errors = list(decision.get("schema_errors") or [])
                 last_decision = decision
                 instruction_redacted, instruction_flags = redact_text(decision.get("instruction") or supervisor_text, report)
                 reason_redacted, reason_flags = redact_text(str(decision.get("reason") or ""), report)
@@ -689,6 +1525,9 @@ def run_workspace(
                     "text_redacted": instruction_redacted,
                     "privacy_flags": event_flags,
                     "returncode": supervisor_result.returncode,
+                    "schema_name": SUPERVISOR_DECISION_SCHEMA,
+                    "schema_valid": not schema_errors,
+                    "schema_errors": schema_errors,
                 })
                 run_history.append({
                     "turn_index": turn_index,
@@ -698,8 +1537,16 @@ def run_workspace(
                     "reason_redacted": reason_redacted,
                     "text_redacted": instruction_redacted[:1000],
                     "returncode": supervisor_result.returncode,
+                    "schema_errors": schema_errors,
                 })
 
+                if schema_errors:
+                    outcome = "needs_human" if decision.get("action") == "needs_human" else "agent_failed"
+                    stop_reason = str(decision.get("reason") or "supervisor schema validation failed")
+                    if outcome == "needs_human":
+                        human_gate_count += 1
+                    _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=None, coverage=final_coverage, stop_reason=stop_reason)
+                    break
                 if privacy_blocks:
                     outcome = "privacy_blocked"
                     stop_reason = "privacy markers require human review"
@@ -711,7 +1558,10 @@ def run_workspace(
                     _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=None, coverage=final_coverage, stop_reason=stop_reason)
                     break
 
-                ledger_changed = _apply_feature_updates(ledger, decision, report)
+                ledger_changed = _apply_ledger_updates(ledger, decision, goal, report)
+                if decision.get("action") == "continue":
+                    ledger_changed = _approve_ledger_if_ready(ledger) or ledger_changed
+                ledger_changed = _apply_feature_updates(ledger, decision, report) or ledger_changed
                 write_json(workspace / "feature_ledger.json", ledger)
                 risk_markers.extend(classify_risk(supervisor_text + "\n" + json.dumps(project_evidence, ensure_ascii=False)))
                 final_coverage = validation_coverage(goal, "\n".join(evidence_parts + [json.dumps(ledger, ensure_ascii=False)]))
@@ -729,7 +1579,113 @@ def run_workspace(
                     stop_reason = redact_text(str(decision.get("reason") or "supervisor requested human input"), report)[0]
                     _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=None, coverage=final_coverage, stop_reason=stop_reason)
                     break
+                if decision.get("action") == "draft_ledger":
+                    planner_system, planner_user_text = _ledger_draft_prompt(str(decision.get("instruction") or _fallback_instruction(goal, ledger)), goal, ledger, project_evidence, run_history[-8:])
+                    requested_worker_session = worker_session_id
+                    draft_result = runner(
+                        planner_user_text,
+                        cwd=worker_root,
+                        allowed_tools=_ledger_draft_allowed_tools(goal),
+                        max_budget_usd=max_budget_usd,
+                        session_id=worker_session_id,
+                        timeout_seconds=_remaining_timeout(started_at, max_wall_seconds),
+                        disallowed_tools=_ledger_draft_disallowed_tools(goal),
+                        permission_mode=_permission_mode(goal, "worker"),
+                        role="worker",
+                        extra_env=runner_env,
+                        append_system_prompt=planner_system,
+                        setting_sources="project,local",
+                        strict_mcp_config=True,
+                    )
+                    worker_turns += 1
+                    agent_call_count += 1
+                    if draft_result.session_lost:
+                        _record_event(events, events_path, {
+                            "timestamp": now_utc(),
+                            "type": "session_lost",
+                            "role": "ledger_planner",
+                            "turn_index": turn_index,
+                            "requested_session_hash": stable_hash(requested_worker_session) if requested_worker_session else "",
+                            "actual_session_hash": stable_hash(draft_result.session_id) if draft_result.session_id else "",
+                        })
+                        outcome = "needs_human"
+                        stop_reason = "ledger planner session was silently reset by Claude Code; run replan or replay before continuing"
+                        human_gate_count += 1
+                        _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=draft_result, coverage=final_coverage, stop_reason=stop_reason)
+                        break
+                    if draft_result.session_id:
+                        worker_session_id = draft_result.session_id
+                        session_state["worker_session_id"] = worker_session_id
+                        session_state["last_run_id"] = run_id
+                        _write_session_state(workspace, session_state)
+                    last_worker_result = draft_result
+                    draft_text = draft_result.output_text.strip()
+                    evidence_parts.append(draft_text)
+                    draft_redacted, draft_flags = redact_text(draft_text, report)
+                    privacy_blocks.extend(_blocking_privacy(draft_flags))
+                    new_ledger, draft_errors = _parse_ledger_draft(draft_text, goal, report)
+                    if new_ledger is not None:
+                        ledger.clear()
+                        ledger.update(new_ledger)
+                        write_json(workspace / "feature_ledger.json", ledger)
+                        ledger_changed = True
+                    _record_event(events, events_path, {
+                        "timestamp": now_utc(),
+                        "type": "ledger_draft",
+                        "turn_index": turn_index,
+                        "session_hash": stable_hash(worker_session_id) if worker_session_id else "",
+                        "returncode": draft_result.returncode,
+                        "text_redacted": draft_redacted[:2000],
+                        "privacy_flags": draft_flags,
+                        "errors": draft_errors,
+                        "schema_name": LEDGER_DRAFT_SCHEMA,
+                        "schema_valid": not draft_errors,
+                        "schema_errors": draft_errors,
+                    })
+                    run_history.append({
+                        "turn_index": turn_index,
+                        "type": "ledger_draft",
+                        "text_redacted": draft_redacted[:1000],
+                        "errors": draft_errors,
+                        "returncode": draft_result.returncode,
+                    })
+                    final_coverage = validation_coverage(goal, "\n".join(evidence_parts + [json.dumps(ledger, ensure_ascii=False)]))
+                    if privacy_blocks:
+                        outcome = "privacy_blocked"
+                        stop_reason = "privacy markers require human review"
+                        _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=draft_result, coverage=final_coverage, stop_reason=stop_reason)
+                        break
+                    if draft_result.returncode:
+                        outcome = _failure_outcome(draft_result)
+                        stop_reason = "ledger draft worker failed"
+                        _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=draft_result, coverage=final_coverage, stop_reason=stop_reason)
+                        break
+                    if draft_errors:
+                        no_progress_count += 1
+                        if no_progress_count >= 3:
+                            outcome = "no_progress"
+                            stop_reason = "ledger draft validation failed repeatedly"
+                            _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=draft_result, coverage=final_coverage, stop_reason=stop_reason)
+                            break
+                    else:
+                        no_progress_count = 0
+                    _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=draft_result, coverage=final_coverage, stop_reason="ledger draft generated")
+                    continue
                 if (decision.get("action") == "stop" or _all_features_completed(ledger)) and worker_turns > 0:
+                    if final_coverage < 1.0:
+                        validation_gap_count += 1
+                        if ledger_changed:
+                            validation_gap_count = 0
+                        if validation_gap_count < 3:
+                            run_history.append({
+                                "turn_index": turn_index,
+                                "type": "validation_gap",
+                                "coverage": final_coverage,
+                                "text_redacted": "ledger completed but goal validation evidence is incomplete; add ledger feature(s) or request human review",
+                                "returncode": 0,
+                            })
+                            _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=None, coverage=final_coverage, stop_reason="validation gap: awaiting ledger update")
+                            continue
                     outcome = "completed" if final_coverage >= 1.0 else "failed_validation"
                     stop_reason = "all features completed" if outcome == "completed" else "validation evidence incomplete"
                     _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=None, coverage=final_coverage, stop_reason=stop_reason)
@@ -738,24 +1694,51 @@ def run_workspace(
                     decision["action"] = "continue"
                     decision["instruction"] = decision.get("instruction") or "只读复核 supervisor 已收集的证据，运行允许的验证命令并返回结果。"
 
+                worker_system, worker_user_text = _worker_prompt(str(decision.get("instruction") or ""), goal)
+                requested_worker_session = worker_session_id
                 worker_result = runner(
-                    _worker_prompt(str(decision.get("instruction") or ""), goal),
-                    cwd=project_root,
+                    worker_user_text,
+                    cwd=worker_root,
                     allowed_tools=_allowed_tools(goal, "worker"),
                     max_budget_usd=max_budget_usd,
                     session_id=worker_session_id,
                     timeout_seconds=_remaining_timeout(started_at, max_wall_seconds),
                     disallowed_tools=_disallowed_tools(goal, "worker"),
                     permission_mode=_permission_mode(goal, "worker"),
+                    role="worker",
+                    extra_env=runner_env,
+                    append_system_prompt=worker_system,
+                    setting_sources="project,local",
+                    strict_mcp_config=True,
                 )
                 worker_turns += 1
                 agent_call_count += 1
+                if worker_result.session_lost:
+                    _record_event(events, events_path, {
+                        "timestamp": now_utc(),
+                        "type": "session_lost",
+                        "role": "worker",
+                        "turn_index": turn_index,
+                        "requested_session_hash": stable_hash(requested_worker_session) if requested_worker_session else "",
+                        "actual_session_hash": stable_hash(worker_result.session_id) if worker_result.session_id else "",
+                    })
+                    last_worker_result = worker_result
+                    outcome = "needs_human"
+                    stop_reason = "worker session was silently reset by Claude Code; run replan or replay before continuing"
+                    human_gate_count += 1
+                    _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=worker_result, coverage=final_coverage, stop_reason=stop_reason)
+                    break
                 if worker_result.session_id:
                     worker_session_id = worker_result.session_id
+                    session_state["worker_session_id"] = worker_session_id
+                    session_state["last_run_id"] = run_id
+                    _write_session_state(workspace, session_state)
                 last_worker_result = worker_result
                 worker_text = worker_result.output_text.strip()
-                evidence_parts.append(worker_text)
-                worker_redacted, worker_flags = redact_text(worker_text, report)
+                parsed_worker, worker_schema_errors = _parse_worker_result(worker_text)
+                worker_evidence = _worker_evidence_text(parsed_worker, worker_text)
+                evidence_parts.append(worker_evidence)
+                worker_redacted, worker_flags = redact_text(worker_evidence, report)
                 privacy_blocks.extend(_blocking_privacy(worker_flags))
                 _record_event(events, events_path, {
                     "timestamp": now_utc(),
@@ -765,15 +1748,30 @@ def run_workspace(
                     "returncode": worker_result.returncode,
                     "text_redacted": worker_redacted[:2000],
                     "privacy_flags": worker_flags,
+                    "schema_name": WORKER_RESULT_SCHEMA,
+                    "schema_valid": not worker_schema_errors,
+                    "schema_errors": worker_schema_errors,
                 })
                 run_history.append({
                     "turn_index": turn_index,
                     "type": "worker_result",
                     "text_redacted": worker_redacted[:1000],
                     "returncode": worker_result.returncode,
+                    "schema_errors": worker_schema_errors,
                 })
 
                 final_coverage = validation_coverage(goal, "\n".join(evidence_parts + [json.dumps(ledger, ensure_ascii=False)]))
+                if worker_schema_errors:
+                    outcome = "agent_failed"
+                    stop_reason = _schema_error_text(WORKER_RESULT_SCHEMA, worker_schema_errors)
+                    _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=worker_result, coverage=final_coverage, stop_reason=stop_reason)
+                    break
+                if parsed_worker and parsed_worker.get("needs_human"):
+                    human_gate_count += 1
+                    outcome = "needs_human"
+                    stop_reason = "; ".join(str(item) for item in parsed_worker.get("blockers", []) if str(item)) or "worker requested human review"
+                    _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=worker_result, coverage=final_coverage, stop_reason=stop_reason)
+                    break
                 if privacy_blocks:
                     outcome = "privacy_blocked"
                     stop_reason = "privacy markers require human review"
@@ -784,7 +1782,7 @@ def run_workspace(
                     stop_reason = "worker failed"
                     _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=worker_result, coverage=final_coverage, stop_reason=stop_reason)
                     break
-                worker_risks = classify_risk(worker_text)
+                worker_risks = classify_risk(worker_evidence)
                 if worker_risks:
                     risk_markers.extend(worker_risks)
                     human_gate_count += 1
@@ -816,7 +1814,10 @@ def run_workspace(
     write_json(workspace / "feature_ledger.json", ledger)
     final_evidence_text = "\n".join(evidence_parts + [json.dumps(ledger, ensure_ascii=False, sort_keys=True)])
     final_coverage = validation_coverage(goal, final_evidence_text)
+    final_validation_statuses = validation_command_status(goal, final_evidence_text)
     counts = _feature_status_counts(ledger)
+    hook_events_path = run_dir / "hook_events.jsonl"
+    hook_event_counts = _count_hook_events(hook_events_path)
     run = {
         "schema_version": SCHEMA_VERSION,
         "run_id": run_id,
@@ -824,8 +1825,21 @@ def run_workspace(
         "persona_ref": "persona.lock.json",
         "ledger_ref": "feature_ledger.json",
         "events_ref": _events_ref(events_path, run_path),
+        "session_state_ref": SESSION_STATE_FILE,
         "supervisor_session_id": stable_hash(supervisor_session_id) if supervisor_session_id else "",
         "worker_session_id": stable_hash(worker_session_id) if worker_session_id else "",
+        "headless": {
+            "resume_used": bool(session_state.get("resume_used")),
+            "worker_cwd": str(worker_root),
+            "worker_branch": worker_branch,
+            "worker_isolation": worker_isolation,
+            "hook_settings_ref": str(session_state.get("hook_settings_ref") or ""),
+            "project_hook_settings": str(session_state.get("project_hook_settings") or ""),
+            "worker_claude_md_ref": str(session_state.get("worker_claude_md_ref") or ""),
+            "hook_events_ref": _events_ref(hook_events_path, run_path) if hook_events_path.exists() else "",
+            "supervisor_session_hash": stable_hash(supervisor_session_id) if supervisor_session_id else "",
+            "worker_session_hash": stable_hash(worker_session_id) if worker_session_id else "",
+        },
         "outcome": outcome,
         "stop_reason": stop_reason,
         "human_review": _human_review_summary(
@@ -851,13 +1865,25 @@ def run_workspace(
             "blocked_feature_count": counts["blocked"],
             "in_progress_feature_count": counts["in_progress"],
             "event_count": len(events),
+            "tool_call_events": hook_event_counts.get("post_tool_use", 0),
+            "session_start_events": hook_event_counts.get("session_start", 0),
+            "compaction_events": hook_event_counts.get("pre_compact", 0),
         },
         "privacy_report": report.as_dict(),
         "validation_report": {
             "risk_markers": sorted(set(risk_markers)),
             "mode": mode,
             "privacy_blocks": sorted(set(privacy_blocks)),
+            "validation_commands": final_validation_statuses,
         },
     }
     write_json(run_path, run)
+    next_action = ""
+    if outcome == "needs_human":
+        next_action = "python3 -m scripts.xuejiao_twin respond --workspace <workspace> --action <approve_and_continue|request_plan_delta|defer_feature|stop_session>"
+    elif outcome in {"failed_validation", "no_progress", "privacy_blocked", "agent_failed"}:
+        next_action = "inspect run artifact and decide whether to respond, replan, or fix environment"
+    elif outcome == "completed":
+        next_action = "review artifacts and ship if acceptable"
+    _write_current(workspace, status=outcome, goal=goal, ledger=ledger, run=run, next_action=next_action, validation_statuses=final_validation_statuses, worker_cwd=str(worker_root))
     return run
