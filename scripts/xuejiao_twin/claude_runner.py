@@ -65,6 +65,7 @@ def run_claude_headless(
         prompt,
         "--output-format",
         "stream-json",
+        "--verbose",
         "--allowedTools",
         ",".join(allowed_tools),
         "--max-budget-usd",
