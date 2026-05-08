@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-import json
 import tempfile
 from pathlib import Path
 from typing import Any
 
 from .initializer import init_workspace
-from .persona import derive_persona
 from .privacy import assert_no_private_leak
 from .runtime import run_workspace
-from .sources import build_index, fixture_paths, matches_project, project_needles
-from .util import now_utc, read_json, write_json
+from .util import read_json, write_json
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCHEMAS_DIR = REPO_ROOT / "schemas"
@@ -89,37 +86,27 @@ def validate_artifact(path: Path, schema_name: str) -> list[str]:
     return validate_schema(value, schema_name) + [f"privacy leak: {leak}" for leak in assert_no_private_leak(value)]
 
 
+def fixture_persona() -> dict[str, Any]:
+    return {
+        "schema_version": "fixture",
+        "core_persona": {
+            "mission": "作为 OPC 模式下的人类分身，监督 code agent 聚焦核心、要求证据、自动化固化。",
+            "highest_priority_preferences": ["乔布斯偏好", "OPC 偏好"],
+        },
+        "decision_policy": {
+            "start_task": ["先识别核心目标和验收标准"],
+            "during_task": ["要求 diff summary 和验证证据"],
+            "human_gates": ["架构、安全、数据、依赖、外部副作用停给真人"],
+        },
+    }
+
+
 def run_fixture_validation() -> list[str]:
     errors: list[str] = []
-    generated_at = "2026-01-01T00:00:00Z"
-    index = build_index(fixture_paths(FIXTURES_DIR), generated_at=generated_at)
-    errors.extend(validate_schema(index, "xuejiao_twin.history_index.schema.json"))
-    leaks = assert_no_private_leak(index)
-    errors.extend(f"history_index privacy leak: {leak}" for leak in leaks)
-
-    index["turns"].append({
-        "turn_id": "numeric-timestamp-fixture",
-        "source_ref": index["sources"][0]["source_ref"],
-        "role": "user",
-        "timestamp": 1714564800000,
-        "text_redacted": "先跑 preflight 给我验证结果",
-        "content_hash": "numericfixture",
-        "tool_summary": {"tool_count": 0, "tools": []},
-        "behavior_labels": ["evidence_request"],
-        "privacy_flags": [],
-    })
-    persona = derive_persona(index, generated_at=generated_at)
-    errors.extend(validate_schema(persona, "xuejiao_twin.persona.schema.json"))
-    errors.extend(f"persona privacy leak: {leak}" for leak in assert_no_private_leak(persona))
-
-    needles = project_needles("/Users/xuejiao/Codes/dev-rules")
-    if not matches_project(Path("/Users/xuejiao/.claude/projects/-Users-xuejiao-Codes-dev-rules/session.jsonl"), needles):
-        errors.append("project filter failed to match Claude/Cursor slugged history path")
-
     with tempfile.TemporaryDirectory(prefix="xuejiao-twin-") as tmp:
         tmp_path = Path(tmp)
         persona_path = tmp_path / "persona.json"
-        write_json(persona_path, persona)
+        write_json(persona_path, fixture_persona())
         workspace = init_workspace(FIXTURES_DIR / "goal.yaml", persona_path, out=tmp_path / "workspace")
         ledger = read_json(workspace / "feature_ledger.json")
         errors.extend(validate_schema(ledger, "xuejiao_twin.ledger.schema.json"))

@@ -1,5 +1,0 @@
-{"type":"user","timestamp":"2026-05-02T09:00:00Z","sessionId":"cursor-session-1","message":{"role":"user","content":[{"type":"text","text":"先做最小可跑闭环，页面丑点没关系。"}]}}
-{"type":"assistant","timestamp":"2026-05-02T09:02:00Z","sessionId":"cursor-session-1","message":{"role":"assistant","content":[{"type":"text","text":"我会搭一个最小 demo。"}]}}
-{"type":"user","timestamp":"2026-05-02T09:30:00Z","sessionId":"cursor-session-1","message":{"role":"user","content":[{"type":"text","text":"这个方向偏了，收回来，只保留核心流程。"}]}}
-{"type":"assistant","timestamp":"2026-05-02T09:40:00Z","sessionId":"cursor-session-1","message":{"role":"assistant","content":[{"type":"text","text":"已回到核心流程。"}]}}
-{"type":"user","timestamp":"2026-05-02T10:00:00Z","sessionId":"cursor-session-1","message":{"role":"user","content":[{"type":"text","text":"OK 这版可以了，给我 diff summary 和验证结果。"}]}}

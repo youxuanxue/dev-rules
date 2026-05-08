@@ -2,62 +2,12 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .initializer import init_workspace
-from .persona import derive_persona
 from .replay import replay_run
 from .runtime import run_workspace
-from .sources import build_index, discover_sources, fixture_paths, matches_project, project_needles
-from .util import now_utc, read_json, write_json
-from .validate import FIXTURES_DIR, run_fixture_validation, validate_run_dir
-
-
-def _since_cutoff(value: str) -> datetime | None:
-    if not value:
-        return None
-    if value.endswith("d") and value[:-1].isdigit():
-        return datetime.now(timezone.utc) - timedelta(days=int(value[:-1]))
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        raise SystemExit(f"invalid --since value: {value}")
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-
-
-def _filter_since(paths: list[tuple[str, Path]], since: str) -> list[tuple[str, Path]]:
-    cutoff = _since_cutoff(since)
-    if cutoff is None:
-        return paths
-    return [(typ, path) for typ, path in paths if datetime.fromtimestamp(path.stat().st_mtime, timezone.utc) >= cutoff]
-
-
-def _cmd_index(args: argparse.Namespace) -> int:
-    if args.fixtures:
-        paths = fixture_paths(FIXTURES_DIR)
-    else:
-        paths = list(discover_sources(Path.home(), include_cursor_store=not args.no_cursor_store))
-        if args.project:
-            needles = project_needles(args.project)
-            paths = [(typ, path) for typ, path in paths if matches_project(path, needles)]
-        paths = _filter_since(paths, args.since)
-    index = build_index(paths, generated_at=now_utc())
-    write_json(Path(args.out), index)
-    print(f"indexed sources={len(index['sources'])} turns={len(index['turns'])} out={args.out}")
-    return 0
-
-
-def _cmd_derive(args: argparse.Namespace) -> int:
-    index_path = Path(args.index).expanduser().resolve()
-    out_path = Path(args.out).expanduser().resolve()
-    if index_path == out_path:
-        raise SystemExit("derive --out must differ from --index; write persona to a separate file")
-    index = read_json(index_path)
-    persona = derive_persona(index, generated_at=now_utc())
-    write_json(out_path, persona)
-    print(f"derived persona out={args.out}")
-    return 0
+from .validate import run_fixture_validation, validate_run_dir
 
 
 def _cmd_init(args: argparse.Namespace) -> int:
@@ -91,19 +41,6 @@ def _cmd_validate(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python3 -m scripts.xuejiao_twin")
     sub = parser.add_subparsers(dest="command", required=True)
-
-    p_index = sub.add_parser("index")
-    p_index.add_argument("--out", required=True)
-    p_index.add_argument("--since", default="")
-    p_index.add_argument("--project", default="")
-    p_index.add_argument("--fixtures", action="store_true")
-    p_index.add_argument("--no-cursor-store", action="store_true")
-    p_index.set_defaults(func=_cmd_index)
-
-    p_derive = sub.add_parser("derive")
-    p_derive.add_argument("--index", required=True)
-    p_derive.add_argument("--out", required=True)
-    p_derive.set_defaults(func=_cmd_derive)
 
     p_init = sub.add_parser("init")
     p_init.add_argument("--goal-file", required=True)
