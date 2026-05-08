@@ -1416,7 +1416,7 @@ def run_workspace(
             })
             _write_session_state(workspace, session_state)
         hook_settings_ref = str(_write_hook_settings(workspace))
-        project_hook_settings = str(_install_project_hook_settings(worker_root))
+        project_hook_settings = str(_install_project_hook_settings(worker_root)) if worker_isolation == "worktree" else ""
         worker_claude_md_ref = str(_install_worker_claude_md(worker_root, goal)) if worker_isolation == "worktree" else ""
         session_state["hook_settings_ref"] = hook_settings_ref
         session_state["project_hook_settings"] = project_hook_settings

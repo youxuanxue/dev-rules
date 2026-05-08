@@ -68,7 +68,14 @@ def _redact_inline(text: str) -> str:
     redacted = re.sub(r"(?i)\b(token|api[_-]?key|secret|password)\s*=\s*[^\s,;]+", r"\1=[REDACTED]", text)
     redacted = re.sub(r"(?i)\bbearer\s+[A-Za-z0-9._\-]{12,}", "bearer [REDACTED]", redacted)
     redacted = re.sub(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", "[PRIVATE_KEY_REDACTED]", redacted, flags=re.S)
-    return redacted
+
+    def redact_url(match: re.Match[str]) -> str:
+        url = match.group(0)
+        if re.search(r"(?i)([?&](token|key|api[_-]?key|secret|password)=|://[^/\s:]+:[^/\s@]+@)", url):
+            return "[URL_REDACTED]"
+        return url
+
+    return re.sub(r"https?://[^\s\"'`]+", redact_url, redacted)
 
 
 def _truncate(value: Any, max_chars: int = 1000) -> Any:

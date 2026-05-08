@@ -417,8 +417,8 @@ def run_fixture_validation() -> list[str]:
         secret_payload = {
             "hook_event_name": "PostToolUse",
             "tool_name": "Bash",
-            "tool_input": {"command": "echo token=secret-value-leak"},
-            "tool_response": {"returncode": 0, "stdout": "token=secret-value-leak"},
+            "tool_input": {"command": "echo token=secret-value-leak && curl https://example.com/?token=url-secret-leak"},
+            "tool_response": {"returncode": 0, "stdout": "token=secret-value-leak https://example.com/?token=url-secret-leak"},
             "cwd": worker_calls[0]["cwd"] if worker_calls else str(project_root),
         }
         if _hook_gate_code(secret_payload, hook_env_with_events) != 0:
@@ -453,8 +453,11 @@ def run_fixture_validation() -> list[str]:
                 if event.get("type") != "post_tool_use":
                     continue
                 summary = str(event.get("tool_response_summary") or "")
-                if "secret-value-leak" in summary:
+                tool_input = json.dumps(event.get("tool_input") or {}, ensure_ascii=False)
+                if "secret-value-leak" in summary or "secret-value-leak" in tool_input:
                     errors.append("PostToolUse hook did not redact token assignment")
+                if "url-secret-leak" in summary or "url-secret-leak" in tool_input:
+                    errors.append("PostToolUse hook did not redact sensitive URL")
         for required_metric in ("tool_call_events", "session_start_events", "compaction_events"):
             if required_metric not in run.get("metrics", {}):
                 errors.append(f"run metrics missing {required_metric}")
