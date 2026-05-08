@@ -4,11 +4,12 @@ $ARGUMENTS
 
 ## 命令行为
 
-你是 `/user:twin` 的执行入口，不是说明书。根据 `$ARGUMENTS` 直接选择一个最小动作：
+你是 `/twin` 的执行入口，不是说明书。根据 `$ARGUMENTS` 直接选择一个最小动作：
 
 - 没有参数或只有项目路径：先读 `<project>/.xuejiao-twin/CURRENT.md`；如果不存在，提示先 `init`。
 - `init ...`：运行初始化命令，返回 workspace 和下一条 `run` 命令。
-- `run ...` / `next ...`：执行一次 supervised run，随后读 `CURRENT.md` 并只汇报 outcome、focus、next。
+- `run ...`：执行一次 supervised run，随后读 `CURRENT.md` 并只汇报 outcome、focus、next。
+- `next ...`：仅作为 `run --mode supervised-normal` 的别名；必须转换为 `python3 -m scripts.xuejiao_twin run ... --mode supervised-normal`，禁止把 `next` 直接传给底层 CLI。
 - `status ...` / `current ...`：只读 `CURRENT.md`，不调用 agent。
 - `respond ...`：写 human response 后给下一条 `run` 命令。
 - `replan ...`：重置 dynamic ledger，随后读 `CURRENT.md`。
@@ -18,9 +19,19 @@ $ARGUMENTS
 
 默认保持乔布斯式输出：一个状态、一条下一步、必要证据路径；不要重复 runbook 大段内容。
 
+### `needs_human` 展示契约
+
+当 `run` / `next` 的 outcome 为 `needs_human`（包括 blocked latch），**必须 inline 输出以下三项**，禁止折叠到"去看 CURRENT.md"：
+
+1. **决策背景**：`CURRENT.md` 中的 `trigger` + `summary`（以及 `blocked_features` 的 id、描述、blocked_reason，如果有）。
+2. **respond 命令清单**：从 `CURRENT.md` 的 `respond_commands` 段逐条列出完整可复制的命令（workspace、action、feature 参数已填好，只留 `--note` 让用户填）。
+3. **证据路径**：`CURRENT.md` 和 `events.jsonl` 的路径，供深挖。
+
+这是"下一步"本身就是人类决策的场景，命令选项不是附属细节而是核心输出。
+
 ## 定位
 
-`/user:twin` 是本机 xuejiao supervisor harness 的入口。它读取由 Claude agent 维护的 `persona.json`，并用两个隔离的 Claude Code headless session 监督真实项目任务：
+`/twin` 是本机 xuejiao supervisor harness 的入口。它读取由 Claude agent 维护的 `persona.json`，并用两个隔离的 Claude Code headless session 监督真实项目任务：
 
 - supervisor session：模拟 xuejiao，只生成指令、检查证据、判断继续 / 停止 / 升级；默认无写权限。
 - worker session：执行代码修改、测试和验证；按 goal 配置可使用 `acceptEdits` / `bypassPermissions`，安全靠 worktree + hook gate 兜底。
@@ -30,15 +41,15 @@ $ARGUMENTS
 ## 子命令
 
 ```text
-/user:twin status --project /abs/path
-/user:twin init --goal-file goal.yaml --persona ~/.xuejiao-twin/persona.json
-/user:twin run --project /abs/path --mode supervised-normal
-/user:twin next --project /abs/path
-/user:twin respond --project /abs/path --action approve_and_continue --feature F-003 --note "复用现有模型"
-/user:twin replan --project /abs/path
-/user:twin loop --project /abs/path --every 5m
-/user:twin validate [--fixtures | .xuejiao-twin/runs/<run_id>]
-/user:twin replay .xuejiao-twin/runs/<run_id>/run.json
+/twin status --project /abs/path
+/twin init --goal-file goal.yaml --persona ~/.xuejiao-twin/persona.json
+/twin run --project /abs/path --mode supervised-normal
+/twin next --project /abs/path
+/twin respond --project /abs/path --action approve_and_continue --feature F-003 --note "复用现有模型"
+/twin replan --project /abs/path
+/twin loop --project /abs/path --every 5m
+/twin validate [--fixtures | .xuejiao-twin/runs/<run_id>]
+/twin replay .xuejiao-twin/runs/<run_id>/run.json
 ```
 
 等价 CLI：
@@ -111,7 +122,7 @@ A 段（settings/MCP 隔离 / append-system-prompt 角色契约 / worker worktre
 | C2 | 切换到 `--output-format json` + `--json-schema`，丢掉启发式 JSON parser | 输出契约从我们解析改为 CLI 强约束；envelope 的 `result/total_cost_usd/is_error` 直接可用 |
 | C3 | 每轮按 envelope 的 `total_cost_usd` 做 per-turn 预算与异常飙升熔断 | 比 stderr 字符串匹配 `budget` 更准 |
 | C4 | supervisor 默认 `--permission-mode plan` | agent 层强制只读，比 disallowedTools 更稳 |
-| D1 | `/user:twin doctor`：体检 claude / git / hook / persona / goal / settings 来源 | 接入新机器更顺 |
+| D1 | `/twin doctor`：体检 claude / git / hook / persona / goal / settings 来源 | 接入新机器更顺 |
 | D2 | `statusLine` 命令把 focus / status / blockers 直接渲染到 Claude Code 状态栏 | 不用每次 cat CURRENT.md |
 | D3 | Notification hook 在 `needs_human` 时弹通知 | `/loop` 长跑 |
 | E1 | `--permission-prompt-tool` 接到本机 MCP server，`supervised-high` 时把 worker 的 novel tool 申请实时交给 supervisor | 把审批流变成 inline 而不是事后 needs_human |
@@ -176,8 +187,8 @@ supervisor 在执行中可通过 `ledger_updates` 要求 runtime 新增或调整
 可与 `/loop` 结合成乔布斯式入口：
 
 ```text
-/loop 5m /user:twin next --project /abs/project
-/loop /user:twin next --project /abs/project
+/loop 5m /twin next --project /abs/project
+/loop /twin next --project /abs/project
 ```
 
 循环体只执行一次 `run` 并刷新 `CURRENT.md`；blocked latch 会在缺少新 `respond` 时保持安静。scheduled routine 也应该遵循同一规则：每次触发只跑一次 `next`，不要手写 shell `while`。
