@@ -103,7 +103,7 @@ write_local_mapping() {
 }
 
 add_registered() {
-    local name="$1" url="$2" local_path="${3:-}"
+    local name="$1" url="$2"
     [ -z "$url" ] && return 0
     mkdir -p "$(dirname "$PROJECTS_FILE")" 2>/dev/null || return 0
     if [ ! -f "$PROJECTS_FILE" ]; then
@@ -112,17 +112,6 @@ add_registered() {
             echo "# Format: <name>\\t<git_remote_url>"
             echo "# Per-machine local paths live in .local-projects (gitignored)"
         } > "$PROJECTS_FILE" 2>/dev/null || return 0
-    fi
-    # Self-healing: drop any legacy bare-path row that matches the local_path we
-    # are now upgrading to a (name,url) row. Older sync.sh versions still pinned
-    # in consumer projects' submodules append bare paths; this collapses them
-    # the next time any new sync.sh runs --local from anywhere.
-    if [ -n "$local_path" ] && grep -qxF "$local_path" "$PROJECTS_FILE" 2>/dev/null; then
-        local tmp
-        tmp="$(mktemp)" || true
-        if [ -n "$tmp" ]; then
-            awk -v p="$local_path" '$0 != p' "$PROJECTS_FILE" > "$tmp" && mv "$tmp" "$PROJECTS_FILE"
-        fi
     fi
     if awk -F'\t' -v u="$url" '!/^#/ && NF>=2 && $2 == u {found=1} END{exit !found}' "$PROJECTS_FILE" 2>/dev/null; then
         return 0
@@ -146,16 +135,10 @@ iter_local_projects() {
         local line name url local_path
         while IFS= read -r line; do
             case "$line" in ''|'#'*) continue ;; esac
-            if [[ "$line" == *$'\t'* ]]; then
-                name="${line%%$'\t'*}"
-                url="${line#*$'\t'}"
-                local_path="$(local_path_for "$url")"
-            else
-                # Legacy bare-path row from pre-refactor .registered-projects
-                local_path="$line"
-                name="$(basename "$line")"
-                url=""
-            fi
+            [[ "$line" == *$'\t'* ]] || continue
+            name="${line%%$'\t'*}"
+            url="${line#*$'\t'}"
+            local_path="$(local_path_for "$url")"
             [ -n "$local_path" ] && [ -d "$local_path" ] || continue
             if ! grep -qxF "$local_path" "$seen_file" 2>/dev/null; then
                 printf '%s\n' "$local_path" >> "$seen_file"
@@ -478,7 +461,7 @@ check_drift() {
             echo "All $checked materialized project(s) in sync."
             exit 0
         else
-            echo "$total_drift of $checked project(s) drifted. Run: ./dev-rules/sync.sh --all"
+            echo "$total_drift of $checked project(s) drifted. Run: $SCRIPT_DIR/sync.sh --all"
             exit 1
         fi
     else
@@ -516,10 +499,8 @@ register_project() {
     name="$(basename "$project_dir")"
     if awk -F'\t' -v u="$url" '!/^#/ && NF>=2 && $2 == u {found=1} END{exit !found}' "$PROJECTS_FILE" 2>/dev/null; then
         echo "Already registered: $name → $url"
-        # Still call add_registered to trigger legacy bare-path cleanup
-        add_registered "$name" "$url" "$project_dir" >/dev/null 2>&1 || true
     else
-        add_registered "$name" "$url" "$project_dir"
+        add_registered "$name" "$url"
     fi
     write_local_mapping "$url" "$project_dir"
     echo "Local mapping: $url → $project_dir"
@@ -533,16 +514,11 @@ list_projects() {
         local line name url local_path any=0
         while IFS= read -r line; do
             case "$line" in ''|'#'*) continue ;; esac
+            [[ "$line" == *$'\t'* ]] || continue
             any=1
-            if [[ "$line" == *$'\t'* ]]; then
-                name="${line%%$'\t'*}"
-                url="${line#*$'\t'}"
-                local_path="$(local_path_for "$url")"
-            else
-                local_path="$line"
-                name="$(basename "$line")"
-                url="(legacy bare-path row)"
-            fi
+            name="${line%%$'\t'*}"
+            url="${line#*$'\t'}"
+            local_path="$(local_path_for "$url")"
             if [ -n "$local_path" ] && [ -d "$local_path" ]; then
                 echo "  ✓ $name  ($url)"
                 echo "      local: $local_path"
