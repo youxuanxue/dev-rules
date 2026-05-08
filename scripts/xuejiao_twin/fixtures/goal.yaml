@@ -28,10 +28,24 @@ allowed_tools:
     - Read
     - Edit
     - Write
-    - Bash(git status *)
-    - Bash(git diff *)
-    - Bash(npm test *)
-    - Bash(./scripts/preflight.sh)
+    - Bash
+
+disallowed_tools:
+  worker:
+    - Bash(git push --force *)
+    - Bash(git push -f *)
+    - Bash(git reset --hard *)
+    - Bash(git clean *)
+    - Bash(rm -rf *)
+    - Bash(terraform apply *)
+    - Bash(terraform destroy *)
+    - Bash(kubectl apply *)
+    - Bash(kubectl delete *)
+    - Bash(fly deploy *)
+    - Bash(vercel deploy *)
+    - Bash(npm publish *)
+    - Bash(docker push *)
+    - Bash(dropdb *)
 approval_policy:
   require_human_for:
     - destructive_git

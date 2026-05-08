@@ -67,7 +67,9 @@ def init_workspace(goal_file: Path, persona_file: Path, out: Path | None = None)
         "4. Supervisor emits a JSON decision with action, instruction, feature updates, and reason.",
         "5. Worker produces code changes and validation evidence when supervisor action is `continue`.",
         "6. Update `feature_ledger.json` and append `progress.md` after each turn.",
-        "7. Stop for human gates: architecture, security, data, dependencies, production deploy, force push, external side effects, destructive actions.",
+        "7. Worker may use Read/Edit/Write/Bash for bypass-like automation when goal allows it.",
+        "8. Runtime still injects disallowedTools for force push, reset/clean/rm, infra apply/destroy, production deploy, publish, docker push, and database drop.",
+        "9. Stop for human gates: architecture, security, data, dependencies, production deploy, force push, external side effects, destructive actions.",
         "",
         "Validation commands:",
     ]

@@ -52,6 +52,8 @@ def run_claude_headless(
     session_id: str = "",
     dry_run: bool = False,
     timeout_seconds: int = 3600,
+    disallowed_tools: list[str] | None = None,
+    permission_mode: str = "",
 ) -> ClaudeRunResult:
     if dry_run:
         return ClaudeRunResult(
@@ -72,6 +74,10 @@ def run_claude_headless(
         "--max-budget-usd",
         str(max_budget_usd),
     ]
+    if disallowed_tools:
+        cmd.extend(["--disallowedTools", ",".join(disallowed_tools)])
+    if permission_mode:
+        cmd.extend(["--permission-mode", permission_mode])
     if session_id:
         cmd.extend(["--resume", session_id])
     env = os.environ.copy()

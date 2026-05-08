@@ -19,6 +19,43 @@ _ACTIONS = {"continue", "stop", "needs_human"}
 _FEATURE_STATUSES = {"pending", "in_progress", "blocked", "completed", "deferred"}
 _BLOCKING_PRIVACY_FLAGS = {"secret_assignment", "bearer_token", "private_key", "sensitive_url"}
 _FALLBACK_STARTS = ("先", "不要", "跑", "给", "修", "定位", "写", "NEEDS_HUMAN")
+_DEFAULT_DISALLOWED_TOOLS = {
+    "supervisor": [
+        "Edit",
+        "Write",
+        "Bash(git commit *)",
+        "Bash(git push *)",
+        "Bash(gh pr create *)",
+    ],
+    "worker": [
+        "Bash(git push --force *)",
+        "Bash(git push -f *)",
+        "Bash(git reset --hard *)",
+        "Bash(git checkout -- *)",
+        "Bash(git restore *)",
+        "Bash(git clean *)",
+        "Bash(rm -rf *)",
+        "Bash(sudo rm *)",
+        "Bash(chmod -R 777 *)",
+        "Bash(chown -R *)",
+        "Bash(terraform apply *)",
+        "Bash(terraform destroy *)",
+        "Bash(kubectl apply *)",
+        "Bash(kubectl delete *)",
+        "Bash(helm upgrade *)",
+        "Bash(helm uninstall *)",
+        "Bash(fly deploy *)",
+        "Bash(vercel deploy *)",
+        "Bash(npm publish *)",
+        "Bash(pnpm publish *)",
+        "Bash(yarn publish *)",
+        "Bash(twine upload *)",
+        "Bash(docker push *)",
+        "Bash(dropdb *)",
+        "Bash(psql * drop *)",
+        "Bash(mysql * drop *)",
+    ],
+}
 
 
 def _next_feature(ledger: dict[str, Any]) -> dict[str, Any] | None:
@@ -119,15 +156,40 @@ def _worker_prompt(instruction: str, goal: dict[str, Any]) -> str:
     }, ensure_ascii=False, indent=2)
 
 
-def _allowed_tools(goal: dict[str, Any], role: str) -> list[str]:
-    configured = goal.get("allowed_tools", {})
+def _role_tools(goal: dict[str, Any], field: str, role: str) -> list[str]:
+    configured = goal.get(field, {})
     if isinstance(configured, dict):
         tools = configured.get(role)
-        if isinstance(tools, list) and tools:
-            return [str(tool) for tool in tools]
+        if isinstance(tools, list):
+            return [str(tool) for tool in tools if str(tool)]
+    return []
+
+
+def _allowed_tools(goal: dict[str, Any], role: str) -> list[str]:
+    tools = _role_tools(goal, "allowed_tools", role)
+    if tools:
+        return tools
     if role == "supervisor":
         return ["Read", "Bash(git status *)", "Bash(git diff *)"]
-    return ["Read", "Edit", "Write", "Bash(git status *)", "Bash(git diff *)"]
+    return ["Read", "Edit", "Write", "Bash"]
+
+
+def _disallowed_tools(goal: dict[str, Any], role: str) -> list[str]:
+    tools: list[str] = []
+    for tool in _DEFAULT_DISALLOWED_TOOLS.get(role, []):
+        if tool not in tools:
+            tools.append(tool)
+    for tool in _role_tools(goal, "disallowed_tools", role):
+        if tool not in tools:
+            tools.append(tool)
+    return tools
+
+
+def _permission_mode(goal: dict[str, Any], role: str) -> str:
+    configured = goal.get("permission_mode", "")
+    if isinstance(configured, dict):
+        return str(configured.get(role) or "")
+    return str(configured or "")
 
 
 def _json_from_text(text: str) -> dict[str, Any] | None:
@@ -370,6 +432,8 @@ def run_workspace(
             max_budget_usd=max_budget_usd,
             dry_run=True,
             timeout_seconds=_remaining_timeout(started_at, max_wall_seconds),
+            disallowed_tools=_disallowed_tools(goal, "supervisor"),
+            permission_mode=_permission_mode(goal, "supervisor"),
         )
         supervisor_turns = 1
         agent_call_count = 1
@@ -423,6 +487,8 @@ def run_workspace(
                 max_budget_usd=max_budget_usd,
                 session_id=supervisor_session_id,
                 timeout_seconds=_remaining_timeout(started_at, max_wall_seconds),
+                disallowed_tools=_disallowed_tools(goal, "supervisor"),
+                permission_mode=_permission_mode(goal, "supervisor"),
             )
             supervisor_turns += 1
             agent_call_count += 1
@@ -503,6 +569,8 @@ def run_workspace(
                 max_budget_usd=max_budget_usd,
                 session_id=worker_session_id,
                 timeout_seconds=_remaining_timeout(started_at, max_wall_seconds),
+                disallowed_tools=_disallowed_tools(goal, "worker"),
+                permission_mode=_permission_mode(goal, "worker"),
             )
             worker_turns += 1
             agent_call_count += 1
