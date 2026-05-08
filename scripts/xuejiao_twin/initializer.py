@@ -9,8 +9,25 @@ from . import SCHEMA_VERSION
 from .util import now_utc, read_yaml_like, write_json
 
 
+TWIN_GITIGNORE_PATTERN = ".xuejiao-twin*"
+
+
 def load_goal(path: Path) -> dict[str, Any]:
     return read_yaml_like(path)
+
+
+def ensure_twin_gitignore(project_root: Path) -> None:
+    gitignore = project_root / ".gitignore"
+    if gitignore.exists():
+        lines = gitignore.read_text(encoding="utf-8").splitlines()
+    else:
+        lines = []
+    if TWIN_GITIGNORE_PATTERN in lines:
+        return
+    if lines and lines[-1].strip():
+        lines.append("")
+    lines.append(TWIN_GITIGNORE_PATTERN)
+    gitignore.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def feature_ledger(goal: dict[str, Any]) -> dict[str, Any]:
@@ -38,6 +55,7 @@ def init_workspace(goal_file: Path, persona_file: Path, out: Path | None = None)
     goal = load_goal(goal_file)
     project_root = Path(str(goal["project_root"])).expanduser()
     workspace = out or project_root / ".xuejiao-twin"
+    ensure_twin_gitignore(project_root)
     workspace.mkdir(parents=True, exist_ok=True)
     (workspace / "runs").mkdir(exist_ok=True)
 
