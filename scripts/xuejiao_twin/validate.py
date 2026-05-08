@@ -127,8 +127,16 @@ class FakeRunner:
                     "action": "continue",
                     "current_focus": "F-001",
                     "instruction": "读取项目状态并运行 git status --short，返回验证证据。",
-                    "feature_updates": [{"id": "F-001", "status": "completed", "validation_evidence": []}],
+                    "feature_updates": [],
                     "reason": "开始第一个 feature",
+                }
+            elif turn == 2:
+                output = {
+                    "action": "continue",
+                    "current_focus": "F-001",
+                    "instruction": "继续补充验证证据并回传。",
+                    "feature_updates": [],
+                    "reason": "继续收集验证证据",
                 }
             else:
                 output = {
@@ -189,8 +197,8 @@ def run_fixture_validation() -> list[str]:
             errors.append(f"fixture outcome: expected completed, got {run.get('outcome')}")
         if run.get("metrics", {}).get("supervisor_turns", 0) < 2:
             errors.append("fixture did not run multiple supervisor turns")
-        if run.get("metrics", {}).get("worker_turns", 0) < 1:
-            errors.append("fixture completed without a worker turn")
+        if run.get("metrics", {}).get("worker_turns", 0) < 2:
+            errors.append("fixture did not run multiple worker turns")
         review = run.get("human_review", {})
         if not isinstance(review, dict):
             errors.append("fixture run missing human_review object")
@@ -200,6 +208,8 @@ def run_fixture_validation() -> list[str]:
                 errors.append("fixture run missing suggested human actions")
         if not any(call["role"] == "supervisor" and call["session_id"] == "supervisor-session" for call in runner.calls):
             errors.append("fixture did not resume supervisor session")
+        if not any(call["role"] == "worker" and call["session_id"] == "worker-session" for call in runner.calls):
+            errors.append("fixture did not resume worker session")
         worker_calls = [call for call in runner.calls if call["role"] == "worker"]
         if not worker_calls or worker_calls[0]["allowed_tools"] != ["Read", "Edit", "Write", "Bash"]:
             errors.append("fixture worker did not receive bypass-like allowed tools")
