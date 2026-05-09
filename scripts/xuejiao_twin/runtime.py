@@ -1849,6 +1849,8 @@ def run_workspace(
                 if worker_schema_errors:
                     outcome = "agent_failed"
                     stop_reason = _schema_error_text(WORKER_RESULT_SCHEMA, worker_schema_errors)
+                    if worker_result.returncode == 0 and not worker_text:
+                        stop_reason += "; worker returned empty output with returncode 0, likely stale/resumed session"
                     _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=worker_result, coverage=final_coverage, stop_reason=stop_reason)
                     break
                 if parsed_worker and parsed_worker.get("needs_human"):
