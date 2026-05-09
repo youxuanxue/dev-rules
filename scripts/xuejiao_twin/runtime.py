@@ -697,6 +697,8 @@ def _apply_feature_updates(ledger: dict[str, Any], decision: dict[str, Any], rep
         for item in _redact_list(update.get("validation_evidence", []), report):
             if item not in evidence:
                 evidence.append(item)
+        if len(evidence) > 20:
+            del evidence[:-20]
         if feature.get("status") == "completed":
             feature["blocked_reason"] = None
             verified_at = now_utc()
@@ -1195,8 +1197,6 @@ def _ledger_quality_errors(ledger: dict[str, Any], goal: dict[str, Any]) -> list
         description = str(feature.get("description") or "")
         if description == str(goal.get("goal") or "").strip() or len(description) > 240:
             errors.append(f"{feature.get('id')}: feature is too broad")
-        if len(feature.get("validation_evidence", [])) > 20:
-            errors.append(f"{feature.get('id')}: evidence is too noisy")
     if features and copied_acceptance == len(features):
         errors.append("all features copy global acceptance")
     return errors
