@@ -85,7 +85,7 @@ worker 默认接近 `bypassPermissions` / `acceptEdits`，安全预算押在六�
 - **worker worktree 内 `.claude/CLAUDE.md`**：hard rules + scope_out + worker / planner schema 名 + validation commands。session 重启 / compaction 后契约仍存活。
 - **silent `--resume` 检测**：`claude_runner` 比对请求 session id 与 stream-json 首事件返回的 session id，不一致即标 `session_lost=true`，runtime 转 `needs_human` 并写 `session_lost` 事件，避免向重起的 brain 继续灌历史。
 - 危险默认（main/master commit/push、外部副作用、worktree 外写入）一律由 runtime 报 `needs_human`。
-- `blocked latch`：上轮已 `needs_human` 且无新 `human_response.json` 时，重复 `run` 不会再调用 agent，避免 `/loop` 空跑。
+- `blocked latch`：上轮已 `needs_human` / `agent_failed` / `no_progress` / `failed_validation` / `privacy_blocked` 且无新 `human_response.json` 时，重复 `run` 不会再调用 agent，避免 `/loop` 空跑。
 - `validation_gap`：所有 feature completed 但 goal 验证证据不全时，runtime 强制 supervisor 补一个 ledger feature，连续 ≥3 轮无补救才转 `failed_validation`。
 - `no_progress` 熔断：focus + ledger + project_evidence 连续 3 轮指纹一致即停。
 - 隐私层：`token=`、`bearer ...`、`-----BEGIN ... PRIVATE KEY-----`、含敏感 query 的 URL 触发 redaction；命中 `secret_assignment` / `bearer_token` / `private_key` / `sensitive_url` 直接 `privacy_blocked`。hook gate 对 PostToolUse 的 `tool_input` / 响应摘要单独再脱敏，落盘前不带原文 token。
@@ -200,7 +200,7 @@ supervisor 在执行中可通过 `ledger_updates` 要求 runtime 新增或调整
 | 症状 | 可能根因 | 处理 |
 | --- | --- | --- |
 | `outcome=needs_human, stop_reason="ledger quality is poor"` | 旧 ledger 把 goal 当成单 feature / acceptance 全是全局复制 / feature 描述过宽 | `replan` 重生成 |
-| 重复 `run` 不再调用 agent | blocked latch（上轮 needs_human 未 respond） | 写 `respond` 或 `stop_session` |
+| 重复 `run` 不再调用 agent | blocked latch（上轮 needs_human / agent_failed / no_progress / failed_validation / privacy_blocked 未 respond） | 先看 `CURRENT.md` 的 stop_reason，修环境或写 `respond` 后再继续 |
 | `outcome=no_progress, stop_reason="same focus and evidence repeated"` | focus + ledger + evidence 连续 ≥3 轮指纹一致 | 看 `progress.md` 找根因，必要时 `respond --action request_plan_delta` |
 | `outcome=privacy_blocked` | 输出里出现 `secret_assignment` / `bearer_token` / `private_key` / `sensitive_url` | 检查 worktree 是否误读凭证文件，修 goal scope_in/scope_out |
 | `outcome=failed_validation`，所有 focus 都 completed | `validation_gap` 触发，feature 完成但 goal 验证证据缺失 | `respond --action request_plan_delta` 让 supervisor 加补证据 feature |

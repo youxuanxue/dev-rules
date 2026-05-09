@@ -18,6 +18,7 @@ from .schema_contract import load_schema, validate_schema
 from .util import now_utc, read_json, write_json
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+CLI_MODULE_CMD = f"PYTHONPATH={shlex.quote(str(REPO_ROOT))} python3 -m scripts.xuejiao_twin"
 
 Runner = Callable[..., ClaudeRunResult]
 _ACTIONS = {"draft_ledger", "continue", "stop", "needs_human"}
@@ -920,8 +921,23 @@ def _budget_failure(text: str) -> bool:
     return "budget" in lower or "max_budget" in lower
 
 
+def _content_filter_failure(text: str) -> bool:
+    lower = text.lower()
+    return "sensitive_words_detected" in lower or "content filter" in lower
+
+
 def _failure_outcome(result: ClaudeRunResult) -> str:
-    return "budget_exceeded" if _budget_failure(result.output_text) else "agent_failed"
+    if _budget_failure(result.output_text):
+        return "budget_exceeded"
+    if _content_filter_failure(result.output_text):
+        return "needs_human"
+    return "agent_failed"
+
+
+def _failure_reason(result: ClaudeRunResult, role: str) -> str:
+    if _content_filter_failure(result.output_text):
+        return f"{role} API content filter blocked request; inspect prompt/run artifact before retrying"
+    return f"{role} failed"
 
 
 def _remaining_timeout(started_at: float, max_wall_seconds: int) -> int:
@@ -962,6 +978,36 @@ def _write_current(
     worker_path = worker_cwd or (str(headless.get("worker_cwd") or "") if isinstance(headless, dict) else "")
     if worker_path:
         lines.append(f"- Worker cwd: {worker_path}")
+    review = run.get("human_review") if isinstance(run, dict) else None
+    if isinstance(review, dict) and bool(review.get("needed")):
+        lines.append("- Human decision:")
+        lines.append(f"  - trigger: {review.get('trigger', '')}")
+        lines.append(f"  - summary: {review.get('summary', '')}")
+        blocked = review.get("blocked_features")
+        if isinstance(blocked, list) and blocked:
+            lines.append("  - blocked_features:")
+            for item in blocked:
+                if not isinstance(item, dict):
+                    continue
+                reason = str(item.get("blocked_reason") or "")
+                lines.append(f"    - {item.get('id', '')}: {item.get('description', '')}")
+                if reason:
+                    lines.append(f"      reason: {reason}")
+        focus_for_hint = str(review.get("current_focus") or ledger.get("current_focus") or "")
+        actions = review.get("suggested_actions")
+        if isinstance(actions, list) and actions:
+            lines.append("  - respond_commands:")
+            for item in actions:
+                if not isinstance(item, dict):
+                    continue
+                action_id = str(item.get("id") or "")
+                if not action_id:
+                    continue
+                command = f"{CLI_MODULE_CMD} respond --workspace {shlex.quote(str(workspace))} --action {action_id}"
+                if focus_for_hint:
+                    command += f" --feature {focus_for_hint}"
+                command += " --note '<你的决策说明>'"
+                lines.append(f"    - {action_id}: {command}")
     if validation_statuses:
         lines.append("- Validation:")
         for item in validation_statuses:
@@ -1159,7 +1205,7 @@ def _ledger_quality_errors(ledger: dict[str, Any], goal: dict[str, Any]) -> list
 def _has_unresolved_human_gate(run: dict[str, Any] | None, ledger: dict[str, Any]) -> bool:
     if not run:
         return False
-    if run.get("outcome") == "needs_human":
+    if run.get("outcome") in {"needs_human", "agent_failed", "no_progress", "failed_validation", "privacy_blocked"}:
         return True
     for feature in ledger.get("features", []):
         if isinstance(feature, dict) and feature.get("status") == "blocked":
@@ -1167,9 +1213,44 @@ def _has_unresolved_human_gate(run: dict[str, Any] | None, ledger: dict[str, Any
     return False
 
 
+def _last_event_summary(workspace: Path, last_run: dict[str, Any]) -> str:
+    ref = str(last_run.get("events_ref") or "")
+    if not ref:
+        return ""
+    run_path = Path(str(last_run.get("run_path") or ""))
+    base = run_path.parent if run_path else workspace
+    path = (base / ref) if not Path(ref).is_absolute() else Path(ref)
+    if not path.exists():
+        return ""
+    try:
+        lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    except Exception:
+        return ""
+    for line in reversed(lines):
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        reason = str(event.get("reason_redacted") or "").strip()
+        body = str(event.get("text_redacted") or "").strip()
+        if reason and reason not in {"plain text supervisor instruction"}:
+            return reason[:300]
+        if body:
+            return body[:300]
+        if reason:
+            return reason[:300]
+    return ""
+
+
 def _blocked_latch_result(workspace: Path, goal: dict[str, Any], ledger: dict[str, Any], last_run: dict[str, Any]) -> dict[str, Any]:
     report = PrivacyReport()
     counts = _feature_status_counts(ledger)
+    focus = _feature_by_id(ledger, ledger.get("current_focus"))
+    guidance = _last_event_summary(workspace, last_run) or str(last_run.get("stop_reason") or "waiting for human response")
+    if focus and focus.get("status") in {"blocked", "deferred"}:
+        feature_reason = str(focus.get("blocked_reason") or "").strip()
+        if feature_reason:
+            guidance = f"{guidance} | focus {focus.get('id')}: {feature_reason}"
     return {
         "schema_version": SCHEMA_VERSION,
         "run_id": f"blocked-latch-{stable_hash(str(last_run.get('run_id') or last_run.get('run_path') or workspace), length=10)}",
@@ -1180,10 +1261,10 @@ def _blocked_latch_result(workspace: Path, goal: dict[str, Any], ledger: dict[st
         "supervisor_session_id": str(last_run.get("supervisor_session_id") or ""),
         "worker_session_id": str(last_run.get("worker_session_id") or ""),
         "outcome": "needs_human",
-        "stop_reason": f"blocked latch: waiting for human_response.json after {last_run.get('run_id', 'previous run')}",
+        "stop_reason": f"blocked latch: waiting for human_response.json after {last_run.get('run_id', 'previous run')} ({last_run.get('outcome', 'unknown')}: {guidance})",
         "human_review": _human_review_summary(
             outcome="needs_human",
-            stop_reason=str(last_run.get("stop_reason") or "waiting for human response"),
+            stop_reason=guidance,
             ledger=ledger,
             risk_markers=[],
             privacy_blocks=[],
@@ -1256,25 +1337,25 @@ def _human_review_summary(
                 "id": "approve_and_continue",
                 "label": "确认方案并继续",
                 "effect": "清除当前 blocked 并继续 supervised loop",
-                "cli_hint": "python3 -m scripts.xuejiao_twin respond --workspace <workspace> --action approve_and_continue --feature <feature-id> --note '<审批结论>'",
+                "cli_hint": f"{CLI_MODULE_CMD} respond --workspace <workspace> --action approve_and_continue --feature <feature-id> --note '<审批结论>'",
             },
             {
                 "id": "request_plan_delta",
                 "label": "要求最小改动清单",
                 "effect": "先让 supervisor 输出最小改动方案，再继续",
-                "cli_hint": "python3 -m scripts.xuejiao_twin respond --workspace <workspace> --action request_plan_delta --feature <feature-id> --note '<要求补充项>'",
+                "cli_hint": f"{CLI_MODULE_CMD} respond --workspace <workspace> --action request_plan_delta --feature <feature-id> --note '<要求补充项>'",
             },
             {
                 "id": "defer_feature",
                 "label": "延期当前 feature",
                 "effect": "将当前 feature 标记为 deferred 并切换下一项",
-                "cli_hint": "python3 -m scripts.xuejiao_twin respond --workspace <workspace> --action defer_feature --feature <feature-id> --note '<延期原因>'",
+                "cli_hint": f"{CLI_MODULE_CMD} respond --workspace <workspace> --action defer_feature --feature <feature-id> --note '<延期原因>'",
             },
             {
                 "id": "stop_session",
                 "label": "停止本次会话",
                 "effect": "保持阻塞状态，等待下一次人工决策",
-                "cli_hint": "python3 -m scripts.xuejiao_twin respond --workspace <workspace> --action stop_session --feature <feature-id> --note '<停止原因>'",
+                "cli_hint": f"{CLI_MODULE_CMD} respond --workspace <workspace> --action stop_session --feature <feature-id> --note '<停止原因>'",
             },
         ],
     }
@@ -1294,7 +1375,7 @@ def run_workspace(
         latest_run = _latest_run(workspace)
         if _has_unresolved_human_gate(latest_run, ledger):
             result = _blocked_latch_result(workspace, goal, ledger, latest_run or {})
-            _write_current(workspace, status="needs_human", goal=goal, ledger=ledger, run=result, next_action="write human_response.json via `python3 -m scripts.xuejiao_twin respond ...`")
+            _write_current(workspace, status="needs_human", goal=goal, ledger=ledger, run=result, next_action=f"write human_response.json via `{CLI_MODULE_CMD} respond ...`")
             return result
     quality_errors = _ledger_quality_errors(ledger, goal)
     if mode != "dry-run" and quality_errors and _ledger_planning_status(ledger) == "approved":
@@ -1315,7 +1396,7 @@ def run_workspace(
             "privacy_report": report.as_dict(),
             "validation_report": {"risk_markers": [], "mode": "bad-ledger", "privacy_blocks": [], "validation_commands": validation_command_status(goal, json.dumps(ledger, ensure_ascii=False)), "ledger_quality_errors": quality_errors},
         }
-        _write_current(workspace, status="needs_replan", goal=goal, ledger=ledger, run=result, next_action="python3 -m scripts.xuejiao_twin replan --workspace <workspace>")
+        _write_current(workspace, status="needs_replan", goal=goal, ledger=ledger, run=result, next_action=f"{CLI_MODULE_CMD} replan --workspace <workspace>")
         return result
     project_root = Path(str(goal["project_root"])).expanduser()
     limits = goal.get("limits", {}) if isinstance(goal.get("limits", {}), dict) else {}
@@ -1541,8 +1622,12 @@ def run_workspace(
                 })
 
                 if schema_errors:
-                    outcome = "needs_human" if decision.get("action") == "needs_human" else "agent_failed"
-                    stop_reason = str(decision.get("reason") or "supervisor schema validation failed")
+                    if supervisor_result.returncode:
+                        outcome = _failure_outcome(supervisor_result)
+                        stop_reason = _failure_reason(supervisor_result, "supervisor")
+                    else:
+                        outcome = "needs_human" if decision.get("action") == "needs_human" else "agent_failed"
+                        stop_reason = str(decision.get("reason") or "supervisor schema validation failed")
                     if outcome == "needs_human":
                         human_gate_count += 1
                     _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=None, coverage=final_coverage, stop_reason=stop_reason)
@@ -1554,7 +1639,7 @@ def run_workspace(
                     break
                 if supervisor_result.returncode:
                     outcome = _failure_outcome(supervisor_result)
-                    stop_reason = "supervisor failed"
+                    stop_reason = _failure_reason(supervisor_result, "supervisor")
                     _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=None, coverage=final_coverage, stop_reason=stop_reason)
                     break
 
@@ -1657,7 +1742,7 @@ def run_workspace(
                         break
                     if draft_result.returncode:
                         outcome = _failure_outcome(draft_result)
-                        stop_reason = "ledger draft worker failed"
+                        stop_reason = _failure_reason(draft_result, "ledger draft worker")
                         _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=draft_result, coverage=final_coverage, stop_reason=stop_reason)
                         break
                     if draft_errors:
@@ -1779,7 +1864,7 @@ def run_workspace(
                     break
                 if worker_result.returncode:
                     outcome = _failure_outcome(worker_result)
-                    stop_reason = "worker failed"
+                    stop_reason = _failure_reason(worker_result, "worker")
                     _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=worker_result, coverage=final_coverage, stop_reason=stop_reason)
                     break
                 worker_risks = classify_risk(worker_evidence)
@@ -1880,7 +1965,7 @@ def run_workspace(
     write_json(run_path, run)
     next_action = ""
     if outcome == "needs_human":
-        next_action = "python3 -m scripts.xuejiao_twin respond --workspace <workspace> --action <approve_and_continue|request_plan_delta|defer_feature|stop_session>"
+        next_action = f"{CLI_MODULE_CMD} respond --workspace <workspace> --action <approve_and_continue|request_plan_delta|defer_feature|stop_session>"
     elif outcome in {"failed_validation", "no_progress", "privacy_blocked", "agent_failed"}:
         next_action = "inspect run artifact and decide whether to respond, replan, or fix environment"
     elif outcome == "completed":

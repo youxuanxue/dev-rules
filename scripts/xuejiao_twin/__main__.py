@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import shlex
 import sys
 from pathlib import Path
 
@@ -9,6 +10,9 @@ from .replay import replay_run
 from .runtime import HUMAN_ACTIONS, run_workspace, write_human_response
 from .validate import run_fixture_validation, validate_run_dir
 from .util import now_utc, read_json, write_json
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+CLI_MODULE_CMD = f"PYTHONPATH={shlex.quote(str(REPO_ROOT))} python3 -m scripts.xuejiao_twin"
 
 
 def _cmd_init(args: argparse.Namespace) -> int:
@@ -111,7 +115,7 @@ def _cmd_replan(args: argparse.Namespace) -> int:
         f"- Goal: {goal.get('goal', '')}",
         "- Focus: none",
         "- Ledger: revision=0 completed=0 pending=0 blocked=0",
-        f"- Next: python3 -m scripts.xuejiao_twin run --workspace {workspace} --mode supervised-normal",
+        f"- Next: {CLI_MODULE_CMD} run --workspace {workspace} --mode supervised-normal",
         "",
     ]
     (workspace / "CURRENT.md").write_text("\n".join(current), encoding="utf-8")
@@ -120,7 +124,7 @@ def _cmd_replan(args: argparse.Namespace) -> int:
     response_path.unlink(missing_ok=True)
     print(f"feature_ledger_reset={ledger_path}")
     print(f"current={workspace / 'CURRENT.md'}")
-    print(f"next=python3 -m scripts.xuejiao_twin run --workspace {workspace} --mode supervised-normal")
+    print(f"next={CLI_MODULE_CMD} run --workspace {workspace} --mode supervised-normal")
     return 0
 
 
@@ -140,7 +144,7 @@ def _cmd_validate(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="python3 -m scripts.xuejiao_twin")
+    parser = argparse.ArgumentParser(prog=CLI_MODULE_CMD)
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_init = sub.add_parser("init")
@@ -181,6 +185,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_validate.add_argument("path", nargs="?", default="")
     p_validate.add_argument("--fixtures", action="store_true")
     p_validate.set_defaults(func=_cmd_validate)
+
     return parser
 
 
