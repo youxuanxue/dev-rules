@@ -9,7 +9,9 @@ $ARGUMENTS
 - 没有参数或只有项目路径：先读 `<project>/.xuejiao-twin/CURRENT.md`；如果不存在，提示先 `init`。
 - `init ...`：运行初始化命令，返回 workspace 和下一条 `run` 命令。
 - `run ...`：执行一次 supervised run，随后读 `CURRENT.md` 并只汇报 outcome、focus、next。
-- `next ...`：仅作为 `run --mode supervised-normal` 的别名；必须转换为 `python3 -m scripts.xuejiao_twin run ... --mode supervised-normal`，禁止把 `next` 直接传给底层 CLI。
+- `next ...`：仅作为 `run --mode supervised-normal` 的别名；必须转换为 `PYTHONPATH=/Users/xuejiao/Codes/dev-rules python3 -m scripts.xuejiao_twin run ... --mode supervised-normal`，禁止把 `next` 直接传给底层 CLI。
+
+**所有调用 `python3 -m scripts.xuejiao_twin` 的命令都必须加前缀 `PYTHONPATH=/Users/xuejiao/Codes/dev-rules`**（除非 cwd 已经在 dev-rules 仓库根目录）。模块物理上在 dev-rules，从 zw-brain 等其它项目运行时不带 PYTHONPATH 会 `No module named scripts.xuejiao_twin`。
 - `status ...` / `current ...`：只读 `CURRENT.md`，不调用 agent。
 - `respond ...`：写 human response 后给下一条 `run` 命令。
 - `replan ...`：重置 dynamic ledger，随后读 `CURRENT.md`。
