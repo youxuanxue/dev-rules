@@ -114,8 +114,13 @@ def _command_passed(command: str, evidence_text: str, objects: list[dict[str, An
     )
     if any(re.search(pattern, evidence_text) for pattern in pass_patterns):
         return "passed", "text pass marker"
-    if command in evidence_text:
-        return "attempted", "command mentioned without pass marker"
+    fail_patterns = (
+        rf"(?im)^\s*FAIL\s+{escaped}\s*$",
+        rf"(?im)^\s*{escaped}\s*(?:->|:|=)\s*(?:[1-9][0-9]*|fail|failed)\s*$",
+        rf"(?im)^\s*validation:\s*{escaped}\s*(?:->|:|=)\s*(?:[1-9][0-9]*|fail|failed)\s*$",
+    )
+    if any(re.search(pattern, evidence_text) for pattern in fail_patterns):
+        return "failed", "text fail marker"
     return "missing", "not observed"
 
 

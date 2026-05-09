@@ -4,11 +4,14 @@ $ARGUMENTS
 
 ## 命令行为
 
-你是 `/user:twin` 的执行入口，不是说明书。根据 `$ARGUMENTS` 直接选择一个最小动作：
+你是 `/twin` 的执行入口，不是说明书。根据 `$ARGUMENTS` 直接选择一个最小动作：
 
 - 没有参数或只有项目路径：先读 `<project>/.xuejiao-twin/CURRENT.md`；如果不存在，提示先 `init`。
 - `init ...`：运行初始化命令，返回 workspace 和下一条 `run` 命令。
-- `run ...` / `next ...`：执行一次 supervised run，随后读 `CURRENT.md` 并只汇报 outcome、focus、next。
+- `run ...`：执行一次 supervised run，随后读 `CURRENT.md` 并只汇报 outcome、focus、next。
+- `next ...`：仅作为 `run --mode supervised-normal` 的别名；必须转换为 `PYTHONPATH=/Users/xuejiao/Codes/dev-rules python3 -m scripts.xuejiao_twin run ... --mode supervised-normal`，禁止把 `next` 直接传给底层 CLI。
+
+**所有调用 `python3 -m scripts.xuejiao_twin` 的命令都必须加前缀 `PYTHONPATH=/Users/xuejiao/Codes/dev-rules`**（除非 cwd 已经在 dev-rules 仓库根目录）。模块物理上在 dev-rules，从 zw-brain 等其它项目运行时不带 PYTHONPATH 会 `No module named scripts.xuejiao_twin`。
 - `status ...` / `current ...`：只读 `CURRENT.md`，不调用 agent。
 - `respond ...`：写 human response 后给下一条 `run` 命令。
 - `replan ...`：重置 dynamic ledger，随后读 `CURRENT.md`。
@@ -18,9 +21,19 @@ $ARGUMENTS
 
 默认保持乔布斯式输出：一个状态、一条下一步、必要证据路径；不要重复 runbook 大段内容。
 
+### `needs_human` 展示契约
+
+当 `run` / `next` 的 outcome 为 `needs_human`（包括 blocked latch），**必须 inline 输出以下三项**，禁止折叠到"去看 CURRENT.md"：
+
+1. **决策背景**：`CURRENT.md` 中的 `trigger` + `summary`（以及 `blocked_features` 的 id、描述、blocked_reason，如果有）。
+2. **respond 命令清单**：从 `CURRENT.md` 的 `respond_commands` 段逐条列出完整可复制的命令（workspace、action、feature 参数已填好，只留 `--note` 让用户填）。
+3. **证据路径**：`CURRENT.md` 和 `events.jsonl` 的路径，供深挖。
+
+这是"下一步"本身就是人类决策的场景，命令选项不是附属细节而是核心输出。
+
 ## 定位
 
-`/user:twin` 是本机 xuejiao supervisor harness 的入口。它读取由 Claude agent 维护的 `persona.json`，并用两个隔离的 Claude Code headless session 监督真实项目任务：
+`/twin` 是本机 xuejiao supervisor harness 的入口。它读取由 Claude agent 维护的 `persona.json`，并用两个隔离的 Claude Code headless session 监督真实项目任务：
 
 - supervisor session：模拟 xuejiao，只生成指令、检查证据、判断继续 / 停止 / 升级；默认无写权限。
 - worker session：执行代码修改、测试和验证；按 goal 配置可使用 `acceptEdits` / `bypassPermissions`，安全靠 worktree + hook gate 兜底。
@@ -30,15 +43,15 @@ $ARGUMENTS
 ## 子命令
 
 ```text
-/user:twin status --project /abs/path
-/user:twin init --goal-file goal.yaml --persona ~/.xuejiao-twin/persona.json
-/user:twin run --project /abs/path --mode supervised-normal
-/user:twin next --project /abs/path
-/user:twin respond --project /abs/path --action approve_and_continue --feature F-003 --note "复用现有模型"
-/user:twin replan --project /abs/path
-/user:twin loop --project /abs/path --every 5m
-/user:twin validate [--fixtures | .xuejiao-twin/runs/<run_id>]
-/user:twin replay .xuejiao-twin/runs/<run_id>/run.json
+/twin status --project /abs/path
+/twin init --goal-file goal.yaml --persona ~/.xuejiao-twin/persona.json
+/twin run --project /abs/path --mode supervised-normal
+/twin next --project /abs/path
+/twin respond --project /abs/path --action approve_and_continue --feature F-003 --note "复用现有模型"
+/twin replan --project /abs/path
+/twin loop --project /abs/path --every 5m
+/twin validate [--fixtures | .xuejiao-twin/runs/<run_id>]
+/twin replay .xuejiao-twin/runs/<run_id>/run.json
 ```
 
 等价 CLI：
@@ -72,7 +85,7 @@ worker 默认接近 `bypassPermissions` / `acceptEdits`，安全预算押在六�
 - **worker worktree 内 `.claude/CLAUDE.md`**：hard rules + scope_out + worker / planner schema 名 + validation commands。session 重启 / compaction 后契约仍存活。
 - **silent `--resume` 检测**：`claude_runner` 比对请求 session id 与 stream-json 首事件返回的 session id，不一致即标 `session_lost=true`，runtime 转 `needs_human` 并写 `session_lost` 事件，避免向重起的 brain 继续灌历史。
 - 危险默认（main/master commit/push、外部副作用、worktree 外写入）一律由 runtime 报 `needs_human`。
-- `blocked latch`：上轮已 `needs_human` 且无新 `human_response.json` 时，重复 `run` 不会再调用 agent，避免 `/loop` 空跑。
+- `blocked latch`：上轮已 `needs_human` / `agent_failed` / `no_progress` / `failed_validation` / `privacy_blocked` 且无新 `human_response.json` 时，重复 `run` 不会再调用 agent，避免 `/loop` 空跑。
 - `validation_gap`：所有 feature completed 但 goal 验证证据不全时，runtime 强制 supervisor 补一个 ledger feature，连续 ≥3 轮无补救才转 `failed_validation`。
 - `no_progress` 熔断：focus + ledger + project_evidence 连续 3 轮指纹一致即停。
 - 隐私层：`token=`、`bearer ...`、`-----BEGIN ... PRIVATE KEY-----`、含敏感 query 的 URL 触发 redaction；命中 `secret_assignment` / `bearer_token` / `private_key` / `sensitive_url` 直接 `privacy_blocked`。hook gate 对 PostToolUse 的 `tool_input` / 响应摘要单独再脱敏，落盘前不带原文 token。
@@ -111,7 +124,7 @@ A 段（settings/MCP 隔离 / append-system-prompt 角色契约 / worker worktre
 | C2 | 切换到 `--output-format json` + `--json-schema`，丢掉启发式 JSON parser | 输出契约从我们解析改为 CLI 强约束；envelope 的 `result/total_cost_usd/is_error` 直接可用 |
 | C3 | 每轮按 envelope 的 `total_cost_usd` 做 per-turn 预算与异常飙升熔断 | 比 stderr 字符串匹配 `budget` 更准 |
 | C4 | supervisor 默认 `--permission-mode plan` | agent 层强制只读，比 disallowedTools 更稳 |
-| D1 | `/user:twin doctor`：体检 claude / git / hook / persona / goal / settings 来源 | 接入新机器更顺 |
+| D1 | `/twin doctor`：体检 claude / git / hook / persona / goal / settings 来源 | 接入新机器更顺 |
 | D2 | `statusLine` 命令把 focus / status / blockers 直接渲染到 Claude Code 状态栏 | 不用每次 cat CURRENT.md |
 | D3 | Notification hook 在 `needs_human` 时弹通知 | `/loop` 长跑 |
 | E1 | `--permission-prompt-tool` 接到本机 MCP server，`supervised-high` 时把 worker 的 novel tool 申请实时交给 supervisor | 把审批流变成 inline 而不是事后 needs_human |
@@ -176,8 +189,8 @@ supervisor 在执行中可通过 `ledger_updates` 要求 runtime 新增或调整
 可与 `/loop` 结合成乔布斯式入口：
 
 ```text
-/loop 5m /user:twin next --project /abs/project
-/loop /user:twin next --project /abs/project
+/loop 5m /twin next --project /abs/project
+/loop /twin next --project /abs/project
 ```
 
 循环体只执行一次 `run` 并刷新 `CURRENT.md`；blocked latch 会在缺少新 `respond` 时保持安静。scheduled routine 也应该遵循同一规则：每次触发只跑一次 `next`，不要手写 shell `while`。
@@ -187,7 +200,7 @@ supervisor 在执行中可通过 `ledger_updates` 要求 runtime 新增或调整
 | 症状 | 可能根因 | 处理 |
 | --- | --- | --- |
 | `outcome=needs_human, stop_reason="ledger quality is poor"` | 旧 ledger 把 goal 当成单 feature / acceptance 全是全局复制 / feature 描述过宽 | `replan` 重生成 |
-| 重复 `run` 不再调用 agent | blocked latch（上轮 needs_human 未 respond） | 写 `respond` 或 `stop_session` |
+| 重复 `run` 不再调用 agent | blocked latch（上轮 needs_human / agent_failed / no_progress / failed_validation / privacy_blocked 未 respond） | 先看 `CURRENT.md` 的 stop_reason，修环境或写 `respond` 后再继续 |
 | `outcome=no_progress, stop_reason="same focus and evidence repeated"` | focus + ledger + evidence 连续 ≥3 轮指纹一致 | 看 `progress.md` 找根因，必要时 `respond --action request_plan_delta` |
 | `outcome=privacy_blocked` | 输出里出现 `secret_assignment` / `bearer_token` / `private_key` / `sensitive_url` | 检查 worktree 是否误读凭证文件，修 goal scope_in/scope_out |
 | `outcome=failed_validation`，所有 focus 都 completed | `validation_gap` 触发，feature 完成但 goal 验证证据缺失 | `respond --action request_plan_delta` 让 supervisor 加补证据 feature |

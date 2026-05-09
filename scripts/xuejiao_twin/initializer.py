@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+import shlex
 import shutil
 from pathlib import Path
 from typing import Any
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+CLI_MODULE_CMD = f"PYTHONPATH={shlex.quote(str(REPO_ROOT))} python3 -m scripts.xuejiao_twin"
 
 from . import SCHEMA_VERSION
 from .util import now_utc, read_yaml_like, write_json
@@ -72,7 +76,7 @@ def init_workspace(goal_file: Path, persona_file: Path, out: Path | None = None)
         f"- Goal: {goal.get('goal', '')}",
         "- Focus: none",
         "- Ledger: revision=0 completed=0 pending=0 blocked=0",
-        "- Next: python3 -m scripts.xuejiao_twin run --workspace <workspace> --mode supervised-normal",
+        f"- Next: {CLI_MODULE_CMD} run --workspace <workspace> --mode supervised-normal",
         "",
     ]
     (workspace / "CURRENT.md").write_text("\n".join(current), encoding="utf-8")
