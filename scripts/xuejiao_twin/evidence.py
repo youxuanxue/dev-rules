@@ -52,6 +52,11 @@ def classify_risk(text: str) -> list[str]:
             continue
         negated_forms = (
             f"不{marker_lower}",
+            f"不 {marker_lower}",
+            f"不要{marker_lower}",
+            f"不要 {marker_lower}",
+            f"不得{marker_lower}",
+            f"不得 {marker_lower}",
             f"未{marker_lower}",
             f"无{marker_lower}",
             f"禁止{marker_lower}",
