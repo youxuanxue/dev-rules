@@ -6,22 +6,6 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-RISK_MARKERS = (
-    "git push --force",
-    "push --force",
-    "force push",
-    "production deploy",
-    "prod deploy",
-    "terraform apply",
-    "rm -rf",
-    "reset --hard",
-    "drop table",
-    "新增依赖",
-    "新依赖",
-    "架构决策",
-    "安全边界",
-)
-
 
 def _run(command: list[str], cwd: Path) -> tuple[int, str]:
     try:
@@ -41,36 +25,6 @@ def collect_project_evidence(project_root: Path) -> dict[str, Any]:
         "git_diff_stat": diff[:4000],
         "git_diff_stat_exit": diff_code,
     }
-
-
-def classify_risk(text: str) -> list[str]:
-    lower = text.lower()
-    risks: list[str] = []
-    for marker in RISK_MARKERS:
-        marker_lower = marker.lower()
-        if marker_lower not in lower:
-            continue
-        negated_forms = (
-            f"不{marker_lower}",
-            f"不 {marker_lower}",
-            f"不要{marker_lower}",
-            f"不要 {marker_lower}",
-            f"不得{marker_lower}",
-            f"不得 {marker_lower}",
-            f"未{marker_lower}",
-            f"无{marker_lower}",
-            f"禁止{marker_lower}",
-            f"禁止 {marker_lower}",
-            f"no {marker_lower}",
-            f"not {marker_lower}",
-            f"never {marker_lower}",
-            f"do not {marker_lower}",
-            f"don't {marker_lower}",
-        )
-        if any(negated in lower for negated in negated_forms):
-            continue
-        risks.append(marker)
-    return risks
 
 
 def _iter_json_objects(text: str) -> list[dict[str, Any]]:

@@ -11,7 +11,7 @@ from typing import Any, Callable
 
 from . import SCHEMA_VERSION
 from .claude_runner import ClaudeRunResult, run_claude_headless
-from .evidence import classify_risk, collect_project_evidence, validation_command_status, validation_coverage
+from .evidence import collect_project_evidence, validation_command_status, validation_coverage
 from .initializer import load_goal
 from .privacy import PrivacyReport, redact_text, redact_value, stable_hash
 from .schema_contract import load_schema, validate_schema
@@ -611,7 +611,7 @@ def _parse_supervisor_decision(text: str, goal: dict[str, Any], ledger: dict[str
     errors = _schema_errors(parsed, SUPERVISOR_DECISION_SCHEMA)
     if errors:
         return {
-            "action": "needs_human" if classify_risk(stripped) or "NEEDS_HUMAN" in stripped else "stop",
+            "action": "needs_human" if "NEEDS_HUMAN" in stripped else "stop",
             "current_focus": fallback_focus,
             "instruction": "",
             "feature_updates": [],
@@ -1648,15 +1648,8 @@ def run_workspace(
                     ledger_changed = _approve_ledger_if_ready(ledger) or ledger_changed
                 ledger_changed = _apply_feature_updates(ledger, decision, report) or ledger_changed
                 write_json(workspace / "feature_ledger.json", ledger)
-                risk_markers.extend(classify_risk(supervisor_text + "\n" + json.dumps(project_evidence, ensure_ascii=False)))
                 final_coverage = validation_coverage(goal, "\n".join(evidence_parts + [json.dumps(ledger, ensure_ascii=False)]))
 
-                if risk_markers:
-                    human_gate_count += 1
-                    outcome = "needs_human"
-                    stop_reason = "risk markers require human review"
-                    _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=None, coverage=final_coverage, stop_reason=stop_reason)
-                    break
                 if decision.get("action") == "needs_human":
                     human_gate_count += 1
                     clarification_count += 1
@@ -1869,15 +1862,6 @@ def run_workspace(
                     stop_reason = _failure_reason(worker_result, "worker")
                     _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=worker_result, coverage=final_coverage, stop_reason=stop_reason)
                     break
-                worker_risks = classify_risk(worker_evidence)
-                if worker_risks:
-                    risk_markers.extend(worker_risks)
-                    human_gate_count += 1
-                    outcome = "needs_human"
-                    stop_reason = "risk markers require human review"
-                    _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=worker_result, coverage=final_coverage, stop_reason=stop_reason)
-                    break
-
                 progress_signature = stable_hash({
                     "focus": ledger.get("current_focus"),
                     "ledger": ledger,

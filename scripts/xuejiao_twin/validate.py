@@ -12,7 +12,7 @@ from .claude_runner import ClaudeRunResult, parse_stream_json
 from .hook_gate import main as hook_gate_main
 from .initializer import feature_ledger, init_workspace
 from .privacy import assert_no_private_leak
-from .evidence import classify_risk, validation_command_status
+from .evidence import validation_command_status
 from .runtime import run_workspace, write_human_response
 from .schema_contract import validate_artifact, validate_schema
 from .util import read_json, write_json
@@ -382,10 +382,6 @@ def run_fixture_validation() -> list[str]:
             errors.append("privacy checker should not flag paths or ordinary UUIDs")
         if "secret_assignment" not in assert_no_private_leak({"value": "token=real-secret-value"}):
             errors.append("privacy checker missed secret assignment")
-        if classify_risk("不新增依赖，禁止 force push，do not production deploy"):
-            errors.append("risk classifier flagged negated risk markers")
-        if "force push" not in classify_risk("agent requested force push"):
-            errors.append("risk classifier missed force push")
         hook_env = {"XUEJIAO_TWIN_ROLE": "worker", "XUEJIAO_TWIN_WORKER_ROOT": worker_calls[0]["cwd"] if worker_calls else str(project_root)}
         dangerous_payload = {"tool_name": "Bash", "cwd": worker_calls[0]["cwd"] if worker_calls else str(project_root), "tool_input": {"command": "git push --force origin main"}}
         if _hook_gate_code(dangerous_payload, hook_env) == 0:
