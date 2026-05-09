@@ -1205,7 +1205,7 @@ def _ledger_quality_errors(ledger: dict[str, Any], goal: dict[str, Any]) -> list
 def _has_unresolved_human_gate(run: dict[str, Any] | None, ledger: dict[str, Any]) -> bool:
     if not run:
         return False
-    if run.get("outcome") in {"needs_human", "agent_failed", "no_progress", "failed_validation", "privacy_blocked"}:
+    if run.get("outcome") in {"needs_human", "privacy_blocked"}:
         return True
     for feature in ledger.get("features", []):
         if isinstance(feature, dict) and feature.get("status") == "blocked":
