@@ -365,6 +365,24 @@ def run_fixture_validation() -> list[str]:
             errors.append("fixture ledger did not mark F-002 completed")
         if any(feature.get("id") == "F-003" and feature.get("status") == "completed" for feature in features) is False:
             errors.append("fixture validation gap did not add and complete F-003")
+        current_text = (workspace / "CURRENT.md").read_text(encoding="utf-8")
+        if "Status: completed_waiting_handoff" not in current_text:
+            errors.append("fixture CURRENT did not render completed handoff status")
+        if "review worker diff and validation evidence" not in current_text:
+            errors.append("fixture CURRENT did not render completed handoff next action")
+        run["outcome"] = "needs_human"
+        write_json(workspace / "runs" / run["run_id"] / "run.json", run)
+        latch_after_completed = run_workspace(workspace, mode="supervised-normal", out=tmp_path / "completed-latch.json", runner=runner)
+        current_text = (workspace / "CURRENT.md").read_text(encoding="utf-8")
+        if latch_after_completed.get("outcome") != "completed":
+            errors.append("fixture completed handoff latch should remain completed")
+        if latch_after_completed.get("validation_report", {}).get("mode") != "completed-handoff-latch":
+            errors.append("fixture completed handoff latch missing mode")
+        if "Status: completed_waiting_handoff" not in current_text:
+            errors.append("fixture completed handoff latch did not update CURRENT")
+        if "Human decision:" in current_text:
+            errors.append("fixture completed handoff latch should not render human decision commands")
+        (workspace / "runs" / run["run_id"] / "run.json").unlink(missing_ok=True)
         progress_text = (workspace / "progress.md").read_text(encoding="utf-8")
         if "turn 2" not in progress_text:
             errors.append("fixture progress did not record multiple turns")

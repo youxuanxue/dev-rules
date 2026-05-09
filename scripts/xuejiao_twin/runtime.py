@@ -102,6 +102,35 @@ def _all_features_completed(ledger: dict[str, Any]) -> bool:
     return bool(features) and all(feature.get("status") == "completed" for feature in features)
 
 
+def _completion_handoff_ready(ledger: dict[str, Any], last_run: dict[str, Any] | None = None) -> bool:
+    if not _all_features_completed(ledger):
+        return False
+    if last_run is None:
+        return True
+    if last_run.get("outcome") == "completed":
+        return True
+    if last_run.get("outcome") != "needs_human":
+        return False
+    validation_report = last_run.get("validation_report") if isinstance(last_run.get("validation_report"), dict) else {}
+    if validation_report.get("privacy_blocks") or validation_report.get("risk_markers"):
+        return False
+    review = last_run.get("human_review") if isinstance(last_run.get("human_review"), dict) else {}
+    blocked_features = review.get("blocked_features") if isinstance(review, dict) else []
+    if blocked_features:
+        return False
+    stop_reason = str(last_run.get("stop_reason") or "").lower()
+    hard_gate_markers = (
+        "privacy",
+        "content filter",
+        "session was silently reset",
+        "ledger quality",
+        "base checkout",
+        "validation evidence incomplete",
+        "validation gap",
+    )
+    return not any(marker in stop_reason for marker in hard_gate_markers)
+
+
 def _feature_status_counts(ledger: dict[str, Any]) -> dict[str, int]:
     counts = {status: 0 for status in _FEATURE_STATUSES}
     for feature in ledger.get("features", []):
@@ -967,7 +996,7 @@ def _write_current(
         f"- Status: {status}",
         f"- Goal: {goal.get('goal', '')}",
         f"- Focus: {focus_id or 'none'}" + (f" — {focus.get('description')}" if focus else ""),
-        f"- Ledger: revision={ledger.get('revision', 'n/a')} completed={counts['completed']} pending={counts['pending']} blocked={counts['blocked']}",
+        f"- Ledger: revision={ledger.get('revision', 'n/a')} completed={counts['completed']} pending={counts['pending']} in_progress={counts['in_progress']} blocked={counts['blocked']} deferred={counts['deferred']}",
     ]
     if run:
         lines.extend([
@@ -1251,6 +1280,13 @@ def _blocked_latch_result(workspace: Path, goal: dict[str, Any], ledger: dict[st
         feature_reason = str(focus.get("blocked_reason") or "").strip()
         if feature_reason:
             guidance = f"{guidance} | focus {focus.get('id')}: {feature_reason}"
+    completed_handoff = _completion_handoff_ready(ledger, last_run)
+    outcome = "completed" if completed_handoff else "needs_human"
+    stop_reason = (
+        f"completed handoff: all ledger features are completed; previous run {last_run.get('run_id', 'previous run')} requested delivery review"
+        if completed_handoff
+        else f"blocked latch: waiting for human_response.json after {last_run.get('run_id', 'previous run')} ({last_run.get('outcome', 'unknown')}: {guidance})"
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "run_id": f"blocked-latch-{stable_hash(str(last_run.get('run_id') or last_run.get('run_path') or workspace), length=10)}",
@@ -1260,10 +1296,10 @@ def _blocked_latch_result(workspace: Path, goal: dict[str, Any], ledger: dict[st
         "events_ref": str(last_run.get("events_ref") or ""),
         "supervisor_session_id": str(last_run.get("supervisor_session_id") or ""),
         "worker_session_id": str(last_run.get("worker_session_id") or ""),
-        "outcome": "needs_human",
-        "stop_reason": f"blocked latch: waiting for human_response.json after {last_run.get('run_id', 'previous run')} ({last_run.get('outcome', 'unknown')}: {guidance})",
+        "outcome": outcome,
+        "stop_reason": stop_reason,
         "human_review": _human_review_summary(
-            outcome="needs_human",
+            outcome=outcome,
             stop_reason=guidance,
             ledger=ledger,
             risk_markers=[],
@@ -1275,7 +1311,7 @@ def _blocked_latch_result(workspace: Path, goal: dict[str, Any], ledger: dict[st
             "agent_call_count": 0,
             "supervisor_turns": 0,
             "worker_turns": 0,
-            "human_gate_count": 1,
+            "human_gate_count": 0 if completed_handoff else 1,
             "clarification_count": 0,
             "retry_count": 0,
             "blocked_risky_actions": 0,
@@ -1289,7 +1325,7 @@ def _blocked_latch_result(workspace: Path, goal: dict[str, Any], ledger: dict[st
         "privacy_report": report.as_dict(),
         "validation_report": {
             "risk_markers": [],
-            "mode": "blocked-latch",
+            "mode": "completed-handoff-latch" if completed_handoff else "blocked-latch",
             "privacy_blocks": [],
             "validation_commands": validation_command_status(goal, json.dumps(ledger, ensure_ascii=False)),
         },
@@ -1375,7 +1411,9 @@ def run_workspace(
         latest_run = _latest_run(workspace)
         if _has_unresolved_human_gate(latest_run, ledger):
             result = _blocked_latch_result(workspace, goal, ledger, latest_run or {})
-            _write_current(workspace, status="needs_human", goal=goal, ledger=ledger, run=result, next_action=f"write human_response.json via `{CLI_MODULE_CMD} respond ...`")
+            current_status = "completed_waiting_handoff" if result.get("outcome") == "completed" else "needs_human"
+            next_action = "review worker diff and validation evidence; ship if acceptable" if result.get("outcome") == "completed" else f"write human_response.json via `{CLI_MODULE_CMD} respond ...`"
+            _write_current(workspace, status=current_status, goal=goal, ledger=ledger, run=result, next_action=next_action)
             return result
     quality_errors = _ledger_quality_errors(ledger, goal)
     if mode != "dry-run" and quality_errors and _ledger_planning_status(ledger) == "approved":
@@ -1847,9 +1885,13 @@ def run_workspace(
                     _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=worker_result, coverage=final_coverage, stop_reason=stop_reason)
                     break
                 if parsed_worker and parsed_worker.get("needs_human"):
-                    human_gate_count += 1
-                    outcome = "needs_human"
                     stop_reason = "; ".join(str(item) for item in parsed_worker.get("blockers", []) if str(item)) or "worker requested human review"
+                    if not parsed_worker.get("blockers") and _completion_handoff_ready(ledger):
+                        outcome = "completed"
+                        stop_reason = f"all features completed; {stop_reason}"
+                    else:
+                        human_gate_count += 1
+                        outcome = "needs_human"
                     _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=worker_result, coverage=final_coverage, stop_reason=stop_reason)
                     break
                 if privacy_blocks:
@@ -1950,11 +1992,13 @@ def run_workspace(
     }
     write_json(run_path, run)
     next_action = ""
+    current_status = outcome
     if outcome == "needs_human":
         next_action = f"{CLI_MODULE_CMD} respond --workspace <workspace> --action <approve_and_continue|request_plan_delta|defer_feature|stop_session>"
     elif outcome in {"failed_validation", "no_progress", "privacy_blocked", "agent_failed"}:
         next_action = "inspect run artifact and decide whether to respond, replan, or fix environment"
     elif outcome == "completed":
-        next_action = "review artifacts and ship if acceptable"
-    _write_current(workspace, status=outcome, goal=goal, ledger=ledger, run=run, next_action=next_action, validation_statuses=final_validation_statuses, worker_cwd=str(worker_root))
+        current_status = "completed_waiting_handoff"
+        next_action = "review worker diff and validation evidence; ship if acceptable"
+    _write_current(workspace, status=current_status, goal=goal, ledger=ledger, run=run, next_action=next_action, validation_statuses=final_validation_statuses, worker_cwd=str(worker_root))
     return run
