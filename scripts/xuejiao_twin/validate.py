@@ -72,9 +72,8 @@ class FakeRunner:
         if kwargs.get("dry_run"):
             return ClaudeRunResult(session_id=session_id, output_text="先 dry-run fixture", returncode=0, raw_events=[])
         if role == "supervisor":
-            turn = sum(1 for call in self.calls if call["role"] == "supervisor")
             ledger_updates = {"add_features": [], "update_features": [], "current_focus": None}
-            if turn == 1:
+            if "needs_draft" in prompt:
                 output = {
                     "action": "draft_ledger",
                     "current_focus": None,
@@ -83,7 +82,7 @@ class FakeRunner:
                     "ledger_updates": ledger_updates,
                     "reason": "ledger 为空，需要先生成执行账本",
                 }
-            elif turn == 2:
+            elif "drafted" in prompt:
                 output = {
                     "action": "continue",
                     "current_focus": "F-001",
@@ -96,50 +95,14 @@ class FakeRunner:
                     },
                     "reason": "ledger draft 可执行，批准并补充一项后续 feature",
                 }
-            elif turn == 3:
-                output = {
-                    "action": "continue",
-                    "current_focus": "F-002",
-                    "instruction": "请直接实现 F-002 的 fixture 最小改动，并返回验证证据。",
-                    "feature_updates": [],
-                    "ledger_updates": ledger_updates,
-                    "reason": "继续推进追加 feature",
-                }
-            elif turn == 4:
-                output = {
-                    "action": "stop",
-                    "current_focus": "F-002",
-                    "instruction": "",
-                    "feature_updates": [
-                        {"id": "F-001", "status": "completed", "validation_evidence": ["npm test"], "blocked_reason": None},
-                        {"id": "F-002", "status": "completed", "validation_evidence": ["npm test"], "blocked_reason": None},
-                    ],
-                    "ledger_updates": ledger_updates,
-                    "reason": "fixture implementation done but validation evidence incomplete",
-                }
-            elif turn == 5:
-                output = {
-                    "action": "continue",
-                    "current_focus": None,
-                    "instruction": "",
-                    "feature_updates": [],
-                    "ledger_updates": {
-                        "add_features": [{"description": "补齐 scripts/preflight.sh 验证证据", "acceptance": ["scripts/preflight.sh 有执行证据"], "blocked_reason": None}],
-                        "update_features": [],
-                        "current_focus": "F-003",
-                    },
-                    "reason": "validation gap requires an extra ledger feature",
-                }
             else:
                 output = {
-                    "action": "stop",
-                    "current_focus": "F-003",
-                    "instruction": "",
-                    "feature_updates": [
-                        {"id": "F-003", "status": "completed", "validation_evidence": ["./scripts/preflight.sh"], "blocked_reason": None},
-                    ],
+                    "action": "continue",
+                    "current_focus": "F-001",
+                    "instruction": "请直接实现当前 fixture 最小改动，并返回验证证据。",
+                    "feature_updates": [],
                     "ledger_updates": ledger_updates,
-                    "reason": "fixture evidence complete",
+                    "reason": "fixture approved ledger can continue",
                 }
             return ClaudeRunResult(session_id="supervisor-session", output_text=json_dumps(output), returncode=0, raw_events=[])
         if role == "ledger_planner":
@@ -524,6 +487,27 @@ def run_fixture_validation() -> list[str]:
             errors.append("fixture bad ledger did not trigger needs_replan")
         if "needs_replan" not in (workspace / "CURRENT.md").read_text(encoding="utf-8"):
             errors.append("fixture bad ledger did not update CURRENT")
+        write_json(workspace / "feature_ledger.json", good_ledger)
+        worker_preflight = workspace / "worktrees" / "worker" / "scripts" / "preflight.sh"
+        worker_preflight.write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+        failed_validation_ledger = {
+            **good_ledger,
+            "features": [
+                {**feature, "status": "pending" if index == 0 else "completed"}
+                for index, feature in enumerate(good_ledger.get("features", []))
+            ],
+            "current_focus": good_ledger.get("features", [{}])[0].get("id"),
+        }
+        write_json(workspace / "feature_ledger.json", failed_validation_ledger)
+        failed_validation_runner = FakeRunner()
+        failed_validation_run = run_workspace(workspace, mode="supervised-normal", out=tmp_path / "failed-validation.json", runner=failed_validation_runner)
+        if failed_validation_run.get("outcome") != "failed_validation":
+            errors.append(f"fixture runtime validation failure expected failed_validation, got {failed_validation_run.get('outcome')}")
+        if "runtime validation failed" not in str(failed_validation_run.get("stop_reason") or ""):
+            errors.append("fixture runtime validation failure missing stop reason")
+        if failed_validation_run.get("metrics", {}).get("supervisor_turns", 0) > 2:
+            errors.append("fixture runtime validation failure should not loop through supervisor")
+        worker_preflight.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
         write_json(workspace / "feature_ledger.json", good_ledger)
 
         write_human_response(

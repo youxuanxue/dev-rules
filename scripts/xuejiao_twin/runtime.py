@@ -1918,8 +1918,9 @@ def run_workspace(
                         stop_reason = "all features completed"
                     else:
                         validation_gap_count += 1
-                        outcome = "failed_validation" if validation_gap_count >= 2 else "no_progress"
-                        stop_reason = "validation evidence incomplete"
+                        outcome = "failed_validation"
+                        failed_commands = [str(item.get("command") or "") for item in final_validation_statuses if item.get("status") == "failed"]
+                        stop_reason = "runtime validation failed" + (": " + "; ".join(failed_commands[:3]) if failed_commands else "")
                     _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=None, coverage=final_coverage, stop_reason=stop_reason)
                     break
                 if (decision.get("action") == "stop" or _all_features_completed(ledger)) and worker_turns == 0:
@@ -2003,7 +2004,7 @@ def run_workspace(
                         session_id=worker_session_id,
                         timeout_seconds=_remaining_timeout(started_at, max_wall_seconds),
                         disallowed_tools=_disallowed_tools(goal, "worker"),
-                        permission_mode=_permission_mode(goal, "worker"),
+                        permission_mode="",
                         role="worker",
                         extra_env=runner_env,
                         append_system_prompt=_worker_system(goal),
@@ -2017,8 +2018,10 @@ def run_workspace(
                         session_state["worker_session_id"] = worker_session_id
                         session_state["last_run_id"] = run_id
                         _write_session_state(workspace, session_state)
+                    worker_result = repair_result
                     last_worker_result = repair_result
                     repair_text = repair_result.output_text.strip()
+                    worker_text = repair_text
                     parsed_worker, worker_schema_errors = _parse_worker_result(repair_text)
                     worker_evidence = _worker_evidence_text(parsed_worker, repair_text)
                     evidence_parts.append(worker_evidence)
