@@ -504,21 +504,29 @@ def _worker_system(goal: dict[str, Any]) -> str:
             "Do not modify or push main/master.",
             "Do not introduce dependencies unless explicitly approved.",
             "Stop and report architecture/security/data decisions.",
-            "Return changed files, validation attempted, failures, and blockers.",
+            "Keep moving through the next deliverable; runtime owns authoritative validation commands.",
+            "Return changed files, lightweight validation hints, failures, and blockers.",
         ],
     }
     return "xuejiao twin worker stable contract:\n" + json.dumps(payload, ensure_ascii=False, indent=2)
 
 
-def _worker_user(instruction: str) -> str:
-    return json.dumps({
+def _worker_user(instruction: str, ledger: dict[str, Any] | None = None, run_history: list[dict[str, Any]] | None = None) -> str:
+    payload: dict[str, Any] = {
         "instruction": instruction,
         "output_schema_name": WORKER_RESULT_SCHEMA,
-    }, ensure_ascii=False, indent=2)
+    }
+    if ledger is not None:
+        payload["feature_ledger"] = ledger
+        payload["current_focus"] = ledger.get("current_focus")
+        payload["next_feature"] = _next_feature(ledger)
+    if run_history:
+        payload["recent_run_history"] = run_history[-6:]
+    return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
-def _worker_prompt(instruction: str, goal: dict[str, Any]) -> tuple[str, str]:
-    return _worker_system(goal), _worker_user(instruction)
+def _worker_prompt(instruction: str, goal: dict[str, Any], ledger: dict[str, Any] | None = None, run_history: list[dict[str, Any]] | None = None) -> tuple[str, str]:
+    return _worker_system(goal), _worker_user(instruction, ledger, run_history)
 
 
 def _role_tools(goal: dict[str, Any], field: str, role: str) -> list[str]:
@@ -686,6 +694,14 @@ def _parse_worker_result(text: str) -> tuple[dict[str, Any] | None, list[str]]:
     return (None, errors) if errors else (parsed, [])
 
 
+def _worker_repair_prompt(raw_text: str) -> str:
+    return json.dumps({
+        "instruction": "上一轮 worker 输出不符合 schema。不要改代码，不要运行工具，只基于上一轮实际结果返回一个符合 worker_result schema 的 JSON 对象。",
+        "output_schema_name": WORKER_RESULT_SCHEMA,
+        "previous_output_excerpt": raw_text[-4000:],
+    }, ensure_ascii=False, indent=2)
+
+
 def _worker_evidence_text(worker: dict[str, Any] | None, raw_text: str) -> str:
     if worker is None:
         return raw_text
@@ -701,6 +717,38 @@ def _redact_list(values: Any, report: PrivacyReport) -> list[str]:
         if text:
             redacted.append(text)
     return redacted
+
+
+def _complete_focus_from_worker(ledger: dict[str, Any], decision: dict[str, Any], worker: dict[str, Any] | None, report: PrivacyReport) -> bool:
+    before = stable_hash(ledger)
+    focus = _feature_by_id(ledger, decision.get("current_focus")) or _next_feature(ledger)
+    if not focus:
+        return False
+    focus["status"] = "completed"
+    focus["blocked_reason"] = None
+    verified_at = now_utc()
+    focus["last_verified_at"] = verified_at
+    ledger["last_verified_at"] = verified_at
+    evidence = focus.setdefault("validation_evidence", [])
+    if worker:
+        summary = str(worker.get("summary") or "").strip()
+        if summary:
+            evidence.append(redact_text(f"worker summary: {summary}", report)[0])
+        for item in worker.get("validation", []) if isinstance(worker.get("validation"), list) else []:
+            if not isinstance(item, dict):
+                continue
+            command = str(item.get("command") or "").strip()
+            status = str(item.get("status") or "").strip()
+            if command and status:
+                evidence.append(redact_text(f"{command}: {status}", report)[0])
+    if len(evidence) > 20:
+        del evidence[:-20]
+    next_feature = _next_feature(ledger)
+    ledger["current_focus"] = next_feature.get("id") if next_feature else None
+    changed = stable_hash(ledger) != before
+    if changed:
+        _touch_ledger(ledger)
+    return changed
 
 
 def _apply_feature_updates(ledger: dict[str, Any], decision: dict[str, Any], report: PrivacyReport) -> bool:
@@ -919,6 +967,33 @@ def _record_event(events: list[dict[str, Any]], events_path: Path, event: dict[s
     events.append(event)
     with events_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def _run_validation_commands(goal: dict[str, Any], cwd: Path, report: PrivacyReport) -> tuple[list[dict[str, Any]], str]:
+    commands = [str(command) for command in goal.get("validation_commands", []) if str(command).strip()]
+    statuses: list[dict[str, Any]] = []
+    evidence_lines: list[str] = []
+    for command in commands:
+        try:
+            proc = subprocess.run(command, cwd=cwd, shell=True, capture_output=True, text=True, timeout=300, env=_git_subprocess_env())
+            output = (proc.stdout + proc.stderr).strip()
+            returncode = proc.returncode
+        except Exception as exc:
+            output = str(exc)
+            returncode = 1
+        status = "passed" if returncode == 0 else "failed"
+        redacted_output, flags = redact_text(output, report)
+        evidence = redacted_output[-1000:]
+        item = {
+            "command": command,
+            "status": status,
+            "returncode": returncode,
+            "evidence": evidence,
+            "privacy_flags": flags,
+        }
+        statuses.append(item)
+        evidence_lines.append(json.dumps({"command": command, "status": status, "returncode": returncode, "evidence": evidence}, ensure_ascii=False, sort_keys=True))
+    return statuses, "\n".join(evidence_lines)
 
 
 def _count_hook_events(path: Path) -> dict[str, int]:
@@ -1470,6 +1545,8 @@ def run_workspace(
     outcome = "agent_failed"
     stop_reason = "worker completed one supervised turn"
     final_coverage = 0.0
+    final_validation_statuses: list[dict[str, Any]] = []
+    runtime_validation_evidence = ""
     last_decision: dict[str, Any] | None = None
     last_worker_result: ClaudeRunResult | None = None
     run_history: list[dict[str, Any]] = []
@@ -1572,245 +1649,284 @@ def run_workspace(
                 if time.monotonic() - started_at > max_wall_seconds:
                     outcome = "no_progress"
                     stop_reason = "max_wall_minutes exceeded"
-                    _append_progress(
-                        workspace,
-                        run_id=run_id,
-                        turn_index=turn_index,
-                        decision=last_decision,
-                        worker_result=last_worker_result,
-                        coverage=final_coverage,
-                        stop_reason=stop_reason,
-                    )
+                    _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=last_decision, worker_result=last_worker_result, coverage=final_coverage, stop_reason=stop_reason)
                     break
 
                 project_evidence = _collect_project_evidence(worker_root, report)
                 evidence_parts.append(json.dumps(project_evidence, ensure_ascii=False, sort_keys=True))
-                validation_gap = _all_features_completed(ledger) and final_coverage < 1.0 and worker_turns > 0
-                supervisor_system, supervisor_user_text = _supervisor_prompt(goal, persona, ledger, project_evidence, turn_index, run_history[-8:], validation_gap=validation_gap)
-                requested_supervisor_session = supervisor_session_id
-                supervisor_result = runner(
-                    supervisor_user_text,
-                    cwd=worker_root,
-                    allowed_tools=_allowed_tools(goal, "supervisor"),
-                    max_budget_usd=max_budget_usd,
-                    session_id=supervisor_session_id,
-                    timeout_seconds=_remaining_timeout(started_at, max_wall_seconds),
-                    disallowed_tools=_disallowed_tools(goal, "supervisor"),
-                    permission_mode=_permission_mode(goal, "supervisor"),
-                    role="supervisor",
-                    extra_env=runner_env,
-                    append_system_prompt=supervisor_system,
-                    setting_sources="project,local",
-                    strict_mcp_config=True,
-                )
-                supervisor_turns += 1
-                agent_call_count += 1
-                if supervisor_result.session_lost:
-                    _record_event(events, events_path, {
-                        "timestamp": now_utc(),
-                        "type": "session_lost",
-                        "role": "supervisor",
-                        "turn_index": turn_index,
-                        "requested_session_hash": stable_hash(requested_supervisor_session) if requested_supervisor_session else "",
-                        "actual_session_hash": stable_hash(supervisor_result.session_id) if supervisor_result.session_id else "",
-                    })
-                    outcome = "needs_human"
-                    stop_reason = "supervisor session was silently reset by Claude Code; run replan or replay before continuing"
-                    human_gate_count += 1
-                    _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=None, worker_result=None, coverage=final_coverage, stop_reason=stop_reason)
-                    break
-                if supervisor_result.session_id:
-                    supervisor_session_id = supervisor_result.session_id
-                    session_state["supervisor_session_id"] = supervisor_session_id
-                    session_state["last_run_id"] = run_id
-                    _write_session_state(workspace, session_state)
-                supervisor_text = supervisor_result.output_text.strip()
-                evidence_parts.append(supervisor_text)
-                decision = _parse_supervisor_decision(supervisor_text, goal, ledger)
-                schema_errors = list(decision.get("schema_errors") or [])
-                last_decision = decision
-                instruction_redacted, instruction_flags = redact_text(decision.get("instruction") or supervisor_text, report)
-                reason_redacted, reason_flags = redact_text(str(decision.get("reason") or ""), report)
-                event_flags = sorted(set(instruction_flags + reason_flags))
-                privacy_blocks.extend(_blocking_privacy(event_flags))
-                _record_event(events, events_path, {
-                    "timestamp": now_utc(),
-                    "type": "supervisor_instruction",
-                    "turn_index": turn_index,
-                    "action": decision.get("action"),
-                    "current_focus": decision.get("current_focus"),
-                    "reason_redacted": reason_redacted,
-                    "session_hash": stable_hash(supervisor_session_id) if supervisor_session_id else "",
-                    "text_redacted": instruction_redacted,
-                    "privacy_flags": event_flags,
-                    "returncode": supervisor_result.returncode,
-                    "schema_name": SUPERVISOR_DECISION_SCHEMA,
-                    "schema_valid": not schema_errors,
-                    "schema_errors": schema_errors,
-                })
-                run_history.append({
-                    "turn_index": turn_index,
-                    "type": "supervisor_instruction",
-                    "action": decision.get("action"),
-                    "current_focus": decision.get("current_focus"),
-                    "reason_redacted": reason_redacted,
-                    "text_redacted": instruction_redacted[:1000],
-                    "returncode": supervisor_result.returncode,
-                    "schema_errors": schema_errors,
-                })
+                validation_gap = False
+                needs_supervisor_turn = turn_index == 1 or _ledger_planning_status(ledger) != "approved" or _ledger_is_empty(ledger) or bool(pending_supervisor_note)
+                ledger_changed = False
 
-                if schema_errors:
-                    if supervisor_result.returncode:
-                        outcome = _failure_outcome(supervisor_result)
-                        stop_reason = _failure_reason(supervisor_result, "supervisor")
-                    else:
-                        outcome = "needs_human" if decision.get("action") == "needs_human" else "agent_failed"
-                        stop_reason = str(decision.get("reason") or "supervisor schema validation failed")
-                    if outcome == "needs_human":
-                        human_gate_count += 1
-                    _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=None, coverage=final_coverage, stop_reason=stop_reason)
-                    break
-                if privacy_blocks:
-                    outcome = "privacy_blocked"
-                    stop_reason = "privacy markers require human review"
-                    _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=None, coverage=final_coverage, stop_reason=stop_reason)
-                    break
-                if supervisor_result.returncode:
-                    outcome = _failure_outcome(supervisor_result)
-                    stop_reason = _failure_reason(supervisor_result, "supervisor")
-                    _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=None, coverage=final_coverage, stop_reason=stop_reason)
-                    break
-
-                ledger_changed = _apply_ledger_updates(ledger, decision, goal, report)
-                if decision.get("action") == "continue":
-                    ledger_changed = _approve_ledger_if_ready(ledger) or ledger_changed
-                ledger_changed = _apply_feature_updates(ledger, decision, report) or ledger_changed
-                write_json(workspace / "feature_ledger.json", ledger)
-                final_coverage = validation_coverage(goal, "\n".join(evidence_parts + [json.dumps(ledger, ensure_ascii=False)]))
-
-                if decision.get("action") == "needs_human":
-                    human_gate_count += 1
-                    clarification_count += 1
-                    outcome = "needs_human"
-                    stop_reason = redact_text(str(decision.get("reason") or "supervisor requested human input"), report)[0]
-                    _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=None, coverage=final_coverage, stop_reason=stop_reason)
-                    break
-                if decision.get("action") == "draft_ledger":
-                    planner_system, planner_user_text = _ledger_draft_prompt(str(decision.get("instruction") or _fallback_instruction(goal, ledger)), goal, ledger, project_evidence, run_history[-8:])
-                    requested_worker_session = worker_session_id
-                    draft_result = runner(
-                        planner_user_text,
+                if needs_supervisor_turn:
+                    supervisor_system, supervisor_user_text = _supervisor_prompt(goal, persona, ledger, project_evidence, turn_index, run_history[-8:], validation_gap=validation_gap)
+                    requested_supervisor_session = supervisor_session_id
+                    supervisor_result = runner(
+                        supervisor_user_text,
                         cwd=worker_root,
-                        allowed_tools=_ledger_draft_allowed_tools(goal),
+                        allowed_tools=_allowed_tools(goal, "supervisor"),
                         max_budget_usd=max_budget_usd,
-                        session_id=worker_session_id,
+                        session_id=supervisor_session_id,
                         timeout_seconds=_remaining_timeout(started_at, max_wall_seconds),
-                        disallowed_tools=_ledger_draft_disallowed_tools(goal),
-                        permission_mode=_permission_mode(goal, "worker"),
-                        role="worker",
+                        disallowed_tools=_disallowed_tools(goal, "supervisor"),
+                        permission_mode=_permission_mode(goal, "supervisor"),
+                        role="supervisor",
                         extra_env=runner_env,
-                        append_system_prompt=planner_system,
+                        append_system_prompt=supervisor_system,
                         setting_sources="project,local",
                         strict_mcp_config=True,
                     )
-                    worker_turns += 1
+                    supervisor_turns += 1
                     agent_call_count += 1
-                    if draft_result.session_lost:
+                    if supervisor_result.session_lost:
                         _record_event(events, events_path, {
                             "timestamp": now_utc(),
                             "type": "session_lost",
-                            "role": "ledger_planner",
+                            "role": "supervisor",
                             "turn_index": turn_index,
-                            "requested_session_hash": stable_hash(requested_worker_session) if requested_worker_session else "",
-                            "actual_session_hash": stable_hash(draft_result.session_id) if draft_result.session_id else "",
+                            "requested_session_hash": stable_hash(requested_supervisor_session) if requested_supervisor_session else "",
+                            "actual_session_hash": stable_hash(supervisor_result.session_id) if supervisor_result.session_id else "",
                         })
                         outcome = "needs_human"
-                        stop_reason = "ledger planner session was silently reset by Claude Code; run replan or replay before continuing"
+                        stop_reason = "supervisor session was silently reset by Claude Code; run replan or replay before continuing"
                         human_gate_count += 1
-                        _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=draft_result, coverage=final_coverage, stop_reason=stop_reason)
+                        _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=None, worker_result=None, coverage=final_coverage, stop_reason=stop_reason)
                         break
-                    if draft_result.session_id:
-                        worker_session_id = draft_result.session_id
-                        session_state["worker_session_id"] = worker_session_id
+                    if supervisor_result.session_id:
+                        supervisor_session_id = supervisor_result.session_id
+                        session_state["supervisor_session_id"] = supervisor_session_id
                         session_state["last_run_id"] = run_id
                         _write_session_state(workspace, session_state)
-                    last_worker_result = draft_result
-                    draft_text = draft_result.output_text.strip()
-                    evidence_parts.append(draft_text)
-                    draft_redacted, draft_flags = redact_text(draft_text, report)
-                    privacy_blocks.extend(_blocking_privacy(draft_flags))
-                    new_ledger, draft_errors = _parse_ledger_draft(draft_text, goal, report)
-                    if new_ledger is not None:
-                        ledger.clear()
-                        ledger.update(new_ledger)
-                        write_json(workspace / "feature_ledger.json", ledger)
-                        ledger_changed = True
+                    supervisor_text = supervisor_result.output_text.strip()
+                    evidence_parts.append(supervisor_text)
+                    decision = _parse_supervisor_decision(supervisor_text, goal, ledger)
+                    schema_errors = list(decision.get("schema_errors") or [])
+                    last_decision = decision
+                    instruction_redacted, instruction_flags = redact_text(decision.get("instruction") or supervisor_text, report)
+                    reason_redacted, reason_flags = redact_text(str(decision.get("reason") or ""), report)
+                    event_flags = sorted(set(instruction_flags + reason_flags))
+                    privacy_blocks.extend(_blocking_privacy(event_flags))
                     _record_event(events, events_path, {
                         "timestamp": now_utc(),
-                        "type": "ledger_draft",
+                        "type": "supervisor_instruction",
                         "turn_index": turn_index,
-                        "session_hash": stable_hash(worker_session_id) if worker_session_id else "",
-                        "returncode": draft_result.returncode,
-                        "text_redacted": draft_redacted[:2000],
-                        "privacy_flags": draft_flags,
-                        "errors": draft_errors,
-                        "schema_name": LEDGER_DRAFT_SCHEMA,
-                        "schema_valid": not draft_errors,
-                        "schema_errors": draft_errors,
+                        "action": decision.get("action"),
+                        "current_focus": decision.get("current_focus"),
+                        "reason_redacted": reason_redacted,
+                        "session_hash": stable_hash(supervisor_session_id) if supervisor_session_id else "",
+                        "text_redacted": instruction_redacted,
+                        "privacy_flags": event_flags,
+                        "returncode": supervisor_result.returncode,
+                        "schema_name": SUPERVISOR_DECISION_SCHEMA,
+                        "schema_valid": not schema_errors,
+                        "schema_errors": schema_errors,
                     })
                     run_history.append({
                         "turn_index": turn_index,
-                        "type": "ledger_draft",
-                        "text_redacted": draft_redacted[:1000],
-                        "errors": draft_errors,
-                        "returncode": draft_result.returncode,
+                        "type": "supervisor_instruction",
+                        "action": decision.get("action"),
+                        "current_focus": decision.get("current_focus"),
+                        "reason_redacted": reason_redacted,
+                        "text_redacted": instruction_redacted[:1000],
+                        "returncode": supervisor_result.returncode,
+                        "schema_errors": schema_errors,
                     })
+
+                    if schema_errors:
+                        if supervisor_result.returncode:
+                            outcome = _failure_outcome(supervisor_result)
+                            stop_reason = _failure_reason(supervisor_result, "supervisor")
+                        else:
+                            outcome = "needs_human" if decision.get("action") == "needs_human" else "agent_failed"
+                            stop_reason = str(decision.get("reason") or "supervisor schema validation failed")
+                        if outcome == "needs_human":
+                            human_gate_count += 1
+                        _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=None, coverage=final_coverage, stop_reason=stop_reason)
+                        break
+                    if privacy_blocks:
+                        outcome = "privacy_blocked"
+                        stop_reason = "privacy markers require human review"
+                        _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=None, coverage=final_coverage, stop_reason=stop_reason)
+                        break
+                    if supervisor_result.returncode:
+                        outcome = _failure_outcome(supervisor_result)
+                        stop_reason = _failure_reason(supervisor_result, "supervisor")
+                        _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=None, coverage=final_coverage, stop_reason=stop_reason)
+                        break
+
+                    ledger_changed = _apply_ledger_updates(ledger, decision, goal, report)
+                    if decision.get("action") == "continue":
+                        ledger_changed = _approve_ledger_if_ready(ledger) or ledger_changed
+                    ledger_changed = _apply_feature_updates(ledger, decision, report) or ledger_changed
+                    write_json(workspace / "feature_ledger.json", ledger)
+                    final_coverage = validation_coverage(goal, "\n".join(evidence_parts + [runtime_validation_evidence, json.dumps(ledger, ensure_ascii=False)]))
+
+                    if decision.get("action") == "needs_human":
+                        human_gate_count += 1
+                        clarification_count += 1
+                        outcome = "needs_human"
+                        stop_reason = redact_text(str(decision.get("reason") or "supervisor requested human input"), report)[0]
+                        _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=None, coverage=final_coverage, stop_reason=stop_reason)
+                        break
+                    if decision.get("action") == "draft_ledger":
+                        planner_system, planner_user_text = _ledger_draft_prompt(str(decision.get("instruction") or _fallback_instruction(goal, ledger)), goal, ledger, project_evidence, run_history[-8:])
+                        requested_worker_session = worker_session_id
+                        draft_result = runner(
+                            planner_user_text,
+                            cwd=worker_root,
+                            allowed_tools=_ledger_draft_allowed_tools(goal),
+                            max_budget_usd=max_budget_usd,
+                            session_id=worker_session_id,
+                            timeout_seconds=_remaining_timeout(started_at, max_wall_seconds),
+                            disallowed_tools=_ledger_draft_disallowed_tools(goal),
+                            permission_mode=_permission_mode(goal, "worker"),
+                            role="worker",
+                            extra_env=runner_env,
+                            append_system_prompt=planner_system,
+                            setting_sources="project,local",
+                            strict_mcp_config=True,
+                        )
+                        worker_turns += 1
+                        agent_call_count += 1
+                        if draft_result.session_lost:
+                            _record_event(events, events_path, {
+                                "timestamp": now_utc(),
+                                "type": "session_lost",
+                                "role": "ledger_planner",
+                                "turn_index": turn_index,
+                                "requested_session_hash": stable_hash(requested_worker_session) if requested_worker_session else "",
+                                "actual_session_hash": stable_hash(draft_result.session_id) if draft_result.session_id else "",
+                            })
+                            outcome = "needs_human"
+                            stop_reason = "ledger planner session was silently reset by Claude Code; run replan or replay before continuing"
+                            human_gate_count += 1
+                            _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=draft_result, coverage=final_coverage, stop_reason=stop_reason)
+                            break
+                        if draft_result.session_id:
+                            worker_session_id = draft_result.session_id
+                            session_state["worker_session_id"] = worker_session_id
+                            session_state["last_run_id"] = run_id
+                            _write_session_state(workspace, session_state)
+                        last_worker_result = draft_result
+                        draft_text = draft_result.output_text.strip()
+                        evidence_parts.append(draft_text)
+                        draft_redacted, draft_flags = redact_text(draft_text, report)
+                        privacy_blocks.extend(_blocking_privacy(draft_flags))
+                        new_ledger, draft_errors = _parse_ledger_draft(draft_text, goal, report)
+                        if new_ledger is not None:
+                            ledger.clear()
+                            ledger.update(new_ledger)
+                            write_json(workspace / "feature_ledger.json", ledger)
+                            ledger_changed = True
+                        _record_event(events, events_path, {
+                            "timestamp": now_utc(),
+                            "type": "ledger_draft",
+                            "turn_index": turn_index,
+                            "session_hash": stable_hash(worker_session_id) if worker_session_id else "",
+                            "returncode": draft_result.returncode,
+                            "text_redacted": draft_redacted[:2000],
+                            "privacy_flags": draft_flags,
+                            "errors": draft_errors,
+                            "schema_name": LEDGER_DRAFT_SCHEMA,
+                            "schema_valid": not draft_errors,
+                            "schema_errors": draft_errors,
+                        })
+                        run_history.append({
+                            "turn_index": turn_index,
+                            "type": "ledger_draft",
+                            "text_redacted": draft_redacted[:1000],
+                            "errors": draft_errors,
+                            "returncode": draft_result.returncode,
+                        })
+                        final_coverage = validation_coverage(goal, "\n".join(evidence_parts + [runtime_validation_evidence, json.dumps(ledger, ensure_ascii=False)]))
+                        if privacy_blocks:
+                            outcome = "privacy_blocked"
+                            stop_reason = "privacy markers require human review"
+                            _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=draft_result, coverage=final_coverage, stop_reason=stop_reason)
+                            break
+                        if draft_result.returncode:
+                            outcome = _failure_outcome(draft_result)
+                            stop_reason = _failure_reason(draft_result, "ledger draft worker")
+                            _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=draft_result, coverage=final_coverage, stop_reason=stop_reason)
+                            break
+                        if draft_errors:
+                            no_progress_count += 1
+                            if no_progress_count >= 3:
+                                outcome = "no_progress"
+                                stop_reason = "ledger draft validation failed repeatedly"
+                                _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=draft_result, coverage=final_coverage, stop_reason=stop_reason)
+                                break
+                        else:
+                            no_progress_count = 0
+                        _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=draft_result, coverage=final_coverage, stop_reason="ledger draft generated")
+                        continue
+                else:
+                    feature = _next_feature(ledger)
+                    decision = {
+                        "action": "continue" if feature else "stop",
+                        "current_focus": feature.get("id") if feature else ledger.get("current_focus"),
+                        "instruction": _fallback_instruction(goal, ledger),
+                        "feature_updates": [],
+                        "ledger_updates": {},
+                        "reason": "worker-led supervised turn",
+                        "schema_errors": [],
+                    }
+                    last_decision = decision
+                    ledger_changed = _apply_feature_updates(ledger, decision, report)
+                    write_json(workspace / "feature_ledger.json", ledger)
+                    final_coverage = validation_coverage(goal, "\n".join(evidence_parts + [runtime_validation_evidence, json.dumps(ledger, ensure_ascii=False)]))
+                    _record_event(events, events_path, {
+                        "timestamp": now_utc(),
+                        "type": "worker_led_instruction",
+                        "turn_index": turn_index,
+                        "action": decision.get("action"),
+                        "current_focus": decision.get("current_focus"),
+                        "text_redacted": redact_text(str(decision.get("instruction") or ""), report)[0][:2000],
+                    })
+                    run_history.append({
+                        "turn_index": turn_index,
+                        "type": "worker_led_instruction",
+                        "action": decision.get("action"),
+                        "current_focus": decision.get("current_focus"),
+                        "text_redacted": str(decision.get("instruction") or "")[:1000],
+                        "returncode": 0,
+                        "schema_errors": [],
+                    })
+
+                if (decision.get("action") == "stop" or _all_features_completed(ledger)) and worker_turns > 0:
+                    final_validation_statuses, runtime_validation_evidence = _run_validation_commands(goal, worker_root, report)
+                    if runtime_validation_evidence:
+                        evidence_parts.append(runtime_validation_evidence)
+                    for item in final_validation_statuses:
+                        _record_event(events, events_path, {
+                            "timestamp": now_utc(),
+                            "type": "runtime_validation",
+                            "turn_index": turn_index,
+                            "command": item.get("command"),
+                            "status": item.get("status"),
+                            "returncode": item.get("returncode"),
+                            "evidence": item.get("evidence"),
+                            "privacy_flags": item.get("privacy_flags", []),
+                        })
+                        privacy_blocks.extend(_blocking_privacy(list(item.get("privacy_flags", []))))
                     final_coverage = validation_coverage(goal, "\n".join(evidence_parts + [json.dumps(ledger, ensure_ascii=False)]))
                     if privacy_blocks:
                         outcome = "privacy_blocked"
                         stop_reason = "privacy markers require human review"
-                        _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=draft_result, coverage=final_coverage, stop_reason=stop_reason)
-                        break
-                    if draft_result.returncode:
-                        outcome = _failure_outcome(draft_result)
-                        stop_reason = _failure_reason(draft_result, "ledger draft worker")
-                        _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=draft_result, coverage=final_coverage, stop_reason=stop_reason)
-                        break
-                    if draft_errors:
-                        no_progress_count += 1
-                        if no_progress_count >= 3:
-                            outcome = "no_progress"
-                            stop_reason = "ledger draft validation failed repeatedly"
-                            _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=draft_result, coverage=final_coverage, stop_reason=stop_reason)
-                            break
+                    elif final_coverage >= 1.0:
+                        outcome = "completed"
+                        stop_reason = "all features completed"
                     else:
-                        no_progress_count = 0
-                    _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=draft_result, coverage=final_coverage, stop_reason="ledger draft generated")
-                    continue
-                if (decision.get("action") == "stop" or _all_features_completed(ledger)) and worker_turns > 0:
-                    if final_coverage < 1.0:
                         validation_gap_count += 1
-                        if ledger_changed:
-                            validation_gap_count = 0
-                        if validation_gap_count < 3:
-                            run_history.append({
-                                "turn_index": turn_index,
-                                "type": "validation_gap",
-                                "coverage": final_coverage,
-                                "text_redacted": "ledger completed but goal validation evidence is incomplete; add ledger feature(s) or request human review",
-                                "returncode": 0,
-                            })
-                            _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=None, coverage=final_coverage, stop_reason="validation gap: awaiting ledger update")
-                            continue
-                    outcome = "completed" if final_coverage >= 1.0 else "failed_validation"
-                    stop_reason = "all features completed" if outcome == "completed" else "validation evidence incomplete"
+                        outcome = "failed_validation" if validation_gap_count >= 2 else "no_progress"
+                        stop_reason = "validation evidence incomplete"
                     _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=None, coverage=final_coverage, stop_reason=stop_reason)
                     break
                 if (decision.get("action") == "stop" or _all_features_completed(ledger)) and worker_turns == 0:
                     decision["action"] = "continue"
                     decision["instruction"] = decision.get("instruction") or "只读复核 supervisor 已收集的证据，运行允许的验证命令并返回结果。"
 
-                worker_system, worker_user_text = _worker_prompt(str(decision.get("instruction") or ""), goal)
+                worker_system, worker_user_text = _worker_prompt(str(decision.get("instruction") or ""), goal, ledger, run_history)
                 requested_worker_session = worker_session_id
                 worker_result = runner(
                     worker_user_text,
@@ -1876,13 +1992,63 @@ def run_workspace(
                     "schema_errors": worker_schema_errors,
                 })
 
-                final_coverage = validation_coverage(goal, "\n".join(evidence_parts + [json.dumps(ledger, ensure_ascii=False)]))
+                final_coverage = validation_coverage(goal, "\n".join(evidence_parts + [runtime_validation_evidence, json.dumps(ledger, ensure_ascii=False)]))
+                if worker_schema_errors and worker_result.returncode == 0:
+                    no_progress_count += 1
+                    repair_result = runner(
+                        _worker_repair_prompt(worker_text),
+                        cwd=worker_root,
+                        allowed_tools=[],
+                        max_budget_usd=max_budget_usd,
+                        session_id=worker_session_id,
+                        timeout_seconds=_remaining_timeout(started_at, max_wall_seconds),
+                        disallowed_tools=_disallowed_tools(goal, "worker"),
+                        permission_mode=_permission_mode(goal, "worker"),
+                        role="worker",
+                        extra_env=runner_env,
+                        append_system_prompt=_worker_system(goal),
+                        setting_sources="project,local",
+                        strict_mcp_config=True,
+                    )
+                    agent_call_count += 1
+                    worker_turns += 1
+                    if repair_result.session_id:
+                        worker_session_id = repair_result.session_id
+                        session_state["worker_session_id"] = worker_session_id
+                        session_state["last_run_id"] = run_id
+                        _write_session_state(workspace, session_state)
+                    last_worker_result = repair_result
+                    repair_text = repair_result.output_text.strip()
+                    parsed_worker, worker_schema_errors = _parse_worker_result(repair_text)
+                    worker_evidence = _worker_evidence_text(parsed_worker, repair_text)
+                    evidence_parts.append(worker_evidence)
+                    worker_redacted, worker_flags = redact_text(worker_evidence, report)
+                    privacy_blocks.extend(_blocking_privacy(worker_flags))
+                    _record_event(events, events_path, {
+                        "timestamp": now_utc(),
+                        "type": "worker_result_repair",
+                        "turn_index": turn_index,
+                        "session_hash": stable_hash(worker_session_id) if worker_session_id else "",
+                        "returncode": repair_result.returncode,
+                        "text_redacted": worker_redacted[:2000],
+                        "privacy_flags": worker_flags,
+                        "schema_name": WORKER_RESULT_SCHEMA,
+                        "schema_valid": not worker_schema_errors,
+                        "schema_errors": worker_schema_errors,
+                    })
+                    run_history.append({
+                        "turn_index": turn_index,
+                        "type": "worker_result_repair",
+                        "text_redacted": worker_redacted[:1000],
+                        "returncode": repair_result.returncode,
+                        "schema_errors": worker_schema_errors,
+                    })
                 if worker_schema_errors:
                     outcome = "agent_failed"
                     stop_reason = _schema_error_text(WORKER_RESULT_SCHEMA, worker_schema_errors)
                     if worker_result.returncode == 0 and not worker_text:
                         stop_reason += "; worker returned empty output with returncode 0, likely stale/resumed session"
-                    _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=worker_result, coverage=final_coverage, stop_reason=stop_reason)
+                    _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=last_worker_result, coverage=final_coverage, stop_reason=stop_reason)
                     break
                 if parsed_worker and parsed_worker.get("needs_human"):
                     stop_reason = "; ".join(str(item) for item in parsed_worker.get("blockers", []) if str(item)) or "worker requested human review"
@@ -1904,6 +2070,8 @@ def run_workspace(
                     stop_reason = _failure_reason(worker_result, "worker")
                     _append_progress(workspace, run_id=run_id, turn_index=turn_index, decision=decision, worker_result=worker_result, coverage=final_coverage, stop_reason=stop_reason)
                     break
+                ledger_changed = _complete_focus_from_worker(ledger, decision, parsed_worker, report) or ledger_changed
+                write_json(workspace / "feature_ledger.json", ledger)
                 progress_signature = stable_hash({
                     "focus": ledger.get("current_focus"),
                     "ledger": ledger,
@@ -1925,9 +2093,10 @@ def run_workspace(
                 stop_reason = f"max_turns reached: {max_turns}"
 
     write_json(workspace / "feature_ledger.json", ledger)
-    final_evidence_text = "\n".join(evidence_parts + [json.dumps(ledger, ensure_ascii=False, sort_keys=True)])
+    final_evidence_text = "\n".join(evidence_parts + [runtime_validation_evidence, json.dumps(ledger, ensure_ascii=False, sort_keys=True)])
+    if not final_validation_statuses:
+        final_validation_statuses = validation_command_status(goal, final_evidence_text)
     final_coverage = validation_coverage(goal, final_evidence_text)
-    final_validation_statuses = validation_command_status(goal, final_evidence_text)
     counts = _feature_status_counts(ledger)
     hook_events_path = run_dir / "hook_events.jsonl"
     hook_event_counts = _count_hook_events(hook_events_path)

@@ -156,7 +156,18 @@ class FakeRunner:
                 "reason": "fixture dynamic ledger draft",
             }
             return ClaudeRunResult(session_id="worker-session", output_text=json_dumps(output), returncode=0, raw_events=[])
+        if "上一轮 worker 输出不符合 schema" in prompt:
+            output = {
+                "summary": "fixture worker repaired JSON result",
+                "changed_files": [],
+                "validation": [{"command": "npm test", "returncode": 0, "status": "passed", "evidence": "fixture pass"}],
+                "blockers": [],
+                "needs_human": False,
+            }
+            return ClaudeRunResult(session_id="worker-session", output_text=json_dumps(output), returncode=0, raw_events=[])
         worker_turn = sum(1 for call in self.calls if call["role"] == "worker")
+        if worker_turn == 2:
+            return ClaudeRunResult(session_id="worker-session", output_text="fixture plain text worker result", returncode=0, raw_events=[])
         validation = [{"command": "npm test", "returncode": 0, "status": "passed", "evidence": "fixture pass"}]
         if worker_turn >= 3:
             validation.append({"command": "./scripts/preflight.sh", "returncode": 0, "status": "passed", "evidence": "fixture pass"})
@@ -232,7 +243,12 @@ def run_fixture_validation() -> list[str]:
         subprocess.run(["git", "config", "user.email", "fixture@example.com"], cwd=project_root, capture_output=True, text=True, check=True, env=_git_env())
         subprocess.run(["git", "config", "user.name", "fixture"], cwd=project_root, capture_output=True, text=True, check=True, env=_git_env())
         (project_root / "README.md").write_text("fixture\n", encoding="utf-8")
-        subprocess.run(["git", "add", "README.md"], cwd=project_root, capture_output=True, text=True, check=True, env=_git_env())
+        (project_root / "package.json").write_text('{"scripts":{"test":"node -e \\"process.exit(0)\\""}}\n', encoding="utf-8")
+        (project_root / "scripts").mkdir()
+        preflight = project_root / "scripts" / "preflight.sh"
+        preflight.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+        preflight.chmod(0o755)
+        subprocess.run(["git", "add", "README.md", "package.json", "scripts/preflight.sh"], cwd=project_root, capture_output=True, text=True, check=True, env=_git_env())
         subprocess.run(["git", "commit", "-m", "fixture init"], cwd=project_root, capture_output=True, text=True, check=True, env=_git_env())
         goal_path = tmp_path / "goal.yaml"
         goal_path.write_text(
@@ -263,8 +279,8 @@ def run_fixture_validation() -> list[str]:
         errors.extend(validate_schema(ledger, "xuejiao_twin.ledger.schema.json"))
         if run.get("outcome") != "completed":
             errors.append(f"fixture outcome: expected completed, got {run.get('outcome')}")
-        if run.get("metrics", {}).get("supervisor_turns", 0) < 2:
-            errors.append("fixture did not run multiple supervisor turns")
+        if run.get("metrics", {}).get("supervisor_turns", 0) > 2:
+            errors.append("fixture worker-led run used too many supervisor turns")
         if run.get("metrics", {}).get("worker_turns", 0) < 2:
             errors.append("fixture did not run multiple worker turns")
         review = run.get("human_review", {})
@@ -306,6 +322,8 @@ def run_fixture_validation() -> list[str]:
             errors.append("fixture supervisor first turn missing needs_draft phase")
         if len(supervisor_calls) < 2 or "drafted" not in supervisor_calls[1]["prompt"]:
             errors.append("fixture supervisor second turn missing drafted review phase")
+        if len(supervisor_calls) > 2:
+            errors.append("fixture worker-led supervised mode should not call supervisor after ledger approval")
         supervisor_combined = (supervisor_calls[0]["prompt"] + supervisor_calls[0]["append_system_prompt"]) if supervisor_calls else ""
         if "xuejiao_twin.supervisor_decision.schema.json" not in supervisor_combined:
             errors.append("fixture supervisor prompt missing decision schema contract")
@@ -363,8 +381,6 @@ def run_fixture_validation() -> list[str]:
             errors.append("fixture ledger update did not add F-002")
         if any(feature.get("id") == "F-002" and feature.get("status") == "completed" for feature in features) is False:
             errors.append("fixture ledger did not mark F-002 completed")
-        if any(feature.get("id") == "F-003" and feature.get("status") == "completed" for feature in features) is False:
-            errors.append("fixture validation gap did not add and complete F-003")
         current_text = (workspace / "CURRENT.md").read_text(encoding="utf-8")
         if "Status: completed_waiting_handoff" not in current_text:
             errors.append("fixture CURRENT did not render completed handoff status")
@@ -393,6 +409,12 @@ def run_fixture_validation() -> list[str]:
             event_lines = events_path.read_text(encoding="utf-8")
             if "ledger_draft" not in event_lines:
                 errors.append("fixture events did not record ledger draft")
+            if "runtime_validation" not in event_lines:
+                errors.append("fixture events did not record runtime validation")
+            if "worker_led_instruction" not in event_lines:
+                errors.append("fixture events did not record worker-led instruction")
+            if "worker_result_repair" not in event_lines:
+                errors.append("fixture events did not record worker result repair")
         else:
             errors.append("fixture events file missing")
         path_and_uuid = {"path": "/Users/xuejiao/project/file.py", "uuid": "550e8400-e29b-41d4-a716-446655440000"}
