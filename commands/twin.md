@@ -207,7 +207,6 @@ supervisor 在执行中可通过 `ledger_updates` 要求 runtime 新增或调整
 | `outcome=needs_human, stop_reason="base checkout has existing changes"` | 项目根 untracked / dirty 文件不允许创建 worktree | 在项目根 commit / stash 后重跑 |
 | `outcome=needs_human, stop_reason="... session was silently reset by Claude Code"` | runtime 比对发现 `--resume` 后 session id 已变，触发 silent-resume 熔断 | `replay` 看最后几轮，决定 `replan` 重生成 ledger 或重新 init |
 | supervisor 反复要求 `draft_ledger` | ledger draft 连续 schema 校验失败 | 看 `events.jsonl` 里 `ledger_draft.schema_errors`；调 `goal.acceptance` / `scope_in` 让特征更可拆 |
-| `metrics.blocked_risky_actions > 0` | 文本里出现 force push / production deploy / 新增依赖 等 risk marker | 看 `validation_report.risk_markers`，决定是否 approve / defer |
 
 ## 机械验证
 

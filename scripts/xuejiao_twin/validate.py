@@ -12,7 +12,7 @@ from .claude_runner import ClaudeRunResult, parse_stream_json
 from .hook_gate import main as hook_gate_main
 from .initializer import feature_ledger, init_workspace
 from .privacy import assert_no_private_leak
-from .evidence import classify_risk, validation_command_status
+from .evidence import validation_command_status
 from .runtime import run_workspace, write_human_response
 from .schema_contract import validate_artifact, validate_schema
 from .util import read_json, write_json
@@ -365,6 +365,24 @@ def run_fixture_validation() -> list[str]:
             errors.append("fixture ledger did not mark F-002 completed")
         if any(feature.get("id") == "F-003" and feature.get("status") == "completed" for feature in features) is False:
             errors.append("fixture validation gap did not add and complete F-003")
+        current_text = (workspace / "CURRENT.md").read_text(encoding="utf-8")
+        if "Status: completed_waiting_handoff" not in current_text:
+            errors.append("fixture CURRENT did not render completed handoff status")
+        if "review worker diff and validation evidence" not in current_text:
+            errors.append("fixture CURRENT did not render completed handoff next action")
+        run["outcome"] = "needs_human"
+        write_json(workspace / "runs" / run["run_id"] / "run.json", run)
+        latch_after_completed = run_workspace(workspace, mode="supervised-normal", out=tmp_path / "completed-latch.json", runner=runner)
+        current_text = (workspace / "CURRENT.md").read_text(encoding="utf-8")
+        if latch_after_completed.get("outcome") != "completed":
+            errors.append("fixture completed handoff latch should remain completed")
+        if latch_after_completed.get("validation_report", {}).get("mode") != "completed-handoff-latch":
+            errors.append("fixture completed handoff latch missing mode")
+        if "Status: completed_waiting_handoff" not in current_text:
+            errors.append("fixture completed handoff latch did not update CURRENT")
+        if "Human decision:" in current_text:
+            errors.append("fixture completed handoff latch should not render human decision commands")
+        (workspace / "runs" / run["run_id"] / "run.json").unlink(missing_ok=True)
         progress_text = (workspace / "progress.md").read_text(encoding="utf-8")
         if "turn 2" not in progress_text:
             errors.append("fixture progress did not record multiple turns")
@@ -382,10 +400,6 @@ def run_fixture_validation() -> list[str]:
             errors.append("privacy checker should not flag paths or ordinary UUIDs")
         if "secret_assignment" not in assert_no_private_leak({"value": "token=real-secret-value"}):
             errors.append("privacy checker missed secret assignment")
-        if classify_risk("不新增依赖，禁止 force push，do not production deploy"):
-            errors.append("risk classifier flagged negated risk markers")
-        if "force push" not in classify_risk("agent requested force push"):
-            errors.append("risk classifier missed force push")
         hook_env = {"XUEJIAO_TWIN_ROLE": "worker", "XUEJIAO_TWIN_WORKER_ROOT": worker_calls[0]["cwd"] if worker_calls else str(project_root)}
         dangerous_payload = {"tool_name": "Bash", "cwd": worker_calls[0]["cwd"] if worker_calls else str(project_root), "tool_input": {"command": "git push --force origin main"}}
         if _hook_gate_code(dangerous_payload, hook_env) == 0:
