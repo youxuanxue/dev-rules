@@ -27,14 +27,24 @@ from .runtime import (
 )
 from .schema_contract import validate_artifact, validate_schema
 from .util import read_json
+from .worker import assess_run_quality, changed_files_from_status
 from .workspace import WorkspaceError, load_ledger, load_state, write_ledger
 
 
 class FakeRunner:
-    def __init__(self, *, session_lost_once: bool = False, returncode: int = 0) -> None:
+    def __init__(
+        self,
+        *,
+        session_lost_once: bool = False,
+        warning_only_once: bool = False,
+        returncode: int = 0,
+        output_text: str | None = None,
+    ) -> None:
         self.calls: list[dict[str, Any]] = []
         self.session_lost_once = session_lost_once
+        self.warning_only_once = warning_only_once
         self.returncode = returncode
+        self.output_text = output_text or "Summary:\n- fixture worker ran\n\nEvidence:\n- tests: fixture pass\n\nRemaining:\n- none"
 
     def __call__(self, prompt: str, **kwargs: Any) -> ClaudeRunResult:
         self.calls.append({"prompt": prompt, **kwargs})
@@ -42,10 +52,18 @@ class FakeRunner:
         if self.session_lost_once and requested_session:
             self.session_lost_once = False
             return ClaudeRunResult(session_id=requested_session, output_text="", returncode=0, raw_events=[], session_lost=True)
+        if self.warning_only_once and requested_session:
+            self.warning_only_once = False
+            return ClaudeRunResult(
+                session_id=requested_session,
+                output_text="Warning: no stdin data received in 3s, proceeding without it...",
+                returncode=0,
+                raw_events=[],
+            )
         session = requested_session or "worker-session-1"
         return ClaudeRunResult(
             session_id=session,
-            output_text="Summary:\n- fixture worker ran\n\nEvidence:\n- tests: fixture pass\n\nRemaining:\n- none",
+            output_text=self.output_text,
             returncode=self.returncode,
             raw_events=[{"type": "system", "session_id": session}],
         )
@@ -179,6 +197,55 @@ def _schema_errors() -> list[str]:
     return errors
 
 
+def _behavior_helper_errors() -> list[str]:
+    errors: list[str] = []
+    changed = changed_files_from_status(
+        " M docs/agent_integration.md\n"
+        " M pyproject.toml\n"
+        " M tests/test_entry_runtimes.py\n"
+        "?? zw_brain/shared/iaf_oidc.py\n"
+        "R  old/path.py -> new/path.py\n"
+    )
+    expected = [
+        "docs/agent_integration.md",
+        "pyproject.toml",
+        "tests/test_entry_runtimes.py",
+        "zw_brain/shared/iaf_oidc.py",
+        "new/path.py",
+    ]
+    if changed != expected:
+        errors.append(f"changed_files_from_status should preserve paths: {changed!r}")
+    weak_flags = assess_run_quality(
+        worker_output="我会继续收敛 F6/AC1",
+        validation=[],
+        returncode=0,
+        session_lost=False,
+        resume_used=True,
+        pre_git_status="",
+        post_git_status="",
+        pre_git_diff_stat="",
+        post_git_diff_stat="",
+    )
+    for flag in ("VALIDATION_NOT_REPORTED", "WORKER_OUTPUT_WEAK", "NO_PROGRESS_DETECTED"):
+        if flag not in weak_flags:
+            errors.append(f"weak resumed run should flag {flag}")
+    warning_flags = assess_run_quality(
+        worker_output="Warning: no stdin data received in 3s, proceeding without it...",
+        validation=[],
+        returncode=0,
+        session_lost=False,
+        resume_used=True,
+        pre_git_status="",
+        post_git_status="",
+        pre_git_diff_stat="",
+        post_git_diff_stat="",
+    )
+    for flag in ("STDIN_WARNING", "WORKER_OUTPUT_EMPTY_OR_WARNING_ONLY"):
+        if flag not in warning_flags:
+            errors.append(f"warning-only run should flag {flag}")
+    return errors
+
+
 def _semantic_errors() -> list[str]:
     errors: list[str] = []
     bad_ledger = _ledger()
@@ -202,7 +269,7 @@ def _semantic_errors() -> list[str]:
 
 
 def run_fixture_validation() -> list[str]:
-    errors: list[str] = _schema_errors() + _semantic_errors()
+    errors: list[str] = _schema_errors() + _semantic_errors() + _behavior_helper_errors()
     with tempfile.TemporaryDirectory(prefix="xuejiao-twin-greenfield-") as tmp:
         root = Path(tmp)
         workspace = _write_workspace(root)
@@ -214,6 +281,9 @@ def run_fixture_validation() -> list[str]:
         supervisor_context = build_supervisor_context(workspace)
         if supervisor_context.get("next_item", {}).get("id") != "F1" or not supervisor_context.get("remaining_gaps"):
             errors.append("supervisor context should expose next item and gaps without generating instruction")
+        focus = supervisor_context.get("acceptance_focus", {})
+        if not focus.get("last_mile") or not focus.get("current_item_acceptance_criteria"):
+            errors.append("supervisor context should expose acceptance focus for the current item")
         skeleton = supervisor_context.get("review_skeleton", {})
         if skeleton.get("decision") != "<ACCEPTED_DONE|CONTINUE|NEEDS_HUMAN|FAILED>":
             errors.append("supervisor context should expose an undecided review skeleton")
@@ -280,6 +350,10 @@ def run_fixture_validation() -> list[str]:
             pass
         run = start_worker_turn(workspace, "推进 ledger item F1", runner=runner)
         errors.extend(validate_schema(run, RUN_SCHEMA))
+        if not run.get("evidence", {}).get("validation"):
+            errors.append("worker run should record validation evidence")
+        if "quality_flags" not in run.get("evidence", {}):
+            errors.append("worker run should record quality_flags")
         call = runner.calls[0]
         if call.get("cwd") != workspace.resolve().parent:
             errors.append("worker should run from repo root, not the twin workspace directory")
@@ -295,6 +369,8 @@ def run_fixture_validation() -> list[str]:
             errors.append("worker prompt missing persona/goal/supervisor-authored instruction")
         if "supervisor persona" in prompt:
             errors.append("worker prompt should not include supervisor persona")
+        if "acceptance_focus.json" in prompt or "worker completion contract" in prompt:
+            errors.append("worker prompt should not include harness-generated completion contracts")
         if "supervisor_session_id" in json.dumps(run):
             errors.append("run artifact should not contain supervisor session fields")
         current_text = (workspace / "CURRENT.md").read_text(encoding="utf-8")
@@ -312,6 +388,8 @@ def run_fixture_validation() -> list[str]:
             errors.append("review context should include supervisor persona")
         if context.get("review_skeleton", {}).get("decision") != "<ACCEPTED_DONE|CONTINUE|NEEDS_HUMAN|FAILED>":
             errors.append("review context should not preselect a decision")
+        if not context.get("run_health") or "next_instruction_guidance" not in context:
+            errors.append("review context should expose run health and next instruction guidance")
 
         continue_review = _review("CONTINUE", gaps=["F1 missing"], actions=["fix_drift", "validate_more"])
         state = apply_supervisor_review(workspace, run["run_id"], continue_review)
@@ -325,6 +403,19 @@ def run_fixture_validation() -> list[str]:
             errors.append("second run artifact should mark resume_used")
         apply_supervisor_review(workspace, second["run_id"], _review("CONTINUE"))
 
+        reset_action_run = start_worker_turn(workspace, "测试显式 reset action", runner=runner)
+        reset_action_state = apply_supervisor_review(
+            workspace,
+            reset_action_run["run_id"],
+            _review("CONTINUE", actions=["reset_worker_session"]),
+        )
+        if reset_action_state.get("worker_session_id") is not None:
+            errors.append("reset_worker_session action should clear worker_session_id")
+        after_reset = start_worker_turn(workspace, "reset 后 fresh start", runner=runner)
+        if runner.calls[-1].get("session_id"):
+            errors.append("worker turn after reset_worker_session should not resume")
+        apply_supervisor_review(workspace, after_reset["run_id"], _review("CONTINUE"))
+
         reset_runner = FakeRunner(session_lost_once=True)
         reset = start_worker_turn(workspace, "测试 session reset", runner=reset_runner)
         if len(reset_runner.calls) != 2:
@@ -334,6 +425,16 @@ def run_fixture_validation() -> list[str]:
         if reset["worker"]["resume_used"]:
             errors.append("fresh retry should not mark resume_used")
         apply_supervisor_review(workspace, reset["run_id"], _review("CONTINUE"))
+
+        warning_retry_runner = FakeRunner(warning_only_once=True)
+        warning_retry = start_worker_turn(workspace, "测试 warning-only resume", runner=warning_retry_runner)
+        if len(warning_retry_runner.calls) != 2:
+            errors.append("warning-only resume should retry fresh once")
+        if warning_retry_runner.calls[-1].get("session_id"):
+            errors.append("warning-only retry should be fresh")
+        if warning_retry["worker"]["resume_used"]:
+            errors.append("warning-only fresh retry should not mark resume_used")
+        apply_supervisor_review(workspace, warning_retry["run_id"], _review("CONTINUE"))
 
         needs_run = start_worker_turn(workspace, "等人确认 fixture", runner=runner)
         needs_human = _review("NEEDS_HUMAN", question="请确认 fixture")
@@ -377,6 +478,19 @@ def run_fixture_validation() -> list[str]:
         repeat_state = apply_supervisor_review(repeat_workspace, repeat_run["run_id"], repeat_review)
         if repeat_state.get("status") != "needs_human":
             errors.append("same gap for three rounds should require human")
+
+        weak_workspace = _write_workspace(root / "weak-output")
+        weak_runner = FakeRunner(output_text="我会继续收敛 F6/AC1")
+        weak_run = start_worker_turn(weak_workspace, "弱输出 fixture", runner=weak_runner)
+        weak_flags = weak_run.get("evidence", {}).get("quality_flags", [])
+        for flag in ("VALIDATION_NOT_REPORTED", "WORKER_OUTPUT_WEAK"):
+            if flag not in weak_flags:
+                errors.append(f"weak worker output should record {flag}")
+        weak_context = build_review_context(weak_workspace, weak_run["run_id"])
+        if not weak_context.get("run_health", {}).get("requires_attention"):
+            errors.append("weak run health should require attention")
+        if weak_context.get("review_skeleton", {}).get("decision") != "<ACCEPTED_DONE|CONTINUE|NEEDS_HUMAN|FAILED>":
+            errors.append("weak run context should not preselect a decision")
 
         done_missing_evidence_workspace = _write_workspace(root / "done-missing-evidence", completed=True, ledger_evidence=False)
         done_missing_evidence_runner = FakeRunner()

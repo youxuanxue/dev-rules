@@ -38,6 +38,7 @@
         "worker_output": { "type": "string" },
         "changed_files": { "type": "array", "items": { "type": "string" } },
         "validation": { "type": "array", "items": { "type": "string" } },
+        "quality_flags": { "type": "array", "items": { "type": "string" } },
         "git_status": { "type": "string" },
         "git_diff_stat": { "type": "string" }
       }

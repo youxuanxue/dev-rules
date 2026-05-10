@@ -102,7 +102,7 @@ def run_claude_headless(
     if extra_env:
         env.update(extra_env)
     try:
-        proc = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout_seconds)
+        proc = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout_seconds, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired as exc:
         output = (exc.stdout or "") + (exc.stderr or "")
         if isinstance(output, bytes):

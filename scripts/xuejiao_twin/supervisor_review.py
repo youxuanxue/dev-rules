@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .contracts import CURRENT_FILE, HUMAN_RESPONSE_FILE, RUN_SCHEMA, SUPERVISOR_REVIEW_SCHEMA, SUPERVISOR_STATE_FILE
-from .ledger import acceptance_evidence, apply_ledger_updates, choose_next_item, ledger_gaps
+from .ledger import acceptance_evidence, acceptance_focus, apply_ledger_updates, choose_next_item, ledger_gaps
 from .schema_contract import validate_schema
 from .util import now_utc, read_json, write_json
 from .workspace import (
@@ -63,11 +63,69 @@ def _validate_accepted_done(goal: dict[str, Any], ledger: dict[str, Any], review
     return errors
 
 
+def _worker_output_without_stdin_warning(output: str) -> str:
+    warning = "Warning: no stdin data received in 3s, proceeding without it..."
+    return "\n".join(line for line in output.splitlines() if warning not in line).strip()
+
+
+def summarize_run_health(run: dict[str, Any]) -> dict[str, Any]:
+    evidence = run.get("evidence") if isinstance(run.get("evidence"), dict) else {}
+    validation = list(evidence.get("validation") or [])
+    worker_output = str(evidence.get("worker_output") or "")
+    changed_files = list(evidence.get("changed_files") or [])
+    quality_flags = list(evidence.get("quality_flags") or [])
+    if not validation:
+        quality_flags.append("VALIDATION_EMPTY_LEGACY")
+    if "Warning: no stdin data received in 3s" in worker_output:
+        quality_flags.append("STDIN_WARNING")
+    if not validation and len(_worker_output_without_stdin_warning(worker_output)) < 120:
+        quality_flags.append("WORKER_OUTPUT_WEAK")
+    quality_flags = list(dict.fromkeys(str(flag) for flag in quality_flags))
+    requires_attention = any(
+        flag in quality_flags
+        for flag in (
+            "VALIDATION_EMPTY_LEGACY",
+            "VALIDATION_NOT_REPORTED",
+            "STDIN_WARNING",
+            "WORKER_OUTPUT_EMPTY_OR_WARNING_ONLY",
+            "WORKER_OUTPUT_WEAK",
+            "NO_PROGRESS_DETECTED",
+            "SESSION_LOST",
+            "WORKER_RETURN_CODE_NONZERO",
+        )
+    )
+    recommended_actions: list[str] = []
+    if requires_attention:
+        recommended_actions.append("Do not accept this run as completion evidence without independent validation.")
+    if any(flag in quality_flags for flag in ("STDIN_WARNING", "NO_PROGRESS_DETECTED", "WORKER_OUTPUT_EMPTY_OR_WARNING_ONLY")):
+        recommended_actions.append("Consider reset_worker_session before the next worker turn.")
+    return {
+        "quality_flags": quality_flags,
+        "has_validation": bool(validation) and not all(str(item).startswith("NOT_REPORTED:") for item in validation),
+        "has_changed_files": bool(changed_files),
+        "requires_attention": requires_attention,
+        "recommended_actions": recommended_actions,
+    }
+
+
+def _next_instruction_guidance(focus: dict[str, Any], run_health: dict[str, Any] | None = None) -> list[str]:
+    guidance: list[str] = []
+    if focus.get("last_mile"):
+        ac_ids = [str(ac.get("id")) for ac in focus.get("current_item_acceptance_criteria", []) if isinstance(ac, dict)]
+        if ac_ids:
+            guidance.append("Next instruction should name current acceptance criteria: " + ", ".join(ac_ids))
+        guidance.append("Ask for entrypoint or end-to-end evidence when the remaining AC requires it.")
+    if run_health and run_health.get("requires_attention"):
+        guidance.append("Address run_health flags before accepting completion evidence.")
+    return guidance
+
+
 def build_supervisor_context(workspace: Path, run_id: str | None = None) -> dict[str, Any]:
     goal = load_goal(workspace)
     ledger = load_ledger(workspace)
     state = load_state(workspace)
     next_item = choose_next_item(ledger)
+    focus = acceptance_focus(goal, ledger)
     context: dict[str, Any] = {
         "workspace": str(workspace),
         "goal": goal,
@@ -77,6 +135,7 @@ def build_supervisor_context(workspace: Path, run_id: str | None = None) -> dict
         "next_item": next_item,
         "remaining_gaps": ledger_gaps(goal, ledger),
         "acceptance_evidence": acceptance_evidence(goal, ledger),
+        "acceptance_focus": focus,
         "artifact_paths": {
             "current": str(workspace / CURRENT_FILE),
             "state": str(workspace / SUPERVISOR_STATE_FILE),
@@ -101,9 +160,16 @@ def build_supervisor_context(workspace: Path, run_id: str | None = None) -> dict
         run_path = _run_path(workspace, run_id)
         if not run_path.exists():
             raise WorkspaceError(f"missing run artifact: {run_path}")
-        context["run"] = read_json(run_path)
+        run = read_json(run_path)
+        run_health = summarize_run_health(run)
+        context["run"] = run
+        context["run_health"] = run_health
+        context["review_guidance"] = run_health.get("recommended_actions", [])
+        context["next_instruction_guidance"] = _next_instruction_guidance(focus, run_health)
         context["artifact_paths"]["run"] = str(run_path)
         context["artifact_paths"]["review"] = str(_review_path(workspace, run_id))
+    else:
+        context["next_instruction_guidance"] = _next_instruction_guidance(focus)
     return context
 
 
@@ -134,6 +200,10 @@ def apply_supervisor_review(workspace: Path, run_id: str, review: dict[str, Any]
     update_errors = apply_ledger_updates(ledger, list(review.get("ledger_updates") or []))
     if update_errors:
         raise WorkspaceError("ledger update errors: " + "; ".join(update_errors))
+
+    actions = set(review.get("actions") or [])
+    if "reset_worker_session" in actions:
+        state["worker_session_id"] = None
 
     key = _gap_key(review)
     if key:
