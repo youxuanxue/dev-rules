@@ -3,32 +3,31 @@
   "$id": "https://github.com/youxuanxue/dev-rules/schemas/xuejiao_twin.ledger.schema.json",
   "title": "xuejiao twin feature ledger",
   "type": "object",
-  "required": ["schema_version", "features", "current_focus", "last_verified_at"],
-  "additionalProperties": true,
+  "required": ["schema_version", "goal_id", "items"],
+  "additionalProperties": false,
   "properties": {
-    "schema_version": { "type": "string", "minLength": 1 },
-    "features": {
+    "schema_version": { "type": "integer", "enum": [1] },
+    "goal_id": { "type": "string", "minLength": 1 },
+    "items": {
       "type": "array",
+      "minItems": 1,
       "items": {
         "type": "object",
-        "required": ["id", "description", "status", "acceptance", "validation_evidence", "blocked_reason"],
-        "additionalProperties": true,
+        "required": ["id", "deliverable", "scope", "covers_ac", "evidence_plan", "actual_evidence", "depends_on", "status", "next_action"],
+        "additionalProperties": false,
         "properties": {
           "id": { "type": "string", "minLength": 1 },
-          "description": { "type": "string", "minLength": 1 },
+          "deliverable": { "type": "string", "minLength": 1 },
+          "scope": { "type": "string", "minLength": 1 },
+          "covers_ac": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+          "evidence_plan": { "type": "array", "items": { "type": "string" } },
+          "actual_evidence": { "type": "array", "items": { "type": "string" } },
+          "depends_on": { "type": "array", "items": { "type": "string" } },
           "status": { "type": "string", "enum": ["pending", "in_progress", "blocked", "completed", "deferred"] },
-          "acceptance": { "type": "array", "items": { "type": "string" } },
-          "validation_evidence": { "type": "array", "items": { "type": "string" } },
+          "next_action": { "type": "string" },
           "blocked_reason": { "type": ["string", "null"] }
         }
       }
-    },
-    "current_focus": { "type": ["string", "null"] },
-    "last_verified_at": { "type": ["string", "null"] },
-    "planning_status": { "type": "string", "enum": ["needs_draft", "drafted", "approved"] },
-    "generated_at": { "type": ["string", "null"] },
-    "reviewed_at": { "type": ["string", "null"] },
-    "updated_at": { "type": ["string", "null"] },
-    "revision": { "type": "integer", "minimum": 0 }
+    }
   }
 }

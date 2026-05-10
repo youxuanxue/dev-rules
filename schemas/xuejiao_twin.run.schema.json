@@ -1,113 +1,48 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/youxuanxue/dev-rules/schemas/xuejiao_twin.run.schema.json",
-  "title": "xuejiao twin run",
+  "title": "xuejiao twin worker run",
   "type": "object",
-  "required": ["schema_version", "run_id", "goal_ref", "persona_ref", "ledger_ref", "events_ref", "supervisor_session_id", "worker_session_id", "outcome", "stop_reason", "metrics", "privacy_report", "validation_report"],
-  "additionalProperties": true,
+  "required": ["schema_version", "run_id", "workspace_ref", "goal_ref", "ledger_ref", "worker_persona_ref", "supervisor_persona_ref", "state_ref", "events_ref", "started_at", "ended_at", "worker", "instruction", "evidence", "outcome"],
+  "additionalProperties": false,
   "properties": {
-    "schema_version": { "type": "string", "minLength": 1 },
+    "schema_version": { "type": "integer", "enum": [1] },
     "run_id": { "type": "string", "minLength": 1 },
+    "workspace_ref": { "type": "string", "minLength": 1 },
     "goal_ref": { "type": "string", "minLength": 1 },
-    "persona_ref": { "type": "string", "minLength": 1 },
     "ledger_ref": { "type": "string", "minLength": 1 },
+    "worker_persona_ref": { "type": "string", "minLength": 1 },
+    "supervisor_persona_ref": { "type": "string", "minLength": 1 },
+    "state_ref": { "type": "string", "minLength": 1 },
     "events_ref": { "type": "string", "minLength": 1 },
-    "session_state_ref": { "type": "string" },
-    "supervisor_session_id": { "type": "string" },
-    "worker_session_id": { "type": "string" },
-    "headless": {
+    "started_at": { "type": "string", "minLength": 1 },
+    "ended_at": { "type": "string", "minLength": 1 },
+    "worker": {
       "type": "object",
-      "additionalProperties": true,
+      "required": ["session_hash", "resume_used", "permission_mode", "returncode", "session_lost"],
+      "additionalProperties": false,
       "properties": {
+        "session_hash": { "type": "string" },
         "resume_used": { "type": "boolean" },
-        "worker_cwd": { "type": "string" },
-        "worker_branch": { "type": "string" },
-        "worker_isolation": { "type": "string" },
-        "supervisor_session_hash": { "type": "string" },
-        "worker_session_hash": { "type": "string" }
+        "permission_mode": { "type": "string" },
+        "returncode": { "type": "integer" },
+        "session_lost": { "type": "boolean" }
       }
     },
-    "outcome": {
-      "type": "string",
-      "enum": ["completed", "needs_human", "budget_exceeded", "no_progress", "failed_validation", "privacy_blocked", "agent_failed", "dry_run"]
-    },
-    "stop_reason": { "type": "string", "minLength": 1 },
-    "metrics": {
+    "instruction": { "type": "string" },
+    "evidence": {
       "type": "object",
-      "required": ["turns", "human_gate_count", "clarification_count", "retry_count", "blocked_risky_actions", "validation_coverage"],
-      "additionalProperties": true,
+      "required": ["worker_output", "changed_files", "validation", "git_status", "git_diff_stat"],
+      "additionalProperties": false,
       "properties": {
-        "turns": { "type": "integer", "minimum": 0 },
-        "human_gate_count": { "type": "integer", "minimum": 0 },
-        "clarification_count": { "type": "integer", "minimum": 0 },
-        "retry_count": { "type": "integer", "minimum": 0 },
-        "blocked_risky_actions": { "type": "integer", "minimum": 0 },
-        "validation_coverage": { "type": "number", "minimum": 0, "maximum": 1 },
-        "agent_call_count": { "type": "integer", "minimum": 0 },
-        "supervisor_turns": { "type": "integer", "minimum": 0 },
-        "worker_turns": { "type": "integer", "minimum": 0 },
-        "completed_feature_count": { "type": "integer", "minimum": 0 },
-        "pending_feature_count": { "type": "integer", "minimum": 0 },
-        "blocked_feature_count": { "type": "integer", "minimum": 0 },
-        "in_progress_feature_count": { "type": "integer", "minimum": 0 },
-        "event_count": { "type": "integer", "minimum": 0 }
+        "worker_output": { "type": "string" },
+        "changed_files": { "type": "array", "items": { "type": "string" } },
+        "validation": { "type": "array", "items": { "type": "string" } },
+        "git_status": { "type": "string" },
+        "git_diff_stat": { "type": "string" }
       }
     },
-    "privacy_report": { "type": "object", "additionalProperties": true },
-    "validation_report": {
-      "type": "object",
-      "additionalProperties": true,
-      "properties": {
-        "validation_commands": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": true,
-            "properties": {
-              "command": { "type": "string" },
-              "status": { "type": "string", "enum": ["passed", "failed", "attempted", "missing"] },
-              "evidence": { "type": "string" }
-            }
-          }
-        }
-      }
-    },
-    "human_review": {
-      "type": "object",
-      "additionalProperties": true,
-      "properties": {
-        "needed": { "type": "boolean" },
-        "trigger": { "type": "string" },
-        "current_focus": { "type": ["string", "null"] },
-        "summary": { "type": "string" },
-        "blocked_features": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": true,
-            "properties": {
-              "id": { "type": "string" },
-              "description": { "type": "string" },
-              "blocked_reason": { "type": "string" },
-              "acceptance": { "type": "array", "items": { "type": "string" } },
-              "validation_evidence": { "type": "array", "items": { "type": "string" } }
-            }
-          }
-        },
-        "suggested_actions": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": true,
-            "properties": {
-              "id": { "type": "string" },
-              "label": { "type": "string" },
-              "effect": { "type": "string" },
-              "cli_hint": { "type": "string" }
-            }
-          }
-        }
-      }
-    }
+    "review_ref": { "type": ["string", "null"] },
+    "outcome": { "type": "string", "enum": ["review_required", "needs_human", "accepted_done", "failed"] }
   }
 }

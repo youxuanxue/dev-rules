@@ -51,8 +51,8 @@ def run_claude_headless(
     prompt: str,
     *,
     cwd: Path,
-    allowed_tools: list[str],
-    max_budget_usd: float,
+    allowed_tools: list[str] | None = None,
+    max_budget_usd: float = 1.0,
     session_id: str = "",
     dry_run: bool = False,
     timeout_seconds: int = 3600,
@@ -79,11 +79,11 @@ def run_claude_headless(
         "--output-format",
         "stream-json",
         "--verbose",
-        "--allowedTools",
-        ",".join(allowed_tools),
         "--max-budget-usd",
         str(max_budget_usd),
     ]
+    if allowed_tools:
+        cmd.extend(["--allowedTools", ",".join(allowed_tools)])
     if setting_sources:
         cmd.extend(["--setting-sources", setting_sources])
     if strict_mcp_config:
@@ -117,7 +117,7 @@ def run_claude_headless(
     parsed_session, output, events = parse_stream_json(proc.stdout)
     if proc.stderr.strip():
         output = (output + "\n" + proc.stderr.strip()).strip()
-    session_lost = bool(session_id) and bool(parsed_session) and parsed_session != session_id
+    session_lost = bool(session_id) and ((bool(parsed_session) and parsed_session != session_id) or (proc.returncode == 0 and not output.strip()))
     return ClaudeRunResult(
         session_id=parsed_session or session_id,
         output_text=output,

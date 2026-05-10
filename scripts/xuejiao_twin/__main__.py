@@ -1,140 +1,140 @@
 from __future__ import annotations
 
 import argparse
-import shlex
+import json
 import sys
 from pathlib import Path
 
-from .initializer import feature_ledger, init_workspace, load_goal
-from .replay import replay_run
-from .runtime import HUMAN_ACTIONS, run_workspace, write_human_response
-from .validate import run_fixture_validation, validate_run_dir
-from .util import now_utc, read_json, write_json
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-CLI_MODULE_CMD = f"PYTHONPATH={shlex.quote(str(REPO_ROOT))} python3 -m scripts.xuejiao_twin"
-
-
-def _cmd_init(args: argparse.Namespace) -> int:
-    workspace = init_workspace(Path(args.goal_file), Path(args.persona), Path(args.out) if args.out else None)
-    print(workspace)
-    return 0
+from .runtime import (
+    apply_supervisor_review,
+    build_next_instruction,
+    build_review_context,
+    record_human_response,
+    review_template,
+    start_worker_turn,
+    status_workspace,
+)
+from .validate import run_fixture_validation, validate_path
+from .workspace import WorkspaceError
 
 
-def _print_human_review(run: dict[str, object]) -> None:
-    review = run.get("human_review")
-    if not isinstance(review, dict) or not bool(review.get("needed")):
+def _print_json(value: object) -> None:
+    print(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True))
+
+
+def _workspace_arg(args: argparse.Namespace) -> Path:
+    value = getattr(args, "workspace", "") or ""
+    if not value:
+        raise WorkspaceError("workspace is required")
+    return Path(value)
+
+
+def _print_needs_human(status: dict[str, object]) -> None:
+    needs_human = status.get("needs_human")
+    if not isinstance(needs_human, dict):
         return
-    print("Human Review:")
-    print(f"- trigger: {review.get('trigger', '')}")
-    print(f"- current_focus: {review.get('current_focus', '')}")
-    print(f"- summary: {review.get('summary', '')}")
-    blocked = review.get("blocked_features")
-    if isinstance(blocked, list) and blocked:
-        print("- blocked_features:")
-        for item in blocked:
-            if not isinstance(item, dict):
-                continue
-            print(f"  - {item.get('id', '')}: {item.get('description', '')}")
-            reason = str(item.get("blocked_reason") or "")
-            if reason:
-                print(f"    reason: {reason}")
-    actions = review.get("suggested_actions")
-    if isinstance(actions, list) and actions:
-        print("- suggested_actions:")
-        for index, item in enumerate(actions, 1):
-            if not isinstance(item, dict):
-                continue
-            print(f"  {index}. {item.get('id', '')} - {item.get('label', '')}")
+    workspace = Path(str(status["workspace"]))
+    run_id = status.get("current_run_id") or "<run_id>"
+    print("NEEDS_HUMAN")
+    print(f"question={needs_human.get('question') or ''}")
+    print(f"context={needs_human.get('context') or ''}")
+    print(f"current={workspace / 'CURRENT.md'}")
+    print(f"state={workspace / 'supervisor_state.json'}")
+    print(f"run={workspace / 'runs' / str(run_id) / 'run.json'}")
+    print(f"review={workspace / 'runs' / str(run_id) / 'supervisor_review.json'}")
+    print(f"respond=python3 -m scripts.xuejiao_twin respond --workspace {workspace} --text '<answer>'")
 
 
-def _cmd_run(args: argparse.Namespace) -> int:
-    workspace = Path(args.workspace) if args.workspace else Path(args.project).expanduser() / ".xuejiao-twin"
-    run = run_workspace(workspace, mode=args.mode, out=Path(args.out) if args.out else None)
+def _cmd_status(args: argparse.Namespace) -> int:
+    try:
+        status = status_workspace(_workspace_arg(args))
+    except WorkspaceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     if args.json:
-        import json
-
-        print(json.dumps(run, ensure_ascii=False, indent=2, sort_keys=True))
+        _print_json(status)
     else:
-        print(f"run_id={run['run_id']} outcome={run['outcome']} stop_reason={run['stop_reason']}")
-        if not args.no_human_hints:
-            _print_human_review(run)
-    return 0 if run["outcome"] in {"completed", "dry_run", "needs_human"} else 1
+        print(f"workspace={status['workspace']}")
+        print(f"status={status['status']}")
+        print(f"goal={status['goal']}")
+        print(f"current_item_id={status['current_item_id'] or 'none'}")
+        print(f"round_index={status['round_index']}")
+        print(f"next_instruction={status['next_instruction'] or 'none'}")
+        print(f"current_run_id={status.get('current_run_id') or 'none'}")
+        print(f"current={status['current']}")
+        _print_needs_human(status)
+    return 0
 
 
 def _cmd_respond(args: argparse.Namespace) -> int:
-    workspace = Path(args.workspace) if args.workspace else Path(args.project).expanduser() / ".xuejiao-twin"
     try:
-        target = write_human_response(
-            workspace,
-            action=str(args.action),
-            feature_id=str(args.feature),
-            run_id=str(args.run_id),
-            note=str(args.note),
-        )
-    except ValueError as exc:
+        target = record_human_response(_workspace_arg(args), args.text)
+    except WorkspaceError as exc:
         print(str(exc), file=sys.stderr)
         return 2
     print(f"human_response_written={target}")
+    print(f"next=python3 -m scripts.xuejiao_twin worker-turn --workspace {Path(args.workspace).expanduser().resolve()} --json")
     return 0
 
 
-def _cmd_replan(args: argparse.Namespace) -> int:
-    workspace = Path(args.workspace).expanduser() if args.workspace else Path(args.project).expanduser() / ".xuejiao-twin"
-    goal = load_goal(workspace / "goal.yaml")
-    stamp = now_utc().replace(":", "").replace("-", "")
-    archive_dir = workspace / "runs" / "archive"
-
-    ledger_path = workspace / "feature_ledger.json"
-    if ledger_path.exists() and not args.no_archive:
-        write_json(archive_dir / f"feature_ledger-{stamp}.json", read_json(ledger_path))
-    write_json(ledger_path, feature_ledger(goal))
-
-    progress_path = workspace / "progress.md"
-    if progress_path.exists() and not args.no_archive:
-        archive_dir.mkdir(parents=True, exist_ok=True)
-        (archive_dir / f"progress-{stamp}.md").write_text(progress_path.read_text(encoding="utf-8"), encoding="utf-8")
-    progress = [
-        "# xuejiao twin progress",
-        "",
-        f"Replanned: {now_utc()}",
-        f"Goal: {goal.get('goal', '')}",
-        "",
-        "## Current state",
-        "- Status: replanned",
-        "- Ledger: empty dynamic ledger, planning_status=needs_draft",
-        "- Next action: run supervised mode to draft and review a new ledger",
-        "",
-    ]
-    progress_path.write_text("\n".join(progress), encoding="utf-8")
-
-    current = [
-        "# xuejiao twin current",
-        "",
-        "- Status: replanned",
-        f"- Goal: {goal.get('goal', '')}",
-        "- Focus: none",
-        "- Ledger: revision=0 completed=0 pending=0 blocked=0",
-        f"- Next: {CLI_MODULE_CMD} run --workspace {workspace} --mode supervised-normal",
-        "",
-    ]
-    (workspace / "CURRENT.md").write_text("\n".join(current), encoding="utf-8")
-
-    response_path = workspace / "human_response.json"
-    response_path.unlink(missing_ok=True)
-    print(f"feature_ledger_reset={ledger_path}")
-    print(f"current={workspace / 'CURRENT.md'}")
-    print(f"next={CLI_MODULE_CMD} run --workspace {workspace} --mode supervised-normal")
+def _cmd_next_instruction(args: argparse.Namespace) -> int:
+    try:
+        instruction = build_next_instruction(_workspace_arg(args))
+    except WorkspaceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if args.json:
+        _print_json({"next_instruction": instruction})
+    else:
+        print(instruction)
     return 0
 
 
-def _cmd_replay(args: argparse.Namespace) -> int:
-    print(replay_run(Path(args.run)), end="")
+def _cmd_worker_turn(args: argparse.Namespace) -> int:
+    try:
+        run = start_worker_turn(_workspace_arg(args), args.instruction or "", max_budget_usd=args.max_budget_usd)
+    except WorkspaceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if args.json:
+        _print_json(run)
+    else:
+        print(f"run_id={run['run_id']} outcome={run['outcome']} resume_used={run['worker']['resume_used']}")
+        print(f"run={Path(args.workspace).expanduser().resolve() / 'runs' / run['run_id'] / 'run.json'}")
+    return 0 if run["outcome"] == "review_required" else 1
+
+
+def _cmd_review_context(args: argparse.Namespace) -> int:
+    try:
+        context = build_review_context(_workspace_arg(args), args.run_id)
+        if args.template:
+            context = review_template(context)
+    except WorkspaceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    _print_json(context)
+    return 0
+
+
+def _cmd_review(args: argparse.Namespace) -> int:
+    try:
+        review = json.loads(Path(args.review_file).read_text(encoding="utf-8"))
+        state = apply_supervisor_review(_workspace_arg(args), args.run_id, review)
+        status = status_workspace(_workspace_arg(args))
+    except (OSError, json.JSONDecodeError, WorkspaceError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if args.json:
+        _print_json(state)
+    else:
+        print(f"status={state['status']}")
+        print(f"next_instruction={state.get('next_instruction') or 'none'}")
+        _print_needs_human(status)
     return 0
 
 
 def _cmd_validate(args: argparse.Namespace) -> int:
-    errors = run_fixture_validation() if args.fixtures else validate_run_dir(Path(args.path))
+    errors = run_fixture_validation() if args.fixtures else validate_path(Path(args.path))
     if errors:
         for error in errors:
             print(f"FAIL: {error}", file=sys.stderr)
@@ -144,42 +144,45 @@ def _cmd_validate(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog=CLI_MODULE_CMD)
+    parser = argparse.ArgumentParser(prog="python3 -m scripts.xuejiao_twin")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_init = sub.add_parser("init")
-    p_init.add_argument("--goal-file", required=True)
-    p_init.add_argument("--persona", required=True)
-    p_init.add_argument("--out", default="")
-    p_init.set_defaults(func=_cmd_init)
-
-    p_run = sub.add_parser("run")
-    p_run.add_argument("--project", default="")
-    p_run.add_argument("--workspace", default="")
-    p_run.add_argument("--mode", default="dry-run", choices=["dry-run", "supervised-low", "supervised-normal", "supervised-high"])
-    p_run.add_argument("--out", default="")
-    p_run.add_argument("--json", action="store_true")
-    p_run.add_argument("--no-human-hints", action="store_true")
-    p_run.set_defaults(func=_cmd_run)
+    p_status = sub.add_parser("status")
+    p_status.add_argument("workspace_pos", nargs="?")
+    p_status.add_argument("--workspace", dest="workspace")
+    p_status.add_argument("--json", action="store_true")
+    p_status.set_defaults(func=lambda args: _cmd_status(_merge_workspace(args)))
 
     p_respond = sub.add_parser("respond")
-    p_respond.add_argument("--project", default="")
-    p_respond.add_argument("--workspace", default="")
-    p_respond.add_argument("--action", required=True, choices=sorted(HUMAN_ACTIONS))
-    p_respond.add_argument("--feature", default="")
-    p_respond.add_argument("--run-id", default="")
-    p_respond.add_argument("--note", default="")
-    p_respond.set_defaults(func=_cmd_respond)
+    p_respond.add_argument("text_pos", nargs="*")
+    p_respond.add_argument("--workspace", required=True)
+    p_respond.add_argument("--text", default="")
+    p_respond.set_defaults(func=lambda args: _cmd_respond(_merge_text(args)))
 
-    p_replan = sub.add_parser("replan")
-    p_replan.add_argument("--project", default="")
-    p_replan.add_argument("--workspace", default="")
-    p_replan.add_argument("--no-archive", action="store_true")
-    p_replan.set_defaults(func=_cmd_replan)
+    p_next = sub.add_parser("next-instruction")
+    p_next.add_argument("--workspace", required=True)
+    p_next.add_argument("--json", action="store_true")
+    p_next.set_defaults(func=_cmd_next_instruction)
 
-    p_replay = sub.add_parser("replay")
-    p_replay.add_argument("run")
-    p_replay.set_defaults(func=_cmd_replay)
+    p_worker = sub.add_parser("worker-turn")
+    p_worker.add_argument("--workspace", required=True)
+    p_worker.add_argument("--instruction", default="")
+    p_worker.add_argument("--max-budget-usd", type=float, default=1.0)
+    p_worker.add_argument("--json", action="store_true")
+    p_worker.set_defaults(func=_cmd_worker_turn)
+
+    p_context = sub.add_parser("review-context")
+    p_context.add_argument("--workspace", required=True)
+    p_context.add_argument("--run-id", required=True)
+    p_context.add_argument("--template", action="store_true")
+    p_context.set_defaults(func=_cmd_review_context)
+
+    p_review = sub.add_parser("review")
+    p_review.add_argument("--workspace", required=True)
+    p_review.add_argument("--run-id", required=True)
+    p_review.add_argument("--review-file", required=True)
+    p_review.add_argument("--json", action="store_true")
+    p_review.set_defaults(func=_cmd_review)
 
     p_validate = sub.add_parser("validate")
     p_validate.add_argument("path", nargs="?", default="")
@@ -187,6 +190,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_validate.set_defaults(func=_cmd_validate)
 
     return parser
+
+
+def _merge_workspace(args: argparse.Namespace) -> argparse.Namespace:
+    if not args.workspace:
+        args.workspace = args.workspace_pos
+    return args
+
+
+def _merge_text(args: argparse.Namespace) -> argparse.Namespace:
+    if not args.text and args.text_pos:
+        args.text = " ".join(args.text_pos)
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:
