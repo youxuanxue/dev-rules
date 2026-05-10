@@ -10,31 +10,6 @@ def now_utc() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def normalize_timestamp(value: Any) -> str | None:
-    if value is None or value == "":
-        return None
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        numeric = float(value)
-        if numeric > 10_000_000_000:
-            numeric = numeric / 1000
-        return datetime.fromtimestamp(numeric, timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    if isinstance(value, str):
-        text = value.strip()
-        if not text:
-            return None
-        if text.isdigit():
-            return normalize_timestamp(int(text))
-        return text
-    return str(value)
-
-
-def date_range(values: list[Any]) -> dict[str, str | None]:
-    timestamps = sorted(timestamp for timestamp in (normalize_timestamp(value) for value in values) if timestamp)
-    return {
-        "start": timestamps[0] if timestamps else None,
-        "end": timestamps[-1] if timestamps else None,
-    }
-
 
 def write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)

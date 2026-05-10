@@ -5,6 +5,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from . import contracts, util
 from .claude_runner import ClaudeRunResult
 from .contracts import (
     GOAL_SCHEMA,
@@ -58,7 +59,7 @@ def _goal() -> dict[str, Any]:
             {"id": "AC1", "statement": "fixture 有测试证据", "evidence_type": "tests/preflight"},
             {"id": "AC2", "statement": "fixture 有 PR 或 diff 证据", "evidence_type": "diff"},
         ],
-        "non_goals": ["不测试旧 init/run/replan 兼容"],
+        "non_goals": ["不测试旧命令兼容路径"],
     }
 
 
@@ -120,7 +121,7 @@ acceptance_criteria:
     statement: fixture 有 PR 或 diff 证据
     evidence_type: diff
 non_goals:
-  - 不测试旧 init/run/replan 兼容
+  - 不测试旧命令兼容路径
 """,
         encoding="utf-8",
     )
@@ -155,6 +156,12 @@ items:
 
 def _schema_errors() -> list[str]:
     errors: list[str] = []
+    for stale_name in ("TERMINAL_STATUSES", "DECISIONS"):
+        if hasattr(contracts, stale_name):
+            errors.append(f"stale contract constant should not be public: {stale_name}")
+    for stale_name in ("normalize_timestamp", "date_range"):
+        if hasattr(util, stale_name):
+            errors.append(f"stale util helper should not be public: {stale_name}")
     for value, schema in [
         (_goal(), GOAL_SCHEMA),
         (_ledger(), LEDGER_SCHEMA),
