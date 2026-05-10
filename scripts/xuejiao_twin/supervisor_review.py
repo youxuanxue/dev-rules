@@ -193,14 +193,8 @@ def apply_supervisor_review(workspace: Path, run_id: str, review: dict[str, Any]
 
     state["last_decision"] = decision
     state["current_run_id"] = run_id
-    if review.get("ledger_updates"):
-        first = review["ledger_updates"][0]
-        if isinstance(first, dict):
-            state["current_item_id"] = first.get("item_id")
-    elif choose_next_item(ledger):
-        state["current_item_id"] = choose_next_item(ledger).get("id")
-    else:
-        state["current_item_id"] = None
+    next_item = choose_next_item(ledger)
+    state["current_item_id"] = next_item.get("id") if next_item else None
     review_path = _review_path(workspace, run_id)
     write_json(review_path, review)
     run["review_ref"] = str(review_path)

@@ -129,6 +129,12 @@ def start_worker_turn(
         raise WorkspaceError("workspace is waiting for human response")
     if state.get("status") in {"accepted_done", "failed"}:
         raise WorkspaceError(f"workspace is terminal: {state.get('status')}")
+    if state.get("status") == "review_required":
+        raise WorkspaceError(
+            "previous worker turn requires supervisor review before the next worker turn"
+        )
+    if state.get("status") == "worker_running":
+        raise WorkspaceError("worker is already running for this workspace")
 
     instruction = instruction.strip()
     if not instruction:

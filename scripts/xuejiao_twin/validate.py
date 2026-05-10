@@ -253,6 +253,12 @@ def run_fixture_validation() -> list[str]:
         if "supervisor_session_id" in json.dumps(run):
             errors.append("run artifact should not contain supervisor session fields")
 
+        try:
+            start_worker_turn(workspace, "强行再启动", runner=runner)
+            errors.append("review_required state should block next worker turn")
+        except WorkspaceError:
+            pass
+
         context = build_review_context(workspace, run["run_id"])
         if "supervisor persona" not in context.get("supervisor_persona", ""):
             errors.append("review context should include supervisor persona")
@@ -269,6 +275,7 @@ def run_fixture_validation() -> list[str]:
             errors.append("second worker turn should resume saved worker session")
         if not second["worker"]["resume_used"]:
             errors.append("second run artifact should mark resume_used")
+        apply_supervisor_review(workspace, second["run_id"], _review("CONTINUE"))
 
         reset_runner = FakeRunner(session_lost_once=True)
         reset = start_worker_turn(workspace, "测试 session reset", runner=reset_runner)
@@ -278,14 +285,16 @@ def run_fixture_validation() -> list[str]:
             errors.append("session lost retry should be fresh")
         if reset["worker"]["resume_used"]:
             errors.append("fresh retry should not mark resume_used")
+        apply_supervisor_review(workspace, reset["run_id"], _review("CONTINUE"))
 
+        needs_run = start_worker_turn(workspace, "等人确认 fixture", runner=runner)
         needs_human = _review("NEEDS_HUMAN", question="请确认 fixture")
-        state = apply_supervisor_review(workspace, run["run_id"], needs_human)
+        state = apply_supervisor_review(workspace, needs_run["run_id"], needs_human)
         if state.get("status") != "needs_human" or not state.get("needs_human"):
             errors.append("NEEDS_HUMAN review did not update state")
         status = status_workspace(workspace)
-        if not status.get("needs_human") or not status.get("current_run_id"):
-            errors.append("status should expose needs_human and current run")
+        if not status.get("needs_human") or status.get("current_run_id") != needs_run["run_id"]:
+            errors.append("status should expose needs_human and the latest run")
         try:
             start_worker_turn(workspace, "不应启动", runner=runner)
             errors.append("worker should not start while needs_human pending")
@@ -301,6 +310,11 @@ def run_fixture_validation() -> list[str]:
             errors.append("worker turn should consume human_response.json")
         if "human_response.json" not in str(runner.calls[-1].get("prompt")):
             errors.append("worker prompt should include unconsumed human response")
+        apply_supervisor_review(workspace, resumed["run_id"], _review("CONTINUE"))
+        post_consume = start_worker_turn(workspace, "再跑一轮 fixture", runner=runner)
+        if "human_response.json" in str(runner.calls[-1].get("prompt")):
+            errors.append("consumed human_response.json should not be re-injected into worker prompt")
+        apply_supervisor_review(workspace, post_consume["run_id"], _review("CONTINUE"))
 
         repeat_review = _review("CONTINUE", gaps=["same gap"], actions=[])
         repeat_workspace = _write_workspace(root / "repeat")
@@ -340,12 +354,16 @@ def run_fixture_validation() -> list[str]:
         state = apply_supervisor_review(done_workspace, done_run["run_id"], done)
         if state.get("status") != "accepted_done":
             errors.append("ACCEPTED_DONE review did not update state")
+        if state.get("current_item_id"):
+            errors.append("ACCEPTED_DONE state should clear current_item_id once no items remain")
         run_artifact = read_json(done_workspace / "runs" / done_run["run_id"] / "run.json")
         if run_artifact.get("outcome") != "accepted_done":
             errors.append("accepted run artifact outcome not updated")
         status = status_workspace(done_workspace)
         if status.get("status") != "accepted_done" or status.get("remaining_gaps"):
             errors.append("status_workspace did not report clean accepted_done")
+        if status.get("current_item_id"):
+            errors.append("status_workspace should not surface a completed item as current after ACCEPTED_DONE")
     return errors
 
 
