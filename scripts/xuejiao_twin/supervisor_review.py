@@ -4,11 +4,10 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
-from .contracts import RUN_SCHEMA, SUPERVISOR_REVIEW_SCHEMA
+from .contracts import CURRENT_FILE, HUMAN_RESPONSE_FILE, RUN_SCHEMA, SUPERVISOR_REVIEW_SCHEMA, SUPERVISOR_STATE_FILE
 from .ledger import acceptance_evidence, apply_ledger_updates, choose_next_item, ledger_gaps
 from .schema_contract import validate_schema
 from .util import now_utc, read_json, write_json
-from .contracts import CURRENT_FILE, HUMAN_RESPONSE_FILE, SUPERVISOR_STATE_FILE
 from .workspace import (
     WorkspaceError,
     load_goal,
@@ -64,108 +63,65 @@ def _validate_accepted_done(goal: dict[str, Any], ledger: dict[str, Any], review
     return errors
 
 
-def build_next_instruction(workspace: Path) -> str:
+def build_supervisor_context(workspace: Path, run_id: str | None = None) -> dict[str, Any]:
     goal = load_goal(workspace)
     ledger = load_ledger(workspace)
     state = load_state(workspace)
-    if state.get("status") == "needs_human" and state.get("needs_human"):
-        raise WorkspaceError("workspace is waiting for human response")
-    if state.get("status") in {"accepted_done", "failed"}:
-        raise WorkspaceError(f"workspace is terminal: {state.get('status')}")
-    existing = str(state.get("next_instruction") or "").strip()
-    if existing:
-        return existing
-
-    item = choose_next_item(ledger)
-    gaps = ledger_gaps(goal, ledger)
-    if item is None:
-        return "对照 goal.yaml 与 feature_ledger 做最终验收；如证据不足，补齐测试、preflight、diff/PR 证据后更新 ledger。"
-
-    covered = ", ".join(str(ac_id) for ac_id in item.get("covers_ac", []))
-    evidence_plan = "; ".join(str(entry) for entry in item.get("evidence_plan", [])) or "按 goal/ledger 补齐可验收证据"
-    gap_text = "\n".join(f"- {gap}" for gap in gaps[:10]) or "- 无已知 gap；做最终确认。"
-    return "\n".join([
-        f"推进 ledger item {item.get('id')}: {item.get('deliverable')}",
-        f"Scope: {item.get('scope')}",
-        f"Covers AC: {covered}",
-        f"Expected evidence: {evidence_plan}",
-        f"Next action: {item.get('next_action') or '完成该 deliverable 并更新 feature_ledger actual_evidence/status'}",
-        "Current ledger gaps:",
-        gap_text,
-        "完成后必须留下 tests/preflight/diff/PR 等证据；不要把 worker 自述当最终验收。",
-    ]).strip()
-
-
-def build_review_context(workspace: Path, run_id: str) -> dict[str, Any]:
-    goal = load_goal(workspace)
-    ledger = load_ledger(workspace)
-    state = load_state(workspace)
-    run_path = _run_path(workspace, run_id)
-    if not run_path.exists():
-        raise WorkspaceError(f"missing run artifact: {run_path}")
-    context = {
+    next_item = choose_next_item(ledger)
+    context: dict[str, Any] = {
         "workspace": str(workspace),
         "goal": goal,
         "ledger": ledger,
         "supervisor_persona": read_text_file(workspace, "supervisor-persona.md"),
         "state": state,
-        "run": read_json(run_path),
+        "next_item": next_item,
         "remaining_gaps": ledger_gaps(goal, ledger),
         "acceptance_evidence": acceptance_evidence(goal, ledger),
         "artifact_paths": {
             "current": str(workspace / CURRENT_FILE),
             "state": str(workspace / SUPERVISOR_STATE_FILE),
-            "run": str(run_path),
-            "review": str(_review_path(workspace, run_id)),
             "human_response": str(workspace / HUMAN_RESPONSE_FILE),
+        },
+        "review_skeleton": {
+            "decision": "<ACCEPTED_DONE|CONTINUE|NEEDS_HUMAN|FAILED>",
+            "summary": "",
+            "next_instruction": "",
+            "remaining_gaps": [],
+            "acceptance_evidence": [],
+            "risk_flags": [],
+            "actions": [],
+            "ledger_updates": [],
+            "human_question": None,
         },
     }
     human_response = load_human_response(workspace)
     if human_response:
         context["human_response"] = human_response
+    if run_id:
+        run_path = _run_path(workspace, run_id)
+        if not run_path.exists():
+            raise WorkspaceError(f"missing run artifact: {run_path}")
+        context["run"] = read_json(run_path)
+        context["artifact_paths"]["run"] = str(run_path)
+        context["artifact_paths"]["review"] = str(_review_path(workspace, run_id))
     return context
 
 
-def review_template(context: dict[str, Any]) -> dict[str, Any]:
-    next_instruction = str(context.get("state", {}).get("next_instruction") or "")
-    gaps = [str(item) for item in context.get("remaining_gaps", [])]
-    decision = "ACCEPTED_DONE" if not gaps else "CONTINUE"
-    if decision == "CONTINUE" and not next_instruction:
-        next_instruction = "补齐 remaining_gaps 中列出的验收证据，并更新 feature_ledger。"
-    return {
-        "decision": decision,
-        "summary": "",
-        "next_instruction": "" if decision == "ACCEPTED_DONE" else next_instruction,
-        "remaining_gaps": gaps,
-        "acceptance_evidence": context.get("acceptance_evidence", []),
-        "risk_flags": [],
-        "actions": [],
-        "ledger_updates": [],
-        "human_question": None,
-    }
+def build_review_context(workspace: Path, run_id: str) -> dict[str, Any]:
+    return build_supervisor_context(workspace, run_id)
 
 
-def _apply_review_actions(review: dict[str, Any]) -> None:
+def _validate_review_actions(review: dict[str, Any]) -> None:
     actions = set(review.get("actions") or [])
     if "mark_ledger_gap" in actions and not review.get("ledger_updates"):
         raise WorkspaceError("mark_ledger_gap requires ledger_updates")
-    if review.get("decision") != "CONTINUE":
-        return
-    instruction = str(review.get("next_instruction") or "").strip()
-    prefixes: list[str] = []
-    if "fix_drift" in actions:
-        prefixes.append("先纠偏：回到 goal.yaml、feature_ledger 和 non-goals，撤回或修正偏离目标的改动。")
-    if "validate_more" in actions:
-        prefixes.append("先补验证：运行相关测试/preflight，并把证据写入 feature_ledger actual_evidence。")
-    if prefixes:
-        review["next_instruction"] = "\n".join(prefixes + ([instruction] if instruction else []))
 
 
 def apply_supervisor_review(workspace: Path, run_id: str, review: dict[str, Any]) -> dict[str, Any]:
     errors = validate_schema(review, SUPERVISOR_REVIEW_SCHEMA)
     if errors:
         raise WorkspaceError("supervisor_review schema errors: " + "; ".join(errors))
-    _apply_review_actions(review)
+    _validate_review_actions(review)
 
     goal = load_goal(workspace)
     ledger = load_ledger(workspace)
@@ -210,10 +166,7 @@ def apply_supervisor_review(workspace: Path, run_id: str, review: dict[str, Any]
     elif decision == "CONTINUE":
         instruction = str(review.get("next_instruction") or "").strip()
         if not instruction:
-            raise WorkspaceError("CONTINUE requires next_instruction")
-        streak = int(state.get("failure_streaks", {}).get(key) or 0) if key else 0
-        if streak >= 2 and "改变策略" not in instruction:
-            instruction = "改变策略：不要重复上一轮做法；先定位最小未满足证据或失败根因，再用不同路径补齐。\n" + instruction
+            raise WorkspaceError("CONTINUE requires supervisor-authored next_instruction")
         state["status"] = "continue"
         state["next_instruction"] = instruction
         state["needs_human"] = None

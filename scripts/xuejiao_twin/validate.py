@@ -16,10 +16,9 @@ from .contracts import (
 from .ledger import acceptance_evidence, ledger_gaps, validate_ledger_semantics
 from .runtime import (
     apply_supervisor_review,
-    build_next_instruction,
     build_review_context,
+    build_supervisor_context,
     record_human_response,
-    review_template,
     start_worker_turn,
     status_workspace,
     validate_workspace,
@@ -203,9 +202,12 @@ def run_fixture_validation() -> list[str]:
         except WorkspaceError as exc:
             errors.append(f"valid workspace failed: {exc}")
         errors.extend(validate_artifact(workspace / "supervisor_state.json", SUPERVISOR_STATE_SCHEMA))
-        instruction = build_next_instruction(workspace)
-        if "F1" not in instruction or "Current ledger gaps" not in instruction:
-            errors.append("build_next_instruction should target the next ledger item and include gaps")
+        supervisor_context = build_supervisor_context(workspace)
+        if supervisor_context.get("next_item", {}).get("id") != "F1" or not supervisor_context.get("remaining_gaps"):
+            errors.append("supervisor context should expose next item and gaps without generating instruction")
+        skeleton = supervisor_context.get("review_skeleton", {})
+        if skeleton.get("decision") != "<ACCEPTED_DONE|CONTINUE|NEEDS_HUMAN|FAILED>":
+            errors.append("supervisor context should expose an undecided review skeleton")
         if not ledger_gaps(_goal(), _ledger()):
             errors.append("pending ledger should have gaps")
         if any(item["evidence"] for item in acceptance_evidence(_goal(), _ledger())):
@@ -228,7 +230,12 @@ def run_fixture_validation() -> list[str]:
             pass
 
         runner = FakeRunner()
-        run = start_worker_turn(workspace, "", runner=runner)
+        try:
+            start_worker_turn(workspace, "", runner=runner)
+            errors.append("worker-turn should require supervisor-authored instruction")
+        except WorkspaceError:
+            pass
+        run = start_worker_turn(workspace, "推进 ledger item F1", runner=runner)
         errors.extend(validate_schema(run, RUN_SCHEMA))
         call = runner.calls[0]
         if call.get("session_id"):
@@ -240,7 +247,7 @@ def run_fixture_validation() -> list[str]:
             errors.append("worker should receive explicit allowed tools")
         prompt = str(call.get("prompt") or "")
         if "worker persona" not in prompt or "fixture-goal" not in prompt or "推进 ledger item F1" not in prompt:
-            errors.append("worker prompt missing persona/goal/generated instruction")
+            errors.append("worker prompt missing persona/goal/supervisor-authored instruction")
         if "supervisor persona" in prompt:
             errors.append("worker prompt should not include supervisor persona")
         if "supervisor_session_id" in json.dumps(run):
@@ -249,14 +256,13 @@ def run_fixture_validation() -> list[str]:
         context = build_review_context(workspace, run["run_id"])
         if "supervisor persona" not in context.get("supervisor_persona", ""):
             errors.append("review context should include supervisor persona")
-        template = review_template(context)
-        if template.get("decision") != "CONTINUE":
-            errors.append("review template should continue while gaps remain")
+        if context.get("review_skeleton", {}).get("decision") != "<ACCEPTED_DONE|CONTINUE|NEEDS_HUMAN|FAILED>":
+            errors.append("review context should not preselect a decision")
 
         continue_review = _review("CONTINUE", gaps=["F1 missing"], actions=["fix_drift", "validate_more"])
         state = apply_supervisor_review(workspace, run["run_id"], continue_review)
-        if state.get("status") != "continue" or "先纠偏" not in state.get("next_instruction", ""):
-            errors.append("CONTINUE review actions did not update next instruction")
+        if state.get("status") != "continue" or state.get("next_instruction") != "继续 fixture":
+            errors.append("CONTINUE review should store supervisor-authored next instruction unchanged")
 
         second = start_worker_turn(workspace, "继续 F1", runner=runner)
         if not runner.calls[-1].get("session_id"):
@@ -289,7 +295,7 @@ def run_fixture_validation() -> list[str]:
         state = load_state(workspace)
         if state.get("status") != "continue" or state.get("needs_human") is not None:
             errors.append("respond did not clear needs_human state")
-        resumed = start_worker_turn(workspace, "", runner=runner)
+        resumed = start_worker_turn(workspace, "继续 fixture", runner=runner)
         consumed = read_json(workspace / "human_response.json")
         if consumed.get("consumed_by_run_id") != resumed["run_id"]:
             errors.append("worker turn should consume human_response.json")
@@ -299,13 +305,13 @@ def run_fixture_validation() -> list[str]:
         repeat_review = _review("CONTINUE", gaps=["same gap"], actions=[])
         repeat_workspace = _write_workspace(root / "repeat")
         repeat_runner = FakeRunner()
-        repeat_run = start_worker_turn(repeat_workspace, "", runner=repeat_runner)
+        repeat_run = start_worker_turn(repeat_workspace, "重复 gap fixture", runner=repeat_runner)
         apply_supervisor_review(repeat_workspace, repeat_run["run_id"], repeat_review)
-        repeat_run = start_worker_turn(repeat_workspace, "", runner=repeat_runner)
+        repeat_run = start_worker_turn(repeat_workspace, "重复 gap fixture", runner=repeat_runner)
         second_repeat_state = apply_supervisor_review(repeat_workspace, repeat_run["run_id"], repeat_review)
-        if "改变策略" not in second_repeat_state.get("next_instruction", ""):
-            errors.append("second same gap should change strategy before asking human")
-        repeat_run = start_worker_turn(repeat_workspace, "", runner=repeat_runner)
+        if second_repeat_state.get("next_instruction") != "继续 fixture":
+            errors.append("second same gap should keep supervisor-authored instruction unchanged")
+        repeat_run = start_worker_turn(repeat_workspace, "重复 gap fixture", runner=repeat_runner)
         repeat_state = apply_supervisor_review(repeat_workspace, repeat_run["run_id"], repeat_review)
         if repeat_state.get("status") != "needs_human":
             errors.append("same gap for three rounds should require human")

@@ -7,10 +7,9 @@ from pathlib import Path
 
 from .runtime import (
     apply_supervisor_review,
-    build_next_instruction,
     build_review_context,
+    build_supervisor_context,
     record_human_response,
-    review_template,
     start_worker_turn,
     status_workspace,
 )
@@ -73,26 +72,23 @@ def _cmd_respond(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 2
     print(f"human_response_written={target}")
-    print(f"next=python3 -m scripts.xuejiao_twin worker-turn --workspace {Path(args.workspace).expanduser().resolve()} --json")
+    print(f"next=当前 Claude Code supervisor 读取 supervisor-context 后生成下一条 worker instruction")
     return 0
 
 
-def _cmd_next_instruction(args: argparse.Namespace) -> int:
+def _cmd_supervisor_context(args: argparse.Namespace) -> int:
     try:
-        instruction = build_next_instruction(_workspace_arg(args))
+        context = build_supervisor_context(_workspace_arg(args), getattr(args, "run_id", None))
     except WorkspaceError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    if args.json:
-        _print_json({"next_instruction": instruction})
-    else:
-        print(instruction)
+    _print_json(context)
     return 0
 
 
 def _cmd_worker_turn(args: argparse.Namespace) -> int:
     try:
-        run = start_worker_turn(_workspace_arg(args), args.instruction or "", max_budget_usd=args.max_budget_usd)
+        run = start_worker_turn(_workspace_arg(args), args.instruction, max_budget_usd=args.max_budget_usd)
     except WorkspaceError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -107,8 +103,6 @@ def _cmd_worker_turn(args: argparse.Namespace) -> int:
 def _cmd_review_context(args: argparse.Namespace) -> int:
     try:
         context = build_review_context(_workspace_arg(args), args.run_id)
-        if args.template:
-            context = review_template(context)
     except WorkspaceError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -159,23 +153,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_respond.add_argument("--text", default="")
     p_respond.set_defaults(func=lambda args: _cmd_respond(_merge_text(args)))
 
-    p_next = sub.add_parser("next-instruction")
-    p_next.add_argument("--workspace", required=True)
-    p_next.add_argument("--json", action="store_true")
-    p_next.set_defaults(func=_cmd_next_instruction)
+    p_context = sub.add_parser("supervisor-context")
+    p_context.add_argument("--workspace", required=True)
+    p_context.add_argument("--run-id")
+    p_context.set_defaults(func=_cmd_supervisor_context)
 
     p_worker = sub.add_parser("worker-turn")
     p_worker.add_argument("--workspace", required=True)
-    p_worker.add_argument("--instruction", default="")
+    p_worker.add_argument("--instruction", required=True)
     p_worker.add_argument("--max-budget-usd", type=float, default=1.0)
     p_worker.add_argument("--json", action="store_true")
     p_worker.set_defaults(func=_cmd_worker_turn)
 
-    p_context = sub.add_parser("review-context")
-    p_context.add_argument("--workspace", required=True)
-    p_context.add_argument("--run-id", required=True)
-    p_context.add_argument("--template", action="store_true")
-    p_context.set_defaults(func=_cmd_review_context)
+    p_review_context = sub.add_parser("review-context")
+    p_review_context.add_argument("--workspace", required=True)
+    p_review_context.add_argument("--run-id", required=True)
+    p_review_context.set_defaults(func=_cmd_review_context)
 
     p_review = sub.add_parser("review")
     p_review.add_argument("--workspace", required=True)

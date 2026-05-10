@@ -43,16 +43,18 @@ worker-persona.md
 
 1. 读取 `goal.yaml`、`feature_ledger.yaml`、`supervisor-persona.md`、`supervisor_state.json`、`runs/*` 摘要。
 2. 若 state 是 `needs_human` 且没有新回答，直接 inline 展示问题和证据路径，不启动 worker。
-3. 生成或读取本轮 `next_instruction`：
+3. 读取 supervisor context；当前 Claude Code 交互会话作为 persona supervisor，基于事实源生成本轮 `next_instruction`：
 
 ```bash
-PYTHONPATH=/Users/xuejiao/Codes/dev-rules python3 -m scripts.xuejiao_twin next-instruction --workspace <workspace> --json
+PYTHONPATH=/Users/xuejiao/Codes/dev-rules python3 -m scripts.xuejiao_twin supervisor-context --workspace <workspace>
 ```
 
-4. 启动或 resume worker：
+Python 只输出 goal、ledger、state、gaps、next item、artifact paths 和空 review skeleton；不要让 Python 生成 instruction 或 decision。
+
+4. 用当前 supervisor 生成的 instruction 启动或 resume worker：
 
 ```bash
-PYTHONPATH=/Users/xuejiao/Codes/dev-rules python3 -m scripts.xuejiao_twin worker-turn --workspace <workspace> --json
+PYTHONPATH=/Users/xuejiao/Codes/dev-rules python3 -m scripts.xuejiao_twin worker-turn --workspace <workspace> --instruction "<supervisor-authored instruction>" --json
 ```
 
 5. 读取 review context，让当前交互会话作为 supervisor 产出 `supervisor_review.json`：
@@ -61,7 +63,7 @@ PYTHONPATH=/Users/xuejiao/Codes/dev-rules python3 -m scripts.xuejiao_twin worker
 PYTHONPATH=/Users/xuejiao/Codes/dev-rules python3 -m scripts.xuejiao_twin review-context --workspace <workspace> --run-id <run_id> --json
 ```
 
-review 必须包含：`decision`、`next_instruction`、`remaining_gaps`、`acceptance_evidence`、`risk_flags`，可用 `actions: [fix_drift|validate_more|mark_ledger_gap]` 辅助纠偏。
+review 必须由当前 Claude Code supervisor 生成，并包含：`decision`、`next_instruction`、`remaining_gaps`、`acceptance_evidence`、`risk_flags`，可用 `actions: [fix_drift|validate_more|mark_ledger_gap]` 标记纠偏意图。Python 只校验并应用 review。
 
 6. 应用 review：
 

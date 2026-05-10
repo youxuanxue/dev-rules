@@ -10,7 +10,6 @@ from .claude_runner import ClaudeRunResult, run_claude_headless
 from .contracts import HUMAN_RESPONSE_FILE, RUNS_DIR, RUN_SCHEMA, SCHEMA_VERSION
 from .privacy import PrivacyReport, redact_text, stable_hash
 from .schema_contract import validate_schema
-from .supervisor_review import build_next_instruction
 from .util import now_utc, read_json, write_json
 from .workspace import (
     WorkspaceError,
@@ -131,7 +130,9 @@ def start_worker_turn(
     if state.get("status") in {"accepted_done", "failed"}:
         raise WorkspaceError(f"workspace is terminal: {state.get('status')}")
 
-    instruction = instruction.strip() or build_next_instruction(workspace)
+    instruction = instruction.strip()
+    if not instruction:
+        raise WorkspaceError("worker-turn requires supervisor-authored --instruction")
     run_id = f"run-{uuid.uuid4().hex[:10]}"
     started_at = now_utc()
     previous_session_id = str(state.get("worker_session_id") or "")

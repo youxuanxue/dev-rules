@@ -171,7 +171,9 @@ worker prompt 由四部分组成：
 1. `worker-persona.md`
 2. `goal.yaml`
 3. `feature_ledger.yaml`
-4. supervisor 本轮 `next_instruction`
+4. 当前 Claude Code 交互 supervisor 本轮生成的 `next_instruction`
+
+Python runtime 只能整理 supervisor context、启动 worker、记录 artifact、校验和应用 review；不能生成 `next_instruction`，也不能替 supervisor 决定 `ACCEPTED_DONE / CONTINUE / NEEDS_HUMAN`。
 
 不要再内嵌第二套 worker persona 或完成标准。
 
@@ -251,7 +253,7 @@ P0：greenfield 骨架
 
 P1：闭环推进
 
-- 实现 `supervisor_review`：输出 `decision + next_instruction + remaining_gaps + acceptance_evidence + risk_flags`。
+- 实现 `supervisor_review` 应用层：当前 Claude Code supervisor 输出 `decision + next_instruction + remaining_gaps + acceptance_evidence + risk_flags`；Python 只校验并应用。
 - 每轮 worker 后必须 supervisor review，不能把 worker stop 当完成。
 - 支持 `CONTINUE` 自动进入下一轮。
 - 支持 `fix_drift`、`validate_more`、`mark_ledger_gap`。
