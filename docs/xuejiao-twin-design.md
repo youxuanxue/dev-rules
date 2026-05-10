@@ -9,7 +9,7 @@ worker harness 已由 dev-rules、项目 `CLAUDE.md`、hooks、preflight、workt
 ## 核心约束
 
 1. **greenfield**：作为全新 `xuejiao-twin` skill / capability 设计，不考虑历史 CLI、workspace、schema 兼容。
-2. **plan-first**：启动前必须已有 Claude Code plan mode 产出的 `goal.yaml + feature_ledger`。缺失则不启动。
+2. **plan-first**：启动前必须已有 Claude Code plan mode 产出的 `goal.yaml + feature_ledger.yaml`。缺失则不启动。
 3. **persona split**：supervisor 使用 `~/.xuejiao-twin/supervisor-persona.md`；worker 只看到 `~/.xuejiao-twin/worker-persona.md`。
 4. **interactive supervisor**：supervisor 直接复用 Claude Code 交互模式和原生高级能力，不另起 supervisor `claude -p`。
 5. **headless worker**：worker 用 Claude Code `-p --permission-mode bypass` 执行，可自主调研、实现、测试、修复、文档、任务分支 commit/push、创建或更新 PR。
@@ -34,7 +34,7 @@ worker harness 已由 dev-rules、项目 `CLAUDE.md`、hooks、preflight、workt
 
 ```text
 goal.yaml              # 目标与验收单一事实来源
-feature_ledger.json    # 或 yaml；执行计划与证据状态单一事实来源
+feature_ledger.yaml    # 执行计划与证据状态单一事实来源
 supervisor-persona.md  # supervisor-only；通常复制自 ~/.xuejiao-twin/supervisor-persona.md
 worker-persona.md      # worker-visible；通常复制自 ~/.xuejiao-twin/worker-persona.md
 ```
@@ -47,7 +47,7 @@ worker-persona.md      # worker-visible；通常复制自 ~/.xuejiao-twin/worker
 
 授权和门禁不进 `goal.yaml`。它们由 Claude Code 原生 `--allowedTools` / `--disallowedTools` / `--permission-mode bypass` / settings / hooks，加上 dev-rules 全局和项目 `CLAUDE.md` 强注入承载。不要再造 `authorized_actions` / `human_gates` 配置层。
 
-`feature_ledger` 只放：
+`feature_ledger.yaml` 只放：
 
 - deliverables
 - 顺序或依赖
@@ -57,7 +57,7 @@ worker-persona.md      # worker-visible；通常复制自 ~/.xuejiao-twin/worker
 - current status
 - next action
 
-AC 的文字定义只在 `goal.yaml`；`feature_ledger` 只引用 AC ID，并记录 deliverable 如何覆盖这些 AC。
+AC 的文字定义只在 `goal.yaml`；`feature_ledger.yaml` 只引用 AC ID，并记录 deliverable 如何覆盖这些 AC。
 
 ## 最小模板
 
@@ -133,7 +133,7 @@ while not done:
 | 事实 | 权威载体 | 说明 |
 | --- | --- | --- |
 | 目标、AC、non-goals | `goal.yaml` | 不写运行进度，不写工具授权/门禁 |
-| 计划、deliverables、AC 覆盖关系、状态、实际证据 | `feature_ledger` | 不重复 AC 文字，不另建平行计划 |
+| 计划、deliverables、AC 覆盖关系、状态、实际证据 | `feature_ledger.yaml` | 不重复 AC 文字，不另建平行计划 |
 | supervisor persona | `supervisor-persona.md` | supervisor-only；不写项目事实 |
 | worker persona | `worker-persona.md` | worker-visible；只写执行偏好 |
 | 当前轮次、next instruction、worker session id、terminal status | `supervisor_state.json` | 不复制 ledger 全文；worker session id 只是续跑索引；不记录独立 supervisor session |
@@ -156,7 +156,7 @@ while not done:
 - `Read` / `Bash` / `gh`：读取 artifacts、git/PR/CI 状态，形成 supervisor review。
 - Claude Code 原生 transcript：作为审计辅助，不作为 goal 或 ledger 事实源。
 
-`/twin` 可以利用当前交互上下文来提高体验，但不能把交互上下文当事实源。每轮判断必须从 `goal.yaml`、`feature_ledger`、`supervisor-persona.md`、`runs/*`、测试/preflight/PR 状态重建。
+`/twin` 可以利用当前交互上下文来提高体验，但不能把交互上下文当事实源。每轮判断必须从 `goal.yaml`、`feature_ledger.yaml`、`supervisor-persona.md`、`runs/*`、测试/preflight/PR 状态重建。
 
 ## worker 调用与续跑
 
@@ -170,7 +170,7 @@ worker prompt 由四部分组成：
 
 1. `worker-persona.md`
 2. `goal.yaml`
-3. `feature_ledger`
+3. `feature_ledger.yaml`
 4. supervisor 本轮 `next_instruction`
 
 不要再内嵌第二套 worker persona 或完成标准。
@@ -185,7 +185,7 @@ next turn:   claude -p --resume <worker_session_id> ...
 规则：
 
 - `worker_session_id` 记录在 `supervisor_state.json`，只作为 Claude Code resume 索引。
-- 事实源仍是 `goal.yaml`、`feature_ledger`、`runs/*`、测试/preflight/PR 状态；不能把 worker session memory 当事实源。
+- 事实源仍是 `goal.yaml`、`feature_ledger.yaml`、`runs/*`、测试/preflight/PR 状态；不能把 worker session memory 当事实源。
 - supervisor 每轮给 worker 的 `next_instruction` 必须包含上轮验收结论和当前 ledger gap，避免只依赖会话记忆。
 - 若 `--resume` 出现空输出、stale session、session reset 或上下文明显漂移，丢弃该 session id，启动新 worker session，并把必要事实从单一事实来源重新注入。
 - 不用 `/continue` 作为自动化依赖；headless 路径使用显式 `--resume <session_id>`。
@@ -245,7 +245,7 @@ P0：greenfield 骨架
 - 作为全新 `xuejiao-twin` skill / capability 实现，不做历史 CLI/workspace/schema 兼容。
 - supervisor 运行在 Claude Code 交互模式，复用原生工具和高级能力；不另起 supervisor `claude -p`。
 - worker harness 归 dev-rules / Claude Code `-p`。
-- `goal.yaml + feature_ledger` 缺失时拒绝启动。
+- `goal.yaml + feature_ledger.yaml` 缺失时拒绝启动。
 - `supervisor-persona.md / worker-persona.md` 作为 persona 单一事实来源。
 - `supervisor_state.json` 只存显式 goal-progress 状态，不记录独立 supervisor session。
 
@@ -268,4 +268,4 @@ P2：OPC 固化
 
 `twin` 的目标不是多一个流程，而是让人类不再反复说“继续”。
 
-给定 `goal + feature_ledger` 后，persona supervisor 应指挥 worker 干到完整闭环；只有在真正需要 xuejiao 判断的地方，才停下来。
+给定 `goal + feature_ledger.yaml` 后，persona supervisor 应指挥 worker 干到完整闭环；只有在真正需要 xuejiao 判断的地方，才停下来。

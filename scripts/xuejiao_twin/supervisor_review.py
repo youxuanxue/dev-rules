@@ -54,17 +54,10 @@ def _validate_accepted_done(goal: dict[str, Any], ledger: dict[str, Any], review
     if review.get("remaining_gaps"):
         errors.append("ACCEPTED_DONE cannot have remaining_gaps")
     evidence = {item["ac_id"]: list(item.get("evidence") or []) for item in acceptance_evidence(goal, ledger)}
-    for item in review.get("acceptance_evidence", []):
-        if isinstance(item, dict):
-            ac_id = str(item.get("ac_id") or "")
-            evidence.setdefault(ac_id, [])
-            for entry in item.get("evidence", []):
-                if entry not in evidence[ac_id]:
-                    evidence[ac_id].append(str(entry))
     for ac in goal.get("acceptance_criteria", []):
         ac_id = str(ac.get("id")) if isinstance(ac, dict) else ""
         if ac_id and not evidence.get(ac_id):
-            errors.append(f"missing evidence for {ac_id}")
+            errors.append(f"missing ledger evidence for {ac_id}")
     open_items = [str(item.get("id")) for item in ledger.get("items", []) if isinstance(item, dict) and item.get("status") != "completed"]
     if open_items:
         errors.append("ledger has open items: " + ", ".join(open_items))

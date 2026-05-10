@@ -25,7 +25,7 @@ from .runtime import (
     validate_workspace,
 )
 from .schema_contract import validate_artifact, validate_schema
-from .util import read_json, write_json
+from .util import read_json
 from .workspace import WorkspaceError, load_state
 
 
@@ -103,7 +103,7 @@ def _review(decision: str, *, gaps: list[str] | None = None, question: str | Non
     }
 
 
-def _write_workspace(root: Path, *, ledger_yaml: bool = False, completed: bool = False) -> Path:
+def _write_workspace(root: Path, *, completed: bool = False, ledger_evidence: bool | None = None) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     workspace = root / "workspace"
     workspace.mkdir()
@@ -125,12 +125,12 @@ non_goals:
 """,
         encoding="utf-8",
     )
-    if ledger_yaml:
-        status = "completed" if completed else "pending"
-        evidence = "\n      - tests: fixture pass\n      - diff: fixture stat" if completed else " []"
-        next_action = "" if completed else "运行 worker fixture"
-        (workspace / "feature_ledger.yaml").write_text(
-            f"""schema_version: 1
+    status = "completed" if completed else "pending"
+    has_evidence = completed if ledger_evidence is None else ledger_evidence
+    evidence = '\n      - "tests: fixture pass"\n      - "diff: fixture stat"' if has_evidence else " []"
+    next_action = '""' if completed else "运行 worker fixture"
+    (workspace / "feature_ledger.yaml").write_text(
+        f"""schema_version: 1
 goal_id: fixture-goal
 items:
   - id: F1
@@ -147,10 +147,8 @@ items:
     status: {status}
     next_action: {next_action}
 """,
-            encoding="utf-8",
-        )
-    else:
-        write_json(workspace / "feature_ledger.json", _ledger(completed=completed))
+        encoding="utf-8",
+    )
     (workspace / "supervisor-persona.md").write_text("supervisor persona", encoding="utf-8")
     (workspace / "worker-persona.md").write_text("worker persona", encoding="utf-8")
     return workspace
@@ -221,17 +219,11 @@ def run_fixture_validation() -> list[str]:
         except WorkspaceError:
             pass
 
-        yaml_workspace = _write_workspace(root / "yaml", ledger_yaml=True)
+        legacy_json = _write_workspace(root / "legacy-json")
+        (legacy_json / "feature_ledger.json").write_text("{}\n", encoding="utf-8")
         try:
-            validate_workspace(yaml_workspace)
-        except WorkspaceError as exc:
-            errors.append(f"yaml ledger workspace failed: {exc}")
-
-        conflict = _write_workspace(root / "conflict")
-        (conflict / "feature_ledger.yaml").write_text("schema_version: 1\n", encoding="utf-8")
-        try:
-            validate_workspace(conflict)
-            errors.append("json/yaml ledger conflict should fail")
+            validate_workspace(legacy_json)
+            errors.append("feature_ledger.json should fail even when feature_ledger.yaml exists")
         except WorkspaceError:
             pass
 
@@ -317,6 +309,17 @@ def run_fixture_validation() -> list[str]:
         repeat_state = apply_supervisor_review(repeat_workspace, repeat_run["run_id"], repeat_review)
         if repeat_state.get("status") != "needs_human":
             errors.append("same gap for three rounds should require human")
+
+        done_missing_evidence_workspace = _write_workspace(root / "done-missing-evidence", completed=True, ledger_evidence=False)
+        done_missing_evidence_runner = FakeRunner()
+        done_missing_evidence_run = start_worker_turn(done_missing_evidence_workspace, "final", runner=done_missing_evidence_runner)
+        review_only_evidence = _review("ACCEPTED_DONE")
+        review_only_evidence["ledger_updates"] = []
+        try:
+            apply_supervisor_review(done_missing_evidence_workspace, done_missing_evidence_run["run_id"], review_only_evidence)
+            errors.append("ACCEPTED_DONE should fail when only review has evidence and ledger actual_evidence is empty")
+        except WorkspaceError:
+            pass
 
         done_workspace = _write_workspace(root / "done", completed=True)
         done_runner = FakeRunner()

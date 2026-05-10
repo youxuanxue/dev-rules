@@ -14,8 +14,7 @@ DECISIONS = {"ACCEPTED_DONE", "CONTINUE", "NEEDS_HUMAN", "FAILED"}
 ITEM_STATUSES = {"pending", "in_progress", "blocked", "completed", "deferred"}
 
 GOAL_FILE = "goal.yaml"
-LEDGER_JSON_FILE = "feature_ledger.json"
-LEDGER_YAML_FILE = "feature_ledger.yaml"
+LEDGER_FILE = "feature_ledger.yaml"
 SUPERVISOR_PERSONA_FILE = "supervisor-persona.md"
 WORKER_PERSONA_FILE = "worker-persona.md"
 SUPERVISOR_STATE_FILE = "supervisor_state.json"

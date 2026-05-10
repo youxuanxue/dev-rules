@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -10,9 +9,8 @@ from .contracts import (
     GOAL_SCHEMA,
     HUMAN_RESPONSE_FILE,
     HUMAN_RESPONSE_SCHEMA,
-    LEDGER_JSON_FILE,
+    LEDGER_FILE,
     LEDGER_SCHEMA,
-    LEDGER_YAML_FILE,
     RUNS_DIR,
     SCHEMA_VERSION,
     SUPERVISOR_PERSONA_FILE,
@@ -34,15 +32,13 @@ def resolve_workspace(path: Path | str) -> Path:
 
 
 def ledger_path(workspace: Path) -> Path:
-    json_path = workspace / LEDGER_JSON_FILE
-    yaml_path = workspace / LEDGER_YAML_FILE
-    if json_path.exists() and yaml_path.exists():
-        raise WorkspaceError("feature_ledger.json and feature_ledger.yaml cannot both exist")
-    if json_path.exists():
-        return json_path
-    if yaml_path.exists():
-        return yaml_path
-    raise WorkspaceError("missing feature_ledger.json or feature_ledger.yaml; run Claude Code plan mode first to prepare the ledger")
+    path = workspace / LEDGER_FILE
+    legacy_json = workspace / "feature_ledger.json"
+    if legacy_json.exists():
+        raise WorkspaceError("feature_ledger.json is not supported; use feature_ledger.yaml")
+    if path.exists():
+        return path
+    raise WorkspaceError("missing feature_ledger.yaml; run Claude Code plan mode first to prepare the ledger")
 
 
 def load_goal(workspace: Path) -> dict[str, Any]:
@@ -57,8 +53,7 @@ def load_goal(workspace: Path) -> dict[str, Any]:
 
 
 def load_ledger(workspace: Path) -> dict[str, Any]:
-    path = ledger_path(workspace)
-    ledger = read_json(path) if path.suffix == ".json" else read_yaml_like(path)
+    ledger = read_yaml_like(ledger_path(workspace))
     errors = validate_schema(ledger, LEDGER_SCHEMA)
     if errors:
         raise WorkspaceError("feature_ledger schema errors: " + "; ".join(errors))
@@ -66,15 +61,11 @@ def load_ledger(workspace: Path) -> dict[str, Any]:
 
 
 def write_ledger(workspace: Path, ledger: dict[str, Any]) -> None:
-    path = ledger_path(workspace)
-    if path.suffix == ".json":
-        write_json(path, ledger)
-    else:
-        try:
-            import yaml  # type: ignore
-        except Exception as exc:  # pragma: no cover - PyYAML is expected in normal envs
-            raise WorkspaceError("writing YAML feature_ledger requires PyYAML") from exc
-        path.write_text(yaml.safe_dump(ledger, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    try:
+        import yaml  # type: ignore
+    except Exception as exc:  # pragma: no cover - PyYAML is expected in normal envs
+        raise WorkspaceError("writing feature_ledger.yaml requires PyYAML") from exc
+    (workspace / LEDGER_FILE).write_text(yaml.safe_dump(ledger, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
 
 def read_text_file(workspace: Path, name: str) -> str:
