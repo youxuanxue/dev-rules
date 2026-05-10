@@ -20,7 +20,7 @@ from .contracts import (
 )
 from .ledger import choose_next_item, item_counts, ledger_gaps, validate_ledger_semantics
 from .schema_contract import validate_schema
-from .util import now_utc, read_json, read_yaml_like, write_json
+from .util import now_utc, read_json, read_yaml_like, write_json, write_yaml_like
 
 
 class WorkspaceError(ValueError):
@@ -61,11 +61,7 @@ def load_ledger(workspace: Path) -> dict[str, Any]:
 
 
 def write_ledger(workspace: Path, ledger: dict[str, Any]) -> None:
-    try:
-        import yaml  # type: ignore
-    except Exception as exc:  # pragma: no cover - PyYAML is expected in normal envs
-        raise WorkspaceError("writing feature_ledger.yaml requires PyYAML") from exc
-    (workspace / LEDGER_FILE).write_text(yaml.safe_dump(ledger, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    write_yaml_like(workspace / LEDGER_FILE, ledger)
 
 
 def read_text_file(workspace: Path, name: str) -> str:

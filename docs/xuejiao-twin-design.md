@@ -4,7 +4,7 @@
 
 `twin` 是运行在 Claude Code 交互模式里的 **xuejiao persona supervisor**，不是 worker harness，也不是新的 agent 平台。
 
-worker harness 已由 dev-rules、项目 `CLAUDE.md`、hooks、preflight、worktree、Claude Code `-p --permission-mode bypass` 承担。`twin` 的价值是代表 xuejiao 持有目标、指挥 worker 多轮推进、验收结果，并只在真正需要真人判断时停下。
+worker harness 已由 dev-rules、项目 `CLAUDE.md`、hooks、preflight、worktree、Claude Code `-p --permission-mode bypassPermissions` 承担。`twin` 的价值是代表 xuejiao 持有目标、指挥 worker 多轮推进、验收结果，并只在真正需要真人判断时停下。
 
 ## 核心约束
 
@@ -12,7 +12,7 @@ worker harness 已由 dev-rules、项目 `CLAUDE.md`、hooks、preflight、workt
 2. **plan-first**：启动前必须已有 Claude Code plan mode 产出的 `goal.yaml + feature_ledger.yaml`。缺失则不启动。
 3. **persona split**：supervisor 使用 `~/.xuejiao-twin/supervisor-persona.md`；worker 只看到 `~/.xuejiao-twin/worker-persona.md`。
 4. **interactive supervisor**：supervisor 直接复用 Claude Code 交互模式和原生高级能力，不另起 supervisor `claude -p`。
-5. **headless worker**：worker 用 Claude Code `-p --permission-mode bypass` 执行，可自主调研、实现、测试、修复、文档、任务分支 commit/push、创建或更新 PR。
+5. **headless worker**：worker 用 Claude Code `-p --permission-mode bypassPermissions` 执行，可自主调研、实现、测试、修复、文档、任务分支 commit/push、创建或更新 PR。
 6. **worker 可续跑**：单轮跑不完时用 `claude -p --resume <worker_session_id>` 续同一 worker session；worker session id 只是索引，不是事实源。
 7. **无独立 supervisor session**：`/twin` 本身就是 supervisor，不另起、不 resume 另一个 supervisor 会话；交互上下文可辅助体验，但每轮判断必须从单一事实来源重建。
 8. **supervisor 验收**：worker 可以声称完成，但完成与否由 supervisor 对照 goal、ledger、diff、测试、preflight、PR/commit 状态判断。
@@ -45,7 +45,7 @@ worker-persona.md      # worker-visible；通常复制自 ~/.xuejiao-twin/worker
 - acceptance criteria
 - non-goals
 
-授权和门禁不进 `goal.yaml`。它们由 Claude Code 原生 `--allowedTools` / `--disallowedTools` / `--permission-mode bypass` / settings / hooks，加上 dev-rules 全局和项目 `CLAUDE.md` 强注入承载。不要再造 `authorized_actions` / `human_gates` 配置层。
+授权和门禁不进 `goal.yaml`。它们由 Claude Code 原生 `--allowedTools` / `--disallowedTools` / `--permission-mode bypassPermissions` / settings / hooks，加上 dev-rules 全局和项目 `CLAUDE.md` 强注入承载。不要再造 `authorized_actions` / `human_gates` 配置层。
 
 `feature_ledger.yaml` 只放：
 
@@ -163,7 +163,7 @@ while not done:
 worker 使用 Claude Code headless：
 
 ```text
-claude -p --permission-mode bypass --allowedTools ... --disallowedTools ... --max-budget-usd ... --output-format stream-json
+claude -p --permission-mode bypassPermissions --allowedTools ... --disallowedTools ... --max-budget-usd ... --output-format stream-json
 ```
 
 worker prompt 由四部分组成：

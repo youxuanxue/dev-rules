@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import json
 import tempfile
 from pathlib import Path
@@ -26,13 +27,14 @@ from .runtime import (
 )
 from .schema_contract import validate_artifact, validate_schema
 from .util import read_json
-from .workspace import WorkspaceError, load_state
+from .workspace import WorkspaceError, load_ledger, load_state, write_ledger
 
 
 class FakeRunner:
-    def __init__(self, *, session_lost_once: bool = False) -> None:
+    def __init__(self, *, session_lost_once: bool = False, returncode: int = 0) -> None:
         self.calls: list[dict[str, Any]] = []
         self.session_lost_once = session_lost_once
+        self.returncode = returncode
 
     def __call__(self, prompt: str, **kwargs: Any) -> ClaudeRunResult:
         self.calls.append({"prompt": prompt, **kwargs})
@@ -44,7 +46,7 @@ class FakeRunner:
         return ClaudeRunResult(
             session_id=session,
             output_text="Summary:\n- fixture worker ran\n\nEvidence:\n- tests: fixture pass\n\nRemaining:\n- none",
-            returncode=0,
+            returncode=self.returncode,
             raw_events=[{"type": "system", "session_id": session}],
         )
 
@@ -219,6 +221,27 @@ def run_fixture_validation() -> list[str]:
             errors.append("pending ledger should have gaps")
         if any(item["evidence"] for item in acceptance_evidence(_goal(), _ledger())):
             errors.append("empty ledger should not produce acceptance evidence")
+        original_import = builtins.__import__
+
+        def block_yaml_import(name: str, *args: Any, **kwargs: Any) -> Any:
+            if name == "yaml":
+                raise ModuleNotFoundError("yaml blocked by fixture")
+            return original_import(name, *args, **kwargs)
+
+        builtins.__import__ = block_yaml_import
+        try:
+            fallback_context = build_supervisor_context(workspace)
+            if str(fallback_context.get("goal", {}).get("core_goal") or "").strip() != _goal()["core_goal"].strip():
+                errors.append("fallback yaml parser should preserve block-scalar goal text")
+            if fallback_context.get("ledger", {}).get("items", [{}])[0].get("scope") != "只覆盖 greenfield worker turn":
+                errors.append("fallback yaml parser should preserve ledger item mapping fields")
+            ledger_roundtrip = load_ledger(workspace)
+            ledger_roundtrip["items"][0]["next_action"] = "多行\n下一步"
+            write_ledger(workspace, ledger_roundtrip)
+            if load_ledger(workspace)["items"][0].get("next_action") != "多行\n下一步":
+                errors.append("yaml fallback writer should round-trip multiline ledger values")
+        finally:
+            builtins.__import__ = original_import
 
         missing = root / "missing"
         missing.mkdir()
@@ -236,6 +259,19 @@ def run_fixture_validation() -> list[str]:
         except WorkspaceError:
             pass
 
+        nonzero_workspace = _write_workspace(root / "nonzero")
+        nonzero_run = start_worker_turn(nonzero_workspace, "触发 worker 非零退出 fixture", runner=FakeRunner(returncode=1))
+        if nonzero_run["outcome"] != "review_required":
+            errors.append("nonzero worker exit should still require supervisor review")
+        nonzero_state = load_state(nonzero_workspace)
+        if nonzero_state.get("status") != "review_required":
+            errors.append("nonzero worker exit should leave workspace in review_required state")
+        try:
+            start_worker_turn(nonzero_workspace, "不应跳过 review", runner=FakeRunner())
+            errors.append("nonzero worker exit should still block next turn until review")
+        except WorkspaceError:
+            pass
+
         runner = FakeRunner()
         try:
             start_worker_turn(workspace, "", runner=runner)
@@ -245,10 +281,12 @@ def run_fixture_validation() -> list[str]:
         run = start_worker_turn(workspace, "推进 ledger item F1", runner=runner)
         errors.extend(validate_schema(run, RUN_SCHEMA))
         call = runner.calls[0]
+        if call.get("cwd") != workspace.resolve().parent:
+            errors.append("worker should run from repo root, not the twin workspace directory")
         if call.get("session_id"):
             errors.append("first worker turn should not resume")
-        if call.get("permission_mode") != "bypass":
-            errors.append("worker permission mode should be bypass")
+        if call.get("permission_mode") != "bypassPermissions":
+            errors.append("worker permission mode should be bypassPermissions")
         allowed = call.get("allowed_tools") or []
         if "Bash" not in allowed or "Read" not in allowed:
             errors.append("worker should receive explicit allowed tools")
@@ -259,6 +297,9 @@ def run_fixture_validation() -> list[str]:
             errors.append("worker prompt should not include supervisor persona")
         if "supervisor_session_id" in json.dumps(run):
             errors.append("run artifact should not contain supervisor session fields")
+        current_text = (workspace / "CURRENT.md").read_text(encoding="utf-8")
+        if "Status: review_required" not in current_text or f"Current item: {run['run_id']}" in current_text:
+            errors.append("worker turn should refresh CURRENT.md after completion")
 
         try:
             start_worker_turn(workspace, "强行再启动", runner=runner)
