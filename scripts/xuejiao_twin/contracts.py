@@ -9,8 +9,6 @@ SUPERVISOR_STATE_SCHEMA = "xuejiao_twin.supervisor_state.schema.json"
 SUPERVISOR_REVIEW_SCHEMA = "xuejiao_twin.supervisor_review.schema.json"
 HUMAN_RESPONSE_SCHEMA = "xuejiao_twin.human_response.schema.json"
 
-TERMINAL_STATUSES = {"needs_human", "accepted_done", "failed"}
-DECISIONS = {"ACCEPTED_DONE", "CONTINUE", "NEEDS_HUMAN", "FAILED"}
 ITEM_STATUSES = {"pending", "in_progress", "blocked", "completed", "deferred"}
 
 GOAL_FILE = "goal.yaml"
