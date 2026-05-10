@@ -1,0 +1,227 @@
+from __future__ import annotations
+
+import json
+import subprocess
+import uuid
+from pathlib import Path
+from typing import Any, Callable
+
+from .claude_runner import ClaudeRunResult, run_claude_headless
+from .contracts import HUMAN_RESPONSE_FILE, RUNS_DIR, RUN_SCHEMA, SCHEMA_VERSION
+from .privacy import PrivacyReport, redact_text, stable_hash
+from .schema_contract import validate_schema
+from .util import now_utc, read_json, write_json
+from .workspace import (
+    WorkspaceError,
+    ledger_path,
+    load_human_response,
+    load_state,
+    read_text_file,
+    validate_workspace,
+    write_state,
+)
+
+Runner = Callable[..., ClaudeRunResult]
+
+WORKER_ALLOWED_TOOLS = [
+    "Bash",
+    "Read",
+    "Edit",
+    "Write",
+    "NotebookEdit",
+    "WebFetch",
+    "WebSearch",
+    "Task",
+    "TodoWrite",
+]
+
+
+def _run_command(args: list[str], cwd: Path, *, timeout: int = 30) -> str:
+    try:
+        proc = subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    except Exception as exc:
+        return f"error: {exc}"
+    return (proc.stdout + proc.stderr).strip()
+
+
+def git_status(workspace: Path) -> str:
+    return _run_command(["git", "status", "--short"], workspace)
+
+
+def git_diff_stat(workspace: Path) -> str:
+    return _run_command(["git", "diff", "--stat"], workspace)
+
+
+def changed_files_from_status(status: str) -> list[str]:
+    files: list[str] = []
+    for line in status.splitlines():
+        text = line.strip()
+        if not text or text.startswith("error:") or len(text) < 4:
+            continue
+        path = text[3:]
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        if path not in files:
+            files.append(path)
+    return files
+
+
+def build_worker_prompt(workspace: Path, instruction: str) -> str:
+    worker_persona = read_text_file(workspace, "worker-persona.md")
+    goal = (workspace / "goal.yaml").read_text(encoding="utf-8")
+    ledger_file = ledger_path(workspace)
+    ledger = ledger_file.read_text(encoding="utf-8")
+    parts = [
+        "# worker-persona.md",
+        worker_persona.strip(),
+        "# goal.yaml",
+        goal.strip(),
+        f"# {ledger_file.name}",
+        ledger.strip(),
+    ]
+    human_response = load_human_response(workspace)
+    if human_response and not human_response.get("consumed_by_run_id"):
+        parts.extend(["# human_response.json", json.dumps(human_response, ensure_ascii=False, indent=2, sort_keys=True)])
+    parts.extend(["# supervisor next_instruction", instruction.strip()])
+    return "\n\n".join(parts).strip()
+
+
+def _run_dir(workspace: Path, run_id: str) -> Path:
+    path = workspace / RUNS_DIR / run_id
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _events_path(workspace: Path, run_id: str) -> Path:
+    return _run_dir(workspace, run_id) / "events.jsonl"
+
+
+def _write_events(workspace: Path, run_id: str, events: list[dict[str, Any]]) -> None:
+    path = _events_path(workspace, run_id)
+    with path.open("w", encoding="utf-8") as handle:
+        for event in events:
+            handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def _consume_human_response(workspace: Path, run_id: str) -> None:
+    path = workspace / HUMAN_RESPONSE_FILE
+    if not path.exists():
+        return
+    response = read_json(path)
+    if response.get("consumed_by_run_id"):
+        return
+    response["consumed_by_run_id"] = run_id
+    write_json(path, response)
+
+
+def start_worker_turn(
+    workspace: Path,
+    instruction: str = "",
+    *,
+    runner: Runner = run_claude_headless,
+    retry_on_session_lost: bool = True,
+    max_budget_usd: float = 1.0,
+) -> dict[str, Any]:
+    workspace = workspace.expanduser().resolve()
+    validate_workspace(workspace)
+    state = load_state(workspace)
+    if state.get("status") == "needs_human" and state.get("needs_human"):
+        raise WorkspaceError("workspace is waiting for human response")
+    if state.get("status") in {"accepted_done", "failed"}:
+        raise WorkspaceError(f"workspace is terminal: {state.get('status')}")
+    if state.get("status") == "review_required":
+        raise WorkspaceError(
+            "previous worker turn requires supervisor review before the next worker turn"
+        )
+    if state.get("status") == "worker_running":
+        raise WorkspaceError("worker is already running for this workspace")
+
+    instruction = instruction.strip()
+    if not instruction:
+        raise WorkspaceError("worker-turn requires supervisor-authored --instruction")
+    run_id = f"run-{uuid.uuid4().hex[:10]}"
+    started_at = now_utc()
+    previous_session_id = str(state.get("worker_session_id") or "")
+    prompt = build_worker_prompt(workspace, instruction)
+
+    state["status"] = "worker_running"
+    state["current_run_id"] = run_id
+    state["next_instruction"] = instruction
+    write_state(workspace, state)
+
+    result = runner(
+        prompt,
+        cwd=workspace,
+        allowed_tools=WORKER_ALLOWED_TOOLS,
+        disallowed_tools=[],
+        max_budget_usd=max_budget_usd,
+        session_id=previous_session_id,
+        permission_mode="bypass",
+        role="worker",
+    )
+    resume_used = bool(previous_session_id)
+    if retry_on_session_lost and result.session_lost:
+        state = load_state(workspace)
+        state["worker_session_id"] = None
+        write_state(workspace, state)
+        result = runner(
+            prompt,
+            cwd=workspace,
+            allowed_tools=WORKER_ALLOWED_TOOLS,
+            disallowed_tools=[],
+            max_budget_usd=max_budget_usd,
+            session_id="",
+            permission_mode="bypass",
+            role="worker",
+        )
+        resume_used = False
+
+    state = load_state(workspace)
+    state["round_index"] = int(state.get("round_index") or 0) + 1
+    state["current_run_id"] = run_id
+    state["status"] = "review_required" if result.returncode == 0 and not result.session_lost else "failed"
+    state["worker_session_id"] = result.session_id or None
+    state["next_instruction"] = ""
+    write_state(workspace, state)
+    _consume_human_response(workspace, run_id)
+
+    privacy = PrivacyReport()
+    worker_output, _flags = redact_text(result.output_text, privacy)
+    status = git_status(workspace)
+    run_dir = _run_dir(workspace, run_id)
+    _write_events(workspace, run_id, result.raw_events)
+    run = {
+        "schema_version": SCHEMA_VERSION,
+        "run_id": run_id,
+        "workspace_ref": str(workspace),
+        "goal_ref": str(workspace / "goal.yaml"),
+        "ledger_ref": str(ledger_path(workspace)),
+        "worker_persona_ref": str(workspace / "worker-persona.md"),
+        "supervisor_persona_ref": str(workspace / "supervisor-persona.md"),
+        "state_ref": str(workspace / "supervisor_state.json"),
+        "events_ref": str(_events_path(workspace, run_id)),
+        "started_at": started_at,
+        "ended_at": now_utc(),
+        "worker": {
+            "session_hash": stable_hash(result.session_id) if result.session_id else "",
+            "resume_used": resume_used,
+            "permission_mode": "bypass",
+            "returncode": result.returncode,
+            "session_lost": result.session_lost,
+        },
+        "instruction": instruction,
+        "evidence": {
+            "worker_output": worker_output,
+            "changed_files": changed_files_from_status(status),
+            "validation": [],
+            "git_status": status,
+            "git_diff_stat": git_diff_stat(workspace),
+        },
+        "review_ref": None,
+        "outcome": "review_required" if result.returncode == 0 and not result.session_lost else "failed",
+    }
+    errors = validate_schema(run, RUN_SCHEMA)
+    if errors:
+        raise WorkspaceError("run schema errors: " + "; ".join(errors))
+    write_json(run_dir / "run.json", run)
+    return run

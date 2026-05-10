@@ -46,11 +46,14 @@ def read_json(path: Path) -> Any:
 
 
 def read_yaml_like(path: Path) -> dict[str, Any]:
+    text = path.read_text(encoding="utf-8")
     try:
         import yaml  # type: ignore
     except Exception:
+        if any(line.rstrip().endswith((": |", ": >")) for line in text.splitlines()):
+            raise ValueError(f"PyYAML is required to parse block scalars in {path}")
         return _read_simple_yaml(path)
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    data = yaml.safe_load(text)
     if not isinstance(data, dict):
         raise ValueError(f"expected mapping in {path}")
     return data

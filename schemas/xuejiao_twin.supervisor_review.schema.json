@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/youxuanxue/dev-rules/schemas/xuejiao_twin.supervisor_review.schema.json",
+  "title": "xuejiao twin supervisor review",
+  "type": "object",
+  "required": ["decision", "summary", "next_instruction", "remaining_gaps", "acceptance_evidence", "risk_flags"],
+  "additionalProperties": false,
+  "properties": {
+    "decision": { "type": "string", "enum": ["ACCEPTED_DONE", "CONTINUE", "NEEDS_HUMAN", "FAILED"] },
+    "summary": { "type": "string" },
+    "next_instruction": { "type": "string" },
+    "remaining_gaps": { "type": "array", "items": { "type": "string" } },
+    "acceptance_evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["ac_id", "evidence"],
+        "additionalProperties": false,
+        "properties": {
+          "ac_id": { "type": "string", "minLength": 1 },
+          "evidence": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "risk_flags": { "type": "array", "items": { "type": "string" } },
+    "actions": {
+      "type": "array",
+      "items": { "type": "string", "enum": ["fix_drift", "validate_more", "mark_ledger_gap"] }
+    },
+    "ledger_updates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["item_id"],
+        "additionalProperties": false,
+        "properties": {
+          "item_id": { "type": "string", "minLength": 1 },
+          "status": { "type": "string", "enum": ["pending", "in_progress", "blocked", "completed", "deferred"] },
+          "actual_evidence": { "type": "array", "items": { "type": "string" } },
+          "next_action": { "type": "string" },
+          "blocked_reason": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "human_question": { "type": ["string", "null"] }
+  }
+}
