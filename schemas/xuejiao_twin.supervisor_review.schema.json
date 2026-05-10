@@ -25,7 +25,7 @@
     "risk_flags": { "type": "array", "items": { "type": "string" } },
     "actions": {
       "type": "array",
-      "items": { "type": "string", "enum": ["fix_drift", "validate_more", "mark_ledger_gap"] }
+      "items": { "type": "string", "enum": ["fix_drift", "validate_more", "mark_ledger_gap", "reset_worker_session"] }
     },
     "ledger_updates": {
       "type": "array",

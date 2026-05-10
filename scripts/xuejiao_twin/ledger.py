@@ -178,3 +178,50 @@ def acceptance_evidence(goal: dict[str, Any], ledger: dict[str, Any]) -> list[di
         if isinstance(ac, dict) and ac.get("id"):
             result.append({"ac_id": str(ac["id"]), "evidence": evidence.get(str(ac["id"]), [])})
     return result
+
+
+def acceptance_focus(goal: dict[str, Any], ledger: dict[str, Any]) -> dict[str, Any]:
+    next_item = choose_next_item(ledger)
+    evidence = ac_evidence_map(ledger)
+    criteria_by_id = {
+        str(ac.get("id")): ac
+        for ac in goal.get("acceptance_criteria", [])
+        if isinstance(ac, dict) and ac.get("id")
+    }
+    open_acceptance_criteria = [
+        {
+            "id": ac_id,
+            "statement": str(ac.get("statement") or ""),
+            "evidence_type": str(ac.get("evidence_type") or ""),
+        }
+        for ac_id, ac in criteria_by_id.items()
+        if not evidence.get(ac_id)
+    ]
+    covered_ids = [str(ac_id) for ac_id in next_item.get("covers_ac", [])] if isinstance(next_item, dict) else []
+    current_item_acceptance_criteria = [
+        {
+            "id": ac_id,
+            "statement": str(criteria_by_id.get(ac_id, {}).get("statement") or ""),
+            "evidence_type": str(criteria_by_id.get(ac_id, {}).get("evidence_type") or ""),
+            "has_evidence": bool(evidence.get(ac_id)),
+        }
+        for ac_id in covered_ids
+        if ac_id in criteria_by_id
+    ]
+    open_items = [
+        item
+        for item in ledger.get("items", [])
+        if isinstance(item, dict) and item.get("status") != "completed"
+    ]
+    open_ac_ids = {str(ac["id"]) for ac in open_acceptance_criteria}
+    covered_ac_ids = set(covered_ids)
+    last_mile = bool(next_item) and (
+        len(open_items) == 1 or bool(open_ac_ids and open_ac_ids.issubset(covered_ac_ids))
+    )
+    return {
+        "next_item": next_item,
+        "open_acceptance_criteria": open_acceptance_criteria,
+        "current_item_acceptance_criteria": current_item_acceptance_criteria,
+        "remaining_gaps": ledger_gaps(goal, ledger),
+        "last_mile": last_mile,
+    }

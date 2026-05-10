@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import uuid
 from pathlib import Path
@@ -59,11 +60,20 @@ def git_diff_stat(workspace: Path) -> str:
     return _run_command(["git", "diff", "--stat"], _repo_root(workspace))
 
 
+STDIN_WARNING_TEXT = "Warning: no stdin data received in 3s, proceeding without it..."
+VALIDATION_NOT_REPORTED = "NOT_REPORTED: worker did not report tests, lint, preflight, or validation evidence"
+VALIDATION_KEYWORDS = re.compile(
+    r"\b(pytest|ruff|preflight|scripts/preflight\.sh|passed|failed|PASS|FAIL)\b",
+    re.IGNORECASE,
+)
+STRUCTURED_OUTPUT_HEADINGS = ("DIFF:", "TESTS:", "PREFLIGHT:", "REMAINING:")
+
+
 def changed_files_from_status(status: str) -> list[str]:
     files: list[str] = []
     for line in status.splitlines():
-        text = line.strip()
-        if not text or text.startswith("error:") or len(text) < 4:
+        text = line.rstrip()
+        if not text.strip() or text.startswith("error:") or len(text) < 4:
             continue
         path = text[3:]
         if " -> " in path:
@@ -71,6 +81,72 @@ def changed_files_from_status(status: str) -> list[str]:
         if path not in files:
             files.append(path)
     return files
+
+
+def _without_stdin_warning(worker_output: str) -> str:
+    lines = [line for line in worker_output.splitlines() if STDIN_WARNING_TEXT not in line]
+    return "\n".join(lines).strip()
+
+
+def _is_warning_only(worker_output: str) -> bool:
+    return not _without_stdin_warning(worker_output).strip()
+
+
+def extract_validation_evidence(worker_output: str) -> list[str]:
+    evidence: list[str] = []
+    for line in worker_output.splitlines():
+        text = line.strip()
+        if not text or STDIN_WARNING_TEXT in text:
+            continue
+        if VALIDATION_KEYWORDS.search(text) and text not in evidence:
+            evidence.append(text)
+    return evidence
+
+
+def _has_structured_output(worker_output: str) -> bool:
+    upper = worker_output.upper()
+    return all(heading in upper for heading in STRUCTURED_OUTPUT_HEADINGS)
+
+
+def assess_run_quality(
+    *,
+    worker_output: str,
+    validation: list[str],
+    returncode: int,
+    session_lost: bool,
+    resume_used: bool,
+    pre_git_status: str,
+    post_git_status: str,
+    pre_git_diff_stat: str,
+    post_git_diff_stat: str,
+    worker_session_reset: bool = False,
+) -> list[str]:
+    flags: list[str] = []
+    output_without_warning = _without_stdin_warning(worker_output)
+    weak_output = not _has_structured_output(worker_output) and not validation
+    if STDIN_WARNING_TEXT in worker_output:
+        flags.append("STDIN_WARNING")
+    if not output_without_warning:
+        flags.append("WORKER_OUTPUT_EMPTY_OR_WARNING_ONLY")
+    elif weak_output:
+        flags.append("WORKER_OUTPUT_WEAK")
+    if not validation:
+        flags.append("VALIDATION_NOT_REPORTED")
+    if returncode != 0:
+        flags.append("WORKER_RETURN_CODE_NONZERO")
+    if session_lost:
+        flags.append("SESSION_LOST")
+    if (
+        resume_used
+        and weak_output
+        and not session_lost
+        and pre_git_status == post_git_status
+        and pre_git_diff_stat == post_git_diff_stat
+    ):
+        flags.append("NO_PROGRESS_DETECTED")
+    if worker_session_reset:
+        flags.append("WORKER_SESSION_RESET")
+    return flags
 
 
 def build_worker_prompt(workspace: Path, instruction: str) -> str:
@@ -155,6 +231,8 @@ def start_worker_turn(
     state["current_run_id"] = run_id
     state["next_instruction"] = instruction
     write_state(workspace, state)
+    pre_git_status = git_status(workspace)
+    pre_git_diff_stat = git_diff_stat(workspace)
 
     result = runner(
         prompt,
@@ -167,6 +245,7 @@ def start_worker_turn(
         role="worker",
     )
     resume_used = bool(previous_session_id)
+    worker_session_reset = False
     if retry_on_session_lost and result.session_lost:
         state = load_state(workspace)
         state["worker_session_id"] = None
@@ -182,20 +261,56 @@ def start_worker_turn(
             role="worker",
         )
         resume_used = False
+        worker_session_reset = True
+    elif retry_on_session_lost and resume_used and _is_warning_only(result.output_text):
+        state = load_state(workspace)
+        state["worker_session_id"] = None
+        write_state(workspace, state)
+        result = runner(
+            prompt,
+            cwd=_repo_root(workspace),
+            allowed_tools=WORKER_ALLOWED_TOOLS,
+            disallowed_tools=[],
+            max_budget_usd=max_budget_usd,
+            session_id="",
+            permission_mode="bypassPermissions",
+            role="worker",
+        )
+        resume_used = False
+        worker_session_reset = True
+
+    post_git_status = git_status(workspace)
+    post_git_diff_stat = git_diff_stat(workspace)
+    privacy = PrivacyReport()
+    worker_output, _flags = redact_text(result.output_text, privacy)
+    validation = extract_validation_evidence(worker_output)
+    quality_flags = assess_run_quality(
+        worker_output=worker_output,
+        validation=validation,
+        returncode=result.returncode,
+        session_lost=result.session_lost,
+        resume_used=resume_used,
+        pre_git_status=pre_git_status,
+        post_git_status=post_git_status,
+        pre_git_diff_stat=pre_git_diff_stat,
+        post_git_diff_stat=post_git_diff_stat,
+        worker_session_reset=worker_session_reset,
+    )
+    clear_session_after_run = resume_used and "NO_PROGRESS_DETECTED" in quality_flags
+    if clear_session_after_run and "WORKER_SESSION_RESET" not in quality_flags:
+        quality_flags.append("WORKER_SESSION_RESET")
+    evidence_validation = validation or [VALIDATION_NOT_REPORTED]
 
     state = load_state(workspace)
     state["round_index"] = int(state.get("round_index") or 0) + 1
     state["current_run_id"] = run_id
     state["status"] = "failed" if result.session_lost else "review_required"
-    state["worker_session_id"] = result.session_id or None
+    state["worker_session_id"] = None if clear_session_after_run else (result.session_id or None)
     state["next_instruction"] = ""
     write_state(workspace, state)
     render_current(workspace, load_goal(workspace), load_ledger(workspace), state)
     _consume_human_response(workspace, run_id)
 
-    privacy = PrivacyReport()
-    worker_output, _flags = redact_text(result.output_text, privacy)
-    status = git_status(workspace)
     run_dir = _run_dir(workspace, run_id)
     _write_events(workspace, run_id, result.raw_events)
     run = {
@@ -220,10 +335,11 @@ def start_worker_turn(
         "instruction": instruction,
         "evidence": {
             "worker_output": worker_output,
-            "changed_files": changed_files_from_status(status),
-            "validation": [],
-            "git_status": status,
-            "git_diff_stat": git_diff_stat(workspace),
+            "changed_files": changed_files_from_status(post_git_status),
+            "validation": evidence_validation,
+            "quality_flags": quality_flags,
+            "git_status": post_git_status,
+            "git_diff_stat": post_git_diff_stat,
         },
         "review_ref": None,
         "outcome": "failed" if result.session_lost else "review_required",
