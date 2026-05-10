@@ -14,9 +14,12 @@ from .util import now_utc, read_json, write_json
 from .workspace import (
     WorkspaceError,
     ledger_path,
+    load_goal,
     load_human_response,
+    load_ledger,
     load_state,
     read_text_file,
+    render_current,
     validate_workspace,
     write_state,
 )
@@ -44,12 +47,16 @@ def _run_command(args: list[str], cwd: Path, *, timeout: int = 30) -> str:
     return (proc.stdout + proc.stderr).strip()
 
 
+def _repo_root(workspace: Path) -> Path:
+    return workspace.parent
+
+
 def git_status(workspace: Path) -> str:
-    return _run_command(["git", "status", "--short"], workspace)
+    return _run_command(["git", "status", "--short"], _repo_root(workspace))
 
 
 def git_diff_stat(workspace: Path) -> str:
-    return _run_command(["git", "diff", "--stat"], workspace)
+    return _run_command(["git", "diff", "--stat"], _repo_root(workspace))
 
 
 def changed_files_from_status(status: str) -> list[str]:
@@ -151,12 +158,12 @@ def start_worker_turn(
 
     result = runner(
         prompt,
-        cwd=workspace,
+        cwd=_repo_root(workspace),
         allowed_tools=WORKER_ALLOWED_TOOLS,
         disallowed_tools=[],
         max_budget_usd=max_budget_usd,
         session_id=previous_session_id,
-        permission_mode="bypass",
+        permission_mode="bypassPermissions",
         role="worker",
     )
     resume_used = bool(previous_session_id)
@@ -166,12 +173,12 @@ def start_worker_turn(
         write_state(workspace, state)
         result = runner(
             prompt,
-            cwd=workspace,
+            cwd=_repo_root(workspace),
             allowed_tools=WORKER_ALLOWED_TOOLS,
             disallowed_tools=[],
             max_budget_usd=max_budget_usd,
             session_id="",
-            permission_mode="bypass",
+            permission_mode="bypassPermissions",
             role="worker",
         )
         resume_used = False
@@ -179,10 +186,11 @@ def start_worker_turn(
     state = load_state(workspace)
     state["round_index"] = int(state.get("round_index") or 0) + 1
     state["current_run_id"] = run_id
-    state["status"] = "review_required" if result.returncode == 0 and not result.session_lost else "failed"
+    state["status"] = "failed" if result.session_lost else "review_required"
     state["worker_session_id"] = result.session_id or None
     state["next_instruction"] = ""
     write_state(workspace, state)
+    render_current(workspace, load_goal(workspace), load_ledger(workspace), state)
     _consume_human_response(workspace, run_id)
 
     privacy = PrivacyReport()
@@ -205,7 +213,7 @@ def start_worker_turn(
         "worker": {
             "session_hash": stable_hash(result.session_id) if result.session_id else "",
             "resume_used": resume_used,
-            "permission_mode": "bypass",
+            "permission_mode": "bypassPermissions",
             "returncode": result.returncode,
             "session_lost": result.session_lost,
         },
@@ -218,7 +226,7 @@ def start_worker_turn(
             "git_diff_stat": git_diff_stat(workspace),
         },
         "review_ref": None,
-        "outcome": "review_required" if result.returncode == 0 and not result.session_lost else "failed",
+        "outcome": "failed" if result.session_lost else "review_required",
     }
     errors = validate_schema(run, RUN_SCHEMA)
     if errors:

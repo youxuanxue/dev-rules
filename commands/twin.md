@@ -7,7 +7,7 @@ $ARGUMENTS
 `/twin` 是 Claude Code 交互模式里的 persona supervisor capability。
 
 - supervisor：当前 Claude Code 交互会话，读取事实源、决定继续/验收/`NEEDS_HUMAN`。
-- worker：`claude -p --permission-mode bypass` headless worker，可通过 `worker_session_id` resume。
+- worker：`claude -p --permission-mode bypassPermissions` headless worker，可通过 `worker_session_id` resume。
 - harness：dev-rules、项目 `CLAUDE.md`、Claude Code permissions/settings/hooks/preflight。
 
 不要另起 headless supervisor。不要把交互上下文当事实源。worker 自述不是验收结论。
