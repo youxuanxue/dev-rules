@@ -34,6 +34,14 @@ def _run_path(workspace: Path, run_id: str) -> Path:
     return workspace / "runs" / run_id / "run.json"
 
 
+def _claude_project_slug(path: Path) -> str:
+    return str(path.expanduser().resolve()).replace("/", "-")
+
+
+def _supervisor_transcript_path(host_root: Path, session_id: str) -> Path:
+    return Path.home() / ".claude" / "projects" / _claude_project_slug(host_root) / f"{session_id}.jsonl"
+
+
 def _gap_key(review: dict[str, Any]) -> str:
     parts = [str(item).strip() for item in review.get("remaining_gaps", []) if str(item).strip()]
     if not parts:
@@ -219,6 +227,65 @@ def _event_summary(event: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
+def _supervisor_boundary_violations(workspace: Path, session_id: str, limit: int) -> list[dict[str, Any]]:
+    if limit <= 0 or not session_id.strip():
+        return []
+    host_root = workspace.parent.resolve()
+    workspace_root = workspace.resolve()
+    transcript = _supervisor_transcript_path(host_root, session_id.strip())
+    if not transcript.exists():
+        return []
+    violations: deque[dict[str, Any]] = deque(maxlen=limit)
+    try:
+        with transcript.open(encoding="utf-8") as handle:
+            for line_number, line in enumerate(handle, 1):
+                if not line.strip():
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                message = event.get("message") if isinstance(event, dict) else None
+                content = message.get("content") if isinstance(message, dict) else None
+                if not isinstance(content, list):
+                    continue
+                for item in content:
+                    if not isinstance(item, dict) or item.get("type") != "tool_use" or item.get("name") not in {"Edit", "Write", "NotebookEdit"}:
+                        continue
+                    tool_input = item.get("input") if isinstance(item.get("input"), dict) else {}
+                    raw_path = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
+                    if not raw_path:
+                        continue
+                    target = Path(raw_path).expanduser()
+                    if not target.is_absolute():
+                        target = host_root / target
+                    try:
+                        target = target.resolve()
+                    except OSError:
+                        target = target.absolute()
+                    try:
+                        target.relative_to(workspace_root)
+                        continue
+                    except ValueError:
+                        pass
+                    try:
+                        target.relative_to(host_root)
+                    except ValueError:
+                        continue
+                    violations.append({
+                        "kind": "supervisor_boundary",
+                        "flag": "SUPERVISOR_BOUNDARY_VIOLATION",
+                        "session_id": session_id.strip(),
+                        "tool": item.get("name"),
+                        "path": str(target),
+                        "line_number": line_number,
+                        "timestamp": event.get("timestamp"),
+                    })
+    except OSError:
+        return []
+    return list(violations)
+
+
 def _events_tail_summary(path: Path, limit: int) -> dict[str, Any]:
     if limit <= 0:
         return {"path": str(path), "events": [], "warnings": []}
@@ -349,7 +416,14 @@ def _history_warnings(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return warnings
 
 
-def build_health_report(workspace: Path, *, run_id: str | None = None, events_tail: int = 20, history_limit: int = 20) -> dict[str, Any]:
+def build_health_report(
+    workspace: Path,
+    *,
+    run_id: str | None = None,
+    events_tail: int = 20,
+    history_limit: int = 20,
+    supervisor_session_id: str | None = None,
+) -> dict[str, Any]:
     workspace = resolve_workspace(workspace)
     degraded_errors: list[str] = []
     try:
@@ -498,6 +572,26 @@ def build_health_report(workspace: Path, *, run_id: str | None = None, events_ta
                 }
     history = _recent_runs(workspace, history_limit)
     pending_runs = _pending_runs(workspace, history_limit)
+    supervisor_violations = _supervisor_boundary_violations(workspace, supervisor_session_id or "", history_limit)
+    if supervisor_violations:
+        report["supervisor_boundary_violations"] = supervisor_violations
+        report["history_warnings"].extend(supervisor_violations)
+        if not isinstance(report.get("run_health"), dict):
+            report["run_health"] = {
+                "quality_flags": [],
+                "has_validation": False,
+                "has_changed_files": False,
+                "requires_attention": False,
+                "recommended_actions": [],
+            }
+        flags = list(report["run_health"].get("quality_flags") or [])
+        if "SUPERVISOR_BOUNDARY_VIOLATION" not in flags:
+            flags.append("SUPERVISOR_BOUNDARY_VIOLATION")
+        report["run_health"]["quality_flags"] = flags
+        report["run_health"]["requires_attention"] = True
+        actions = list(report["run_health"].get("recommended_actions") or [])
+        actions.append("Supervisor edited host repository files; move code changes back to worker flow before accepting.")
+        report["run_health"]["recommended_actions"] = actions
     for pending_run in pending_runs:
         pending_run_id = str(pending_run.get("run_id") or "")
         if pending_run_id and pending_run_id == current_run_id and state.get("status") == "worker_running":
@@ -519,6 +613,7 @@ def build_health_report(workspace: Path, *, run_id: str | None = None, events_ta
         "history_limit": history_limit,
         "history_runs_scanned": len(history),
         "pending_runs_scanned": len(pending_runs),
+        "supervisor_boundary_violations_scanned": len(supervisor_violations),
     }
     return report
 

@@ -119,6 +119,7 @@ def _cmd_health(args: argparse.Namespace) -> int:
             run_id=args.run_id,
             events_tail=args.events_tail,
             history_limit=args.history_limit,
+            supervisor_session_id=args.supervisor_session_id,
         )
     except WorkspaceError as exc:
         print(str(exc), file=sys.stderr)
@@ -217,6 +218,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_health.add_argument("--run-id")
     p_health.add_argument("--events-tail", type=int, default=20)
     p_health.add_argument("--history-limit", type=int, default=20)
+    p_health.add_argument("--supervisor-session-id")
     p_health.add_argument("--json", action="store_true")
     p_health.set_defaults(func=_cmd_health)
 

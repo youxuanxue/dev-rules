@@ -533,6 +533,31 @@ def run_fixture_validation() -> list[str]:
             errors.append("health should expose pending run markers")
         if any("instruction" in item for item in abandoned_health.get("pending_runs", [])):
             errors.append("pending run markers should not carry full next_instruction text")
+        boundary_workspace = _write_workspace(root / "boundary")
+        load_state(boundary_workspace)
+        project_slug = str(boundary_workspace.parent.resolve()).replace("/", "-")
+        transcript_dir = Path.home() / ".claude" / "projects" / project_slug
+        transcript_dir.mkdir(parents=True, exist_ok=True)
+        boundary_session = "fixture-supervisor-boundary"
+        transcript_path = transcript_dir / f"{boundary_session}.jsonl"
+        transcript_path.write_text(
+            json.dumps({
+                "timestamp": "2026-05-11T00:00:00Z",
+                "message": {
+                    "content": [
+                        {"type": "tool_use", "name": "Write", "input": {"file_path": str(boundary_workspace / "CURRENT.md"), "content": "ok"}},
+                        {"type": "tool_use", "name": "Edit", "input": {"file_path": str(boundary_workspace.parent / "app.py"), "old_string": "a", "new_string": "b"}},
+                    ]
+                },
+            }, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        boundary_health = health_workspace(boundary_workspace, supervisor_session_id=boundary_session, history_limit=5)
+        boundary_violations = boundary_health.get("supervisor_boundary_violations") or []
+        if len(boundary_violations) != 1 or not str(boundary_violations[0].get("path", "")).endswith("app.py"):
+            errors.append("health should report supervisor edits to host files outside the twin workspace")
+        if "SUPERVISOR_BOUNDARY_VIOLATION" not in boundary_health.get("run_health", {}).get("quality_flags", []):
+            errors.append("supervisor boundary violations should require attention")
         bad_contract_workspace = _write_workspace(root / "bad-contract")
         load_state(bad_contract_workspace)
         (bad_contract_workspace / "feature_ledger.yaml").write_text(
