@@ -29,17 +29,17 @@
 #   ├── rules/*.mdc                            symlink 与 fan-out 都从这里出发
 #   ├── commands/*.md
 #   ├── global/CLAUDE.md
-#   └── personas/*.md                          xuejiao twin persona 源
+#   └── personas/*.md                          xuejiao twin persona 版本化源
 #        │
 #        ├──→ ~/.cursor/rules/*.mdc          本地 Cursor 交互式会话（symlink）
 #        ├──→ ~/.claude/commands/*           本地 Claude Code 自定义命令（symlink）
 #        ├──→ ~/.claude/CLAUDE.md            全局工作宪法（symlink）
-#        ├──→ ~/.xuejiao-twin/*.md           twin workspace snapshot 源（symlink）
 #        └──→ 各项目/.cursor/rules/*.mdc     云端 Agent 可读（real copy, git tracked）
 #
-#   为什么 home 用 symlink，项目用 real copy？
-#     - home 同机即时生效，无需重 sync
+#   为什么 home 入口用 symlink，项目用 real copy？
+#     - home 规则/命令同机即时生效，无需重 sync
 #     - 项目要 git track + 云端 VM 克隆时不能依赖 home 目录
+#     - twin persona 直接读取 DEV_RULES/personas 源文件，并由 twin health 阻止运行中写入
 #
 #   两个失效模式 + 各自的兜底：
 #     - 本机修改 + push  →  --push wrapper 一步搞定（pull ~/Codes + fan-out）
@@ -64,8 +64,6 @@ HOME_PERSONAS_DIR="$HOME_CANONICAL/personas"
 CURSOR_HOME="$HOME/.cursor/rules"
 CLAUDE_COMMANDS="$HOME/.claude/commands"
 CLAUDE_GLOBAL_MD="$HOME/.claude/CLAUDE.md"
-XUEJIAO_TWIN_HOME="$HOME/.xuejiao-twin"
-
 LAUNCH_AGENT_LABEL="local.dev-rules.sync"
 LAUNCH_AGENT_PLIST="$HOME/Library/LaunchAgents/${LAUNCH_AGENT_LABEL}.plist"
 
@@ -232,29 +230,10 @@ sync_to_home() {
     fi
 
     echo ""
-    echo "=== Syncing to ~/.xuejiao-twin/ (symlinks → $HOME_PERSONAS_DIR) ==="
-    mkdir -p "$XUEJIAO_TWIN_HOME"
-    if [ ! -d "$HOME_PERSONAS_DIR" ]; then
-        echo "  WARN: $HOME_PERSONAS_DIR not found, skipping"
-    else
-        for persona in "$HOME_PERSONAS_DIR"/*.md; do
-            [ -f "$persona" ] || continue
-            local basename
-            basename="$(basename "$persona")"
-            local target="$XUEJIAO_TWIN_HOME/$basename"
-            if [ -L "$target" ] && [ "$(readlink "$target")" = "$persona" ]; then
-                echo "  ok: $basename"
-            else
-                if [ -e "$target" ] && [ ! -L "$target" ]; then
-                    local backup="$target.bak.$(date +%Y%m%d%H%M%S)"
-                    mv "$target" "$backup"
-                    echo "  backup: $target → $backup"
-                fi
-                ln -sf "$persona" "$target"
-                echo "  linked: $basename → $persona"
-            fi
-        done
-    fi
+    echo "=== Twin personas source ($HOME_PERSONAS_DIR) ==="
+    for persona in "$HOME_PERSONAS_DIR"/*.md; do
+        [ -f "$persona" ] && echo "  ok: $(basename "$persona")"
+    done
 }
 
 sync_to_project() {
@@ -655,27 +634,14 @@ print_status() {
         echo "  ✗ missing"
     fi
     echo ""
-    echo "Home ~/.xuejiao-twin/ (must symlink → $HOME_PERSONAS_DIR):"
+    echo "Twin personas source ($HOME_PERSONAS_DIR):"
     local persona_any=0
     for persona in "$HOME_PERSONAS_DIR"/*.md; do
-        [ -f "$persona" ] || continue
+        [ -e "$persona" ] || continue
         persona_any=1
-        local target="$XUEJIAO_TWIN_HOME/$(basename "$persona")"
-        if [ -L "$target" ]; then
-            local persona_target
-            persona_target="$(readlink "$target")"
-            if [ "$persona_target" = "$persona" ]; then
-                echo "  ✓ $(basename "$persona")"
-            else
-                echo "  ⚠ $(basename "$persona") → $persona_target (not pointing to canonical mirror)"
-            fi
-        elif [ -e "$target" ]; then
-            echo "  ⚠ $(basename "$persona") (regular file, should be symlink)"
-        else
-            echo "  ✗ $(basename "$persona") missing"
-        fi
+        [ -f "$persona" ] && echo "  ✓ $(basename "$persona")"
     done
-    [ "$persona_any" -eq 0 ] && echo "  (none in mirror)"
+    [ "$persona_any" -eq 0 ] && echo "  ✗ missing"
     echo ""
     echo "LaunchAgent ($LAUNCH_AGENT_LABEL):"
     if [ -f "$LAUNCH_AGENT_PLIST" ]; then

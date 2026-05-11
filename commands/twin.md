@@ -31,17 +31,15 @@ $ARGUMENTS
 ```text
 goal.yaml
 feature_ledger.yaml
-supervisor-persona.md
-worker-persona.md
 ```
 
-缺少 `goal.yaml` 或 `feature_ledger.yaml` 时，拒绝启动 worker，要求回到 Claude Code plan mode 补齐。缺少 persona snapshot 时，也拒绝启动。
+缺少 `goal.yaml` 或 `feature_ledger.yaml` 时，拒绝启动 worker，要求回到 Claude Code plan mode 补齐。persona 不属于目标工作区；supervisor 和 worker 直接使用 `$DEV_RULES/personas/supervisor-persona.md` 与 `$DEV_RULES/personas/worker-persona.md`。工作区内出现 `supervisor-persona.md` 或 `worker-persona.md` 时直接拒绝，防止按具体 goal 改 persona。supervisor 和 worker 禁止写 `$DEV_RULES/personas/*`；health/review 发现 `PERSONA_SOURCE_WRITE` 时不能验收。
 
 `goal.yaml` 只承载 goal / acceptance criteria / non-goals。`feature_ledger.yaml` 只承载 deliverables、依赖、AC 引用、evidence plan/actual evidence、status、next action。授权和 human gate 由 Claude Code permissions/settings/hooks + dev-rules + 项目 `CLAUDE.md` 承担。
 
 ## `/twin <workspace>` 行为
 
-1. 读取 `goal.yaml`、`feature_ledger.yaml`、`supervisor-persona.md`、`supervisor_state.json`、`runs/*` 摘要。
+1. 读取 `goal.yaml`、`feature_ledger.yaml`、`$DEV_RULES/personas/supervisor-persona.md`、`supervisor_state.json`、`runs/*` 摘要。
 2. 若 state 是 `needs_human` 且没有新回答，直接 inline 展示问题和证据路径，不启动 worker。
 3. 若 state 是 `continue` 且已有 `next_instruction`，禁止停下汇报；直接用该 instruction 启动/resume worker。
 4. 读取 supervisor context；当前 Claude Code 交互会话作为 persona supervisor，基于事实源生成本轮 `next_instruction`：

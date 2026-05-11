@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .claude_runner import ClaudeRunResult, run_claude_headless
-from .contracts import HUMAN_RESPONSE_FILE, RUNS_DIR, RUN_SCHEMA, SCHEMA_VERSION
+from .contracts import DEV_RULES_ROOT, HUMAN_RESPONSE_FILE, PERSONAS_DIR, RUNS_DIR, RUN_SCHEMA, SCHEMA_VERSION, SUPERVISOR_PERSONA_PATH, WORKER_PERSONA_PATH
 from .privacy import PrivacyReport, redact_text, stable_hash
 from .schema_contract import validate_schema
 from .util import now_utc, read_json, write_json
@@ -20,7 +20,7 @@ from .workspace import (
     load_human_response,
     load_ledger,
     load_state,
-    read_text_file,
+    load_worker_persona,
     render_current,
     validate_workspace,
     write_state,
@@ -42,6 +42,18 @@ WORKER_ALLOWED_TOOLS = [
 
 WORKER_MAX_BUDGET_ENV = "XUEJIAO_TWIN_WORKER_MAX_BUDGET_USD"
 DEFAULT_WORKER_MAX_BUDGET_USD = 20.0
+
+
+def worker_disallowed_tools() -> list[str]:
+    personas_pattern = str(PERSONAS_DIR / "**")
+    return [
+        f"Edit({personas_pattern})",
+        f"Write({personas_pattern})",
+        f"NotebookEdit({personas_pattern})",
+        "Bash(*$DEV_RULES/personas*)",
+        "Bash(*${DEV_RULES}/personas*)",
+        f"Bash(*{PERSONAS_DIR}*)",
+    ]
 
 
 def default_worker_max_budget_usd() -> float:
@@ -170,12 +182,12 @@ def assess_run_quality(
 
 
 def build_worker_prompt(workspace: Path, instruction: str) -> str:
-    worker_persona = read_text_file(workspace, "worker-persona.md")
+    worker_persona = load_worker_persona()
     goal = (workspace / "goal.yaml").read_text(encoding="utf-8")
     ledger_file = ledger_path(workspace)
     ledger = ledger_file.read_text(encoding="utf-8")
     parts = [
-        "# worker-persona.md",
+        f"# {WORKER_PERSONA_PATH}",
         worker_persona.strip(),
         "# goal.yaml",
         goal.strip(),
@@ -295,11 +307,12 @@ def start_worker_turn(
         prompt,
         cwd=_repo_root(workspace),
         allowed_tools=WORKER_ALLOWED_TOOLS,
-        disallowed_tools=[],
+        disallowed_tools=worker_disallowed_tools(),
         max_budget_usd=max_budget_usd,
         session_id=previous_session_id,
         permission_mode="bypassPermissions",
         role="worker",
+        extra_env={"DEV_RULES": str(DEV_RULES_ROOT)},
         stream_output_path=_events_path(workspace, run_id),
     )
     resume_used = bool(previous_session_id)
@@ -312,11 +325,12 @@ def start_worker_turn(
             prompt,
             cwd=_repo_root(workspace),
             allowed_tools=WORKER_ALLOWED_TOOLS,
-            disallowed_tools=[],
+            disallowed_tools=worker_disallowed_tools(),
             max_budget_usd=max_budget_usd,
             session_id="",
             permission_mode="bypassPermissions",
             role="worker",
+            extra_env={"DEV_RULES": str(DEV_RULES_ROOT)},
             stream_output_path=_events_path(workspace, run_id),
         )
         resume_used = False
@@ -329,11 +343,12 @@ def start_worker_turn(
             prompt,
             cwd=_repo_root(workspace),
             allowed_tools=WORKER_ALLOWED_TOOLS,
-            disallowed_tools=[],
+            disallowed_tools=worker_disallowed_tools(),
             max_budget_usd=max_budget_usd,
             session_id="",
             permission_mode="bypassPermissions",
             role="worker",
+            extra_env={"DEV_RULES": str(DEV_RULES_ROOT)},
             stream_output_path=_events_path(workspace, run_id),
         )
         resume_used = False
@@ -378,8 +393,8 @@ def start_worker_turn(
         "workspace_ref": str(workspace),
         "goal_ref": str(workspace / "goal.yaml"),
         "ledger_ref": str(ledger_path(workspace)),
-        "worker_persona_ref": str(workspace / "worker-persona.md"),
-        "supervisor_persona_ref": str(workspace / "supervisor-persona.md"),
+        "worker_persona_ref": str(WORKER_PERSONA_PATH),
+        "supervisor_persona_ref": str(SUPERVISOR_PERSONA_PATH),
         "state_ref": str(workspace / "supervisor_state.json"),
         "events_ref": str(_events_path(workspace, run_id)),
         "started_at": started_at,

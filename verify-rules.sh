@@ -102,9 +102,8 @@ else
 fi
 
 # ── twin persona files present ─────────────────────────────────────────
-# personas/ is the single source of truth for supervisor + worker persona;
-# sync.sh symlinks them into ~/.xuejiao-twin/. Missing files break the twin
-# harness silently, so assert them here.
+# personas/ is the single source of truth for supervisor + worker persona.
+# Missing files break the twin harness silently, so assert them here.
 section "twin persona files present"
 for required in personas/supervisor-persona.md personas/worker-persona.md; do
     if [ -f "$SCRIPT_DIR/$required" ]; then
@@ -113,6 +112,40 @@ for required in personas/supervisor-persona.md personas/worker-persona.md; do
         fail "$required missing"
     fi
 done
+
+section "twin workspace does not own persona"
+if grep -R "persona snapshot\|copy the persona\|workspace / \"worker-persona.md\"\|workspace / \"supervisor-persona.md\"\|read_text_file" \
+        "$SCRIPT_DIR/scripts/xuejiao_twin" "$SCRIPT_DIR/docs" "$SCRIPT_DIR/commands" "$SCRIPT_DIR/schemas" \
+        > /dev/null 2>&1; then
+    fail "twin must use DEV_RULES/personas persona files directly, not workspace persona snapshots"
+else
+    ok "twin runtime/docs do not require workspace persona snapshots"
+fi
+
+section "twin persona source path"
+old_persona_path_found=0
+persona_scan_files=("$SCRIPT_DIR/sync.sh" "$SCRIPT_DIR/.gitignore")
+while IFS= read -r file; do
+    persona_scan_files+=("$file")
+done < <(find "$SCRIPT_DIR/scripts/xuejiao_twin" "$SCRIPT_DIR/docs" "$SCRIPT_DIR/commands" -type f ! -name '*.pyc' ! -path '*/__pycache__/*')
+for forbidden in "~/.xuejiao-twin" ".xuejiao-twin" "secure-twin-persona" "TWIN_HOME"; do
+    if grep -F "$forbidden" "${persona_scan_files[@]}" > /dev/null 2>&1; then
+        old_persona_path_found=1
+    fi
+done
+if [ "$old_persona_path_found" -eq 1 ]; then
+    fail "twin must not use ~/.xuejiao-twin or secure persona snapshots; use DEV_RULES/personas directly"
+else
+    ok "twin uses DEV_RULES/personas directly"
+fi
+
+section "twin persona source is read-only"
+if grep -q 'disallowed_tools=worker_disallowed_tools()' "$SCRIPT_DIR/scripts/xuejiao_twin/worker.py" && \
+   grep -q 'PERSONA_SOURCE_WRITE' "$SCRIPT_DIR/scripts/xuejiao_twin/supervisor_review.py"; then
+    ok "worker denies persona source writes and review flags violations"
+else
+    fail "twin worker/supervisor must treat DEV_RULES/personas as read-only"
+fi
 
 # ── rule carrier partition anchor ─────────────────────────────────────
 # Prevent the system-level simplification rule from drifting into another

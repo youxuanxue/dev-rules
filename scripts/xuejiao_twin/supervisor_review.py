@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import shlex
 import subprocess
 from collections import Counter, deque
 from pathlib import Path
 from typing import Any
 
-from .contracts import CURRENT_FILE, GOAL_FILE, HUMAN_RESPONSE_FILE, LEDGER_FILE, RUN_SCHEMA, SUPERVISOR_REVIEW_SCHEMA, SUPERVISOR_STATE_FILE
+from .contracts import CURRENT_FILE, GOAL_FILE, HUMAN_RESPONSE_FILE, LEDGER_FILE, PERSONAS_DIR, RUN_SCHEMA, SUPERVISOR_REVIEW_SCHEMA, SUPERVISOR_STATE_FILE
 from .ledger import acceptance_evidence, acceptance_focus, apply_ledger_updates, choose_next_item, item_counts, ledger_gaps
 from .schema_contract import validate_schema
 from .util import now_utc, read_json, write_json
@@ -17,7 +19,7 @@ from .workspace import (
     load_human_response,
     load_ledger,
     load_state,
-    read_text_file,
+    load_supervisor_persona,
     render_current,
     resolve_workspace,
     validate_workspace_readonly,
@@ -171,6 +173,8 @@ def summarize_run_health(run: dict[str, Any]) -> dict[str, Any]:
     quality_flags = list(evidence.get("quality_flags") or [])
     if _events_include_budget_exceeded(run):
         quality_flags.append("WORKER_MAX_BUDGET_EXCEEDED")
+    if _run_persona_write_violations(Path(str(run.get("workspace_ref") or ".")), run, 1):
+        quality_flags.append("PERSONA_SOURCE_WRITE")
     if not validation:
         quality_flags.append("VALIDATION_EMPTY_LEGACY")
     if "Warning: no stdin data received in 3s" in worker_output:
@@ -190,6 +194,7 @@ def summarize_run_health(run: dict[str, Any]) -> dict[str, Any]:
             "SESSION_LOST",
             "WORKER_RETURN_CODE_NONZERO",
             "WORKER_MAX_BUDGET_EXCEEDED",
+            "PERSONA_SOURCE_WRITE",
         )
     )
     recommended_actions: list[str] = []
@@ -199,6 +204,8 @@ def summarize_run_health(run: dict[str, Any]) -> dict[str, Any]:
         recommended_actions.append("Consider reset_worker_session before the next worker turn.")
     if "WORKER_MAX_BUDGET_EXCEEDED" in quality_flags:
         recommended_actions.append("Increase worker max budget or narrow the next instruction before continuing.")
+    if "PERSONA_SOURCE_WRITE" in quality_flags:
+        recommended_actions.append("Revert persona source changes and rerun the worker with $DEV_RULES/personas treated as read-only.")
     return {
         "quality_flags": quality_flags,
         "has_validation": bool(validation) and not all(str(item).startswith("NOT_REPORTED:") for item in validation),
@@ -245,11 +252,101 @@ def _event_summary(event: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
+def _path_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _resolve_tool_path(raw_path: str, host_root: Path) -> Path | None:
+    if not raw_path:
+        return None
+    target = Path(raw_path).expanduser()
+    if not target.is_absolute():
+        target = host_root / target
+    try:
+        return target.resolve()
+    except OSError:
+        return target.absolute()
+
+
+def _tool_target_path(item: dict[str, Any], host_root: Path) -> Path | None:
+    tool_input = item.get("input") if isinstance(item.get("input"), dict) else {}
+    raw_path = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
+    return _resolve_tool_path(raw_path, host_root)
+
+
+def _tool_use_items(event: dict[str, Any]) -> list[dict[str, Any]]:
+    message = event.get("message") if isinstance(event, dict) else None
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, list):
+        return []
+    return [item for item in content if isinstance(item, dict) and item.get("type") == "tool_use"]
+
+
+BASH_REDIRECT_TARGET = re.compile(r"(?:^|[^>])>{1,2}\s*([^\s;&|]+)")
+BASH_WRITE_COMMANDS = {"cp", "mv", "rm", "touch", "install", "tee", "sed", "perl", "python", "python3", "node", "ruby", "git"}
+
+
+def _normalize_command_path(raw_path: str) -> str:
+    return raw_path.replace("${DEV_RULES}", str(PERSONAS_DIR.parent)).replace("$DEV_RULES", str(PERSONAS_DIR.parent))
+
+
+def _command_path_within(raw_path: str, protected_root: Path, host_root: Path) -> bool:
+    target = _resolve_tool_path(_normalize_command_path(raw_path).strip("'\""), host_root)
+    return target is not None and _path_within(target, protected_root)
+
+
+def _bash_segment_write_targets(parts: list[str]) -> list[str]:
+    if not parts:
+        return []
+    name = Path(parts[0]).name
+    if name not in BASH_WRITE_COMMANDS:
+        return []
+    if name in {"cp", "mv", "install"}:
+        return parts[-1:] if len(parts) >= 3 else []
+    if name in {"rm", "touch"}:
+        return [part for part in parts[1:] if not part.startswith("-")]
+    if name == "tee":
+        return [part for part in parts[1:] if not part.startswith("-")]
+    if name in {"sed", "perl"}:
+        if not any(part == "-i" or part.startswith("-i") for part in parts[1:]):
+            return []
+        return [part for part in parts[1:] if not part.startswith("-")]
+    if name == "git" and len(parts) >= 3 and parts[1] in {"checkout", "restore"}:
+        return [part for part in parts[2:] if not part.startswith("-")]
+    return []
+
+
+def _bash_write_command_targets(command: str) -> list[str]:
+    targets: list[str] = []
+    for segment in re.split(r"\s*(?:&&|\|\||[;|])\s*", command):
+        try:
+            parts = shlex.split(segment, posix=True)
+        except ValueError:
+            continue
+        targets.extend(_bash_segment_write_targets(parts))
+    return targets
+
+
+def _bash_command_writes_path(command: str, protected_root: Path, host_root: Path) -> bool:
+    if not command.strip():
+        return False
+    redirect_targets = [match.group(1) for match in BASH_REDIRECT_TARGET.finditer(command)]
+    for raw_path in redirect_targets + _bash_write_command_targets(command):
+        if _command_path_within(raw_path, protected_root, host_root):
+            return True
+    return False
+
+
 def _supervisor_boundary_violations(workspace: Path, session_id: str, limit: int) -> list[dict[str, Any]]:
     if limit <= 0 or not session_id.strip():
         return []
     host_root = workspace.parent.resolve()
     workspace_root = workspace.resolve()
+    personas_dir = PERSONAS_DIR.expanduser().resolve()
     transcripts = _supervisor_transcript_paths(host_root, session_id.strip())
     if not transcripts:
         return []
@@ -264,36 +361,31 @@ def _supervisor_boundary_violations(workspace: Path, session_id: str, limit: int
                         event = json.loads(line)
                     except json.JSONDecodeError:
                         continue
-                    message = event.get("message") if isinstance(event, dict) else None
-                    content = message.get("content") if isinstance(message, dict) else None
-                    if not isinstance(content, list):
-                        continue
-                    for item in content:
-                        if not isinstance(item, dict) or item.get("type") != "tool_use" or item.get("name") not in {"Edit", "Write", "NotebookEdit"}:
+                    for item in _tool_use_items(event):
+                        target = _tool_target_path(item, host_root)
+                        if item.get("name") == "Bash":
+                            tool_input = item.get("input") if isinstance(item.get("input"), dict) else {}
+                            command = str(tool_input.get("command") or "")
+                            if not _bash_command_writes_path(command, personas_dir, host_root):
+                                continue
+                            target = personas_dir
+                        elif item.get("name") not in {"Edit", "Write", "NotebookEdit"}:
                             continue
-                        tool_input = item.get("input") if isinstance(item.get("input"), dict) else {}
-                        raw_path = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
-                        if not raw_path:
+                        if target is None:
                             continue
-                        target = Path(raw_path).expanduser()
-                        if not target.is_absolute():
-                            target = host_root / target
-                        try:
-                            target = target.resolve()
-                        except OSError:
-                            target = target.absolute()
-                        try:
-                            target.relative_to(workspace_root)
-                            continue
-                        except ValueError:
-                            pass
-                        try:
-                            target.relative_to(host_root)
-                        except ValueError:
+                        violation_kind = ""
+                        violation_flag = ""
+                        if _path_within(target, personas_dir):
+                            violation_kind = "persona_source_write"
+                            violation_flag = "PERSONA_SOURCE_WRITE"
+                        elif not _path_within(target, workspace_root) and _path_within(target, host_root):
+                            violation_kind = "supervisor_boundary"
+                            violation_flag = "SUPERVISOR_BOUNDARY_VIOLATION"
+                        else:
                             continue
                         violations.append({
-                            "kind": "supervisor_boundary",
-                            "flag": "SUPERVISOR_BOUNDARY_VIOLATION",
+                            "kind": violation_kind,
+                            "flag": violation_flag,
                             "session_id": session_id.strip(),
                             "transcript": str(transcript),
                             "tool": item.get("name"),
@@ -303,6 +395,53 @@ def _supervisor_boundary_violations(workspace: Path, session_id: str, limit: int
                         })
         except OSError:
             continue
+    return list(violations)
+
+
+def _run_persona_write_violations(workspace: Path, run: dict[str, Any], limit: int) -> list[dict[str, Any]]:
+    if limit <= 0:
+        return []
+    events_ref = str(run.get("events_ref") or "")
+    if not events_ref:
+        return []
+    path = Path(events_ref)
+    if not path.exists():
+        return []
+    host_root = workspace.parent.resolve()
+    personas_dir = PERSONAS_DIR.expanduser().resolve()
+    violations: deque[dict[str, Any]] = deque(maxlen=limit)
+    try:
+        with path.open(encoding="utf-8") as handle:
+            for line_number, line in enumerate(handle, 1):
+                if not line.strip():
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                for item in _tool_use_items(event):
+                    target = _tool_target_path(item, host_root)
+                    if item.get("name") == "Bash":
+                        tool_input = item.get("input") if isinstance(item.get("input"), dict) else {}
+                        command = str(tool_input.get("command") or "")
+                        if not _bash_command_writes_path(command, personas_dir, host_root):
+                            continue
+                        target = personas_dir
+                    elif item.get("name") not in {"Edit", "Write", "NotebookEdit"}:
+                        continue
+                    if target is None or not _path_within(target, personas_dir):
+                        continue
+                    violations.append({
+                        "kind": "worker_persona_source_write",
+                        "flag": "PERSONA_SOURCE_WRITE",
+                        "run_id": run.get("run_id"),
+                        "events_ref": str(path),
+                        "tool": item.get("name"),
+                        "path": str(target),
+                        "line_number": line_number,
+                    })
+    except OSError:
+        return []
     return list(violations)
 
 
@@ -605,12 +744,17 @@ def build_health_report(
                 "recommended_actions": [],
             }
         flags = list(report["run_health"].get("quality_flags") or [])
-        if "SUPERVISOR_BOUNDARY_VIOLATION" not in flags:
-            flags.append("SUPERVISOR_BOUNDARY_VIOLATION")
+        violation_flags = [str(item.get("flag") or "") for item in supervisor_violations]
+        for flag in violation_flags:
+            if flag and flag not in flags:
+                flags.append(flag)
         report["run_health"]["quality_flags"] = flags
         report["run_health"]["requires_attention"] = True
         actions = list(report["run_health"].get("recommended_actions") or [])
-        actions.append("Supervisor edited host repository files; move code changes back to worker flow before accepting.")
+        if any(item.get("flag") == "PERSONA_SOURCE_WRITE" for item in supervisor_violations):
+            actions.append("Supervisor wrote inside $DEV_RULES/personas; revert persona source changes before accepting.")
+        else:
+            actions.append("Supervisor edited host repository files; move code changes back to worker flow before accepting.")
         report["run_health"]["recommended_actions"] = actions
     for pending_run in pending_runs:
         pending_run_id = str(pending_run.get("run_id") or "")
@@ -648,7 +792,7 @@ def build_supervisor_context(workspace: Path, run_id: str | None = None) -> dict
         "workspace": str(workspace),
         "goal": goal,
         "ledger": ledger,
-        "supervisor_persona": read_text_file(workspace, "supervisor-persona.md"),
+        "supervisor_persona": load_supervisor_persona(),
         "state": state,
         "next_item": next_item,
         "remaining_gaps": ledger_gaps(goal, ledger),
@@ -746,8 +890,18 @@ def apply_supervisor_review(
         boundary_violations = _supervisor_boundary_violations(workspace, supervisor_session_id or "", 1)
         if boundary_violations:
             violation = boundary_violations[0]
+            if violation.get("flag") == "PERSONA_SOURCE_WRITE":
+                message = "ACCEPTED_DONE blocked: supervisor wrote inside $DEV_RULES/personas"
+            else:
+                message = "ACCEPTED_DONE blocked: supervisor wrote outside twin workspace"
             raise WorkspaceError(
-                "ACCEPTED_DONE blocked: supervisor wrote outside twin workspace; "
+                f"{message}; tool={violation.get('tool')} path={violation.get('path')}"
+            )
+        run_persona_write_violations = _run_persona_write_violations(workspace, run, 1)
+        if run_persona_write_violations:
+            violation = run_persona_write_violations[0]
+            raise WorkspaceError(
+                "ACCEPTED_DONE blocked: worker wrote inside $DEV_RULES/personas; "
                 f"tool={violation.get('tool')} path={violation.get('path')}"
             )
         state["status"] = "accepted_done"
