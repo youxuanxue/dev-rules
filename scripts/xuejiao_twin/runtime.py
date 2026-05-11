@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .supervisor_review import apply_supervisor_review, build_review_context, build_supervisor_context
+from .supervisor_review import apply_supervisor_review, build_health_report, build_review_context, build_supervisor_context
 from .worker import start_worker_turn
 from .workspace import (
     WorkspaceError,
@@ -20,6 +20,15 @@ from .workspace import (
 
 def status_workspace(workspace: Path | str) -> dict[str, Any]:
     return status_summary(Path(workspace).expanduser().resolve())
+
+
+def health_workspace(workspace: Path | str, *, run_id: str | None = None, events_tail: int = 20, history_limit: int = 20) -> dict[str, Any]:
+    return build_health_report(
+        Path(workspace).expanduser().resolve(),
+        run_id=run_id,
+        events_tail=events_tail,
+        history_limit=history_limit,
+    )
 
 
 def record_human_response(workspace: Path | str, text: str) -> Path:
@@ -42,6 +51,7 @@ __all__ = [
     "apply_supervisor_review",
     "build_review_context",
     "build_supervisor_context",
+    "health_workspace",
     "record_human_response",
     "start_worker_turn",
     "status_workspace",

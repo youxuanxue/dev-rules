@@ -175,6 +175,12 @@ def _parse_list_item(lines: list[str], index: int, indent: int, item: str) -> tu
         if child_index < len(lines) and _line_indent(lines[child_index]) > indent:
             return _parse_block(lines, child_index, _line_indent(lines[child_index]))
         return None, index
+    if item in {"|", ">"}:
+        return _parse_block_scalar(lines, index, indent, item)
+    if item.startswith("|") and item[1:].strip() in {"-", "+"}:
+        return _parse_block_scalar(lines, index, indent, "|")
+    if item.startswith(">") and item[1:].strip() in {"-", "+"}:
+        return _parse_block_scalar(lines, index, indent, ">")
     if ":" in item and not item.startswith(("'", '"')):
         key, raw_value = item.split(":", 1)
         value, index = _parse_value(lines, index, indent + 2, raw_value)
@@ -295,6 +301,9 @@ def _dump_simple_yaml(value: Any, indent: int = 0) -> str:
                 nested = _dump_simple_yaml(child, indent + 2)
                 if nested:
                     lines.append(nested.rstrip("\n"))
+            elif isinstance(child, str) and "\n" in child:
+                lines.append(f"{prefix}- |")
+                lines.extend(f"{' ' * (indent + 2)}{line}" for line in child.splitlines())
             else:
                 lines.append(f"{prefix}- {_dump_scalar(child)}")
     else:

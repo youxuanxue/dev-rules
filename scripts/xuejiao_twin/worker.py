@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import uuid
@@ -39,13 +40,29 @@ WORKER_ALLOWED_TOOLS = [
     "TodoWrite",
 ]
 
+WORKER_MAX_BUDGET_ENV = "XUEJIAO_TWIN_WORKER_MAX_BUDGET_USD"
+DEFAULT_WORKER_MAX_BUDGET_USD = 20.0
+
+
+def default_worker_max_budget_usd() -> float:
+    raw = os.environ.get(WORKER_MAX_BUDGET_ENV)
+    if raw is None or raw.strip() == "":
+        return DEFAULT_WORKER_MAX_BUDGET_USD
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise WorkspaceError(f"{WORKER_MAX_BUDGET_ENV} must be a number") from exc
+    if value <= 0:
+        raise WorkspaceError(f"{WORKER_MAX_BUDGET_ENV} must be greater than 0")
+    return value
+
 
 def _run_command(args: list[str], cwd: Path, *, timeout: int = 30) -> str:
     try:
         proc = subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=timeout)
     except Exception as exc:
         return f"error: {exc}"
-    return (proc.stdout + proc.stderr).strip()
+    return (proc.stdout + proc.stderr).rstrip()
 
 
 def _repo_root(workspace: Path) -> Path:
@@ -73,7 +90,7 @@ def changed_files_from_status(status: str) -> list[str]:
     files: list[str] = []
     for line in status.splitlines():
         text = line.rstrip()
-        if not text.strip() or text.startswith("error:") or len(text) < 4:
+        if not text.strip() or text.lstrip().startswith("error:") or len(text) < 4:
             continue
         path = text[3:]
         if " -> " in path:
@@ -120,6 +137,7 @@ def assess_run_quality(
     pre_git_diff_stat: str,
     post_git_diff_stat: str,
     worker_session_reset: bool = False,
+    raw_events: list[dict[str, Any]] | None = None,
 ) -> list[str]:
     flags: list[str] = []
     output_without_warning = _without_stdin_warning(worker_output)
@@ -134,6 +152,8 @@ def assess_run_quality(
         flags.append("VALIDATION_NOT_REPORTED")
     if returncode != 0:
         flags.append("WORKER_RETURN_CODE_NONZERO")
+    if raw_events and any(event.get("subtype") == "error_max_budget_usd" for event in raw_events):
+        flags.append("WORKER_MAX_BUDGET_EXCEEDED")
     if session_lost:
         flags.append("SESSION_LOST")
     if (
@@ -203,8 +223,10 @@ def start_worker_turn(
     *,
     runner: Runner = run_claude_headless,
     retry_on_session_lost: bool = True,
-    max_budget_usd: float = 1.0,
+    max_budget_usd: float | None = None,
 ) -> dict[str, Any]:
+    if max_budget_usd is None:
+        max_budget_usd = default_worker_max_budget_usd()
     workspace = workspace.expanduser().resolve()
     validate_workspace(workspace)
     state = load_state(workspace)
@@ -295,6 +317,7 @@ def start_worker_turn(
         pre_git_diff_stat=pre_git_diff_stat,
         post_git_diff_stat=post_git_diff_stat,
         worker_session_reset=worker_session_reset,
+        raw_events=result.raw_events,
     )
     clear_session_after_run = resume_used and "NO_PROGRESS_DETECTED" in quality_flags
     if clear_session_after_run and "WORKER_SESSION_RESET" not in quality_flags:
@@ -308,8 +331,6 @@ def start_worker_turn(
     state["worker_session_id"] = None if clear_session_after_run else (result.session_id or None)
     state["next_instruction"] = ""
     write_state(workspace, state)
-    render_current(workspace, load_goal(workspace), load_ledger(workspace), state)
-    _consume_human_response(workspace, run_id)
 
     run_dir = _run_dir(workspace, run_id)
     _write_events(workspace, run_id, result.raw_events)
@@ -348,4 +369,6 @@ def start_worker_turn(
     if errors:
         raise WorkspaceError("run schema errors: " + "; ".join(errors))
     write_json(run_dir / "run.json", run)
+    render_current(workspace, load_goal(workspace), load_ledger(workspace), state)
+    _consume_human_response(workspace, run_id)
     return run

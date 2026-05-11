@@ -331,6 +331,58 @@ else
     skip "dev-rules/scripts/check_release_skip_ci_safety.py not present"
 fi
 
+# ---- 检查 15: 本地 linter 与 CI 同源 ----
+# 自动探测项目根的 linter 工具；工具不存在或缺少配置就 skip。
+# 项目可通过 .preflight/local-lint.conf 覆写命令（每行一条 shell 命令，#注释）。
+section "local linters in sync with CI"
+LINT_CONF=".preflight/local-lint.conf"
+LINT_CMDS=()
+if [ -f "$LINT_CONF" ]; then
+    while IFS= read -r line; do
+        case "$line" in
+            ''|\#*) ;;
+            *) LINT_CMDS+=("$line") ;;
+        esac
+    done < "$LINT_CONF"
+else
+    has_ruff_config=0
+    if [ -f ruff.toml ] || [ -f .ruff.toml ]; then
+        has_ruff_config=1
+    fi
+    if [ -f pyproject.toml ] && grep -q '^\[tool\.ruff' pyproject.toml 2>/dev/null; then
+        has_ruff_config=1
+    fi
+    [ -d .github/workflows ] && grep -R "ruff check" .github/workflows >/dev/null 2>&1 && has_ruff_config=1
+    if [ "$has_ruff_config" -eq 1 ]; then
+        if command -v ruff >/dev/null 2>&1; then
+            LINT_CMDS+=("ruff check .")
+        elif "$PYTHON_BIN" -c 'import ruff' >/dev/null 2>&1; then
+            LINT_CMDS+=("$PYTHON_BIN -m ruff check .")
+        fi
+    fi
+
+    has_eslint_config=0
+    [ -d .github/workflows ] && grep -R "eslint" .github/workflows >/dev/null 2>&1 && has_eslint_config=1
+    [ -f package.json ] && grep -q '"lint".*eslint' package.json 2>/dev/null && has_eslint_config=1
+    if [ "$has_eslint_config" -eq 1 ] && command -v npx >/dev/null 2>&1; then
+        LINT_CMDS+=("npx --no-install eslint .")
+    fi
+fi
+if [ ${#LINT_CMDS[@]} -eq 0 ]; then
+    skip "no local linter detected (set .preflight/local-lint.conf to enable)"
+else
+    lint_errors=0
+    for cmd in "${LINT_CMDS[@]}"; do
+        if eval "$cmd" > /tmp/preflight-local-lint.log 2>&1; then
+            ok "$cmd"
+        else
+            cat /tmp/preflight-local-lint.log | sed 's/^/    /'
+            fail "linter failed: $cmd"
+            lint_errors=$((lint_errors + 1))
+        fi
+    done
+fi
+
 echo ""
 if [ $errors -eq 0 ]; then
     echo "=== preflight: PASS ==="

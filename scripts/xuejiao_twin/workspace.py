@@ -109,6 +109,28 @@ def write_state(workspace: Path, state: dict[str, Any]) -> None:
     write_json(workspace / SUPERVISOR_STATE_FILE, state)
 
 
+def validate_workspace_readonly(workspace: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    workspace = resolve_workspace(workspace)
+    if not workspace.exists() or not workspace.is_dir():
+        raise WorkspaceError(f"workspace does not exist: {workspace}")
+    goal = load_goal(workspace)
+    ledger = load_ledger(workspace)
+    for name in (SUPERVISOR_PERSONA_FILE, WORKER_PERSONA_FILE):
+        if not (workspace / name).exists():
+            raise WorkspaceError(f"missing {name}; copy the persona snapshot into the target workspace before running twin")
+    semantic_errors = validate_ledger_semantics(goal, ledger)
+    if semantic_errors:
+        raise WorkspaceError("feature_ledger semantic errors: " + "; ".join(semantic_errors))
+    state_path = workspace / SUPERVISOR_STATE_FILE
+    if not state_path.exists():
+        raise WorkspaceError(f"missing {SUPERVISOR_STATE_FILE}; run /twin <workspace> to initialize runtime state")
+    state = read_json(state_path)
+    errors = validate_schema(state, SUPERVISOR_STATE_SCHEMA)
+    if errors:
+        raise WorkspaceError("supervisor_state schema errors: " + "; ".join(errors))
+    return goal, ledger, state
+
+
 def validate_workspace(workspace: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     workspace = resolve_workspace(workspace)
     if not workspace.exists() or not workspace.is_dir():
@@ -157,12 +179,14 @@ def load_human_response(workspace: Path) -> dict[str, Any] | None:
 def render_current(workspace: Path, goal: dict[str, Any], ledger: dict[str, Any], state: dict[str, Any]) -> None:
     counts = item_counts(ledger)
     gaps = ledger_gaps(goal, ledger)
+    next_item = choose_next_item(ledger)
+    current_item_id = state.get("current_item_id") or (next_item.get("id") if next_item else None)
     lines = [
         "# xuejiao twin current",
         "",
         f"- Status: {state.get('status')}",
         f"- Goal: {goal.get('one_liner')}",
-        f"- Current item: {state.get('current_item_id') or 'none'}",
+        f"- Current item: {current_item_id or 'none'}",
         f"- Round: {state.get('round_index')}",
         f"- Ledger: " + ", ".join(f"{key}={value}" for key, value in sorted(counts.items())),
         f"- Last decision: {state.get('last_decision') or 'none'}",
@@ -184,9 +208,8 @@ def render_current(workspace: Path, goal: dict[str, Any], ledger: dict[str, Any]
 
 
 def status_summary(workspace: Path) -> dict[str, Any]:
-    goal, ledger = validate_workspace(workspace)
-    state = load_state(workspace)
-    render_current(workspace, goal, ledger, state)
+    goal, ledger, state = validate_workspace_readonly(workspace)
+    workspace = resolve_workspace(workspace)
     next_item = choose_next_item(ledger)
     return {
         "workspace": str(workspace),
