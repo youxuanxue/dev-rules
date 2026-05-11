@@ -558,6 +558,26 @@ def run_fixture_validation() -> list[str]:
             errors.append("health should report supervisor edits to host files outside the twin workspace")
         if "SUPERVISOR_BOUNDARY_VIOLATION" not in boundary_health.get("run_health", {}).get("quality_flags", []):
             errors.append("supervisor boundary violations should require attention")
+        fallback_workspace = _write_workspace(root / "boundary-fallback")
+        load_state(fallback_workspace)
+        fallback_session = "fixture-supervisor-boundary-fallback"
+        fallback_transcript_dir = Path.home() / ".claude" / "projects" / "-tmp-fixture-other-project"
+        fallback_transcript_dir.mkdir(parents=True, exist_ok=True)
+        (fallback_transcript_dir / f"{fallback_session}.jsonl").write_text(
+            json.dumps({
+                "timestamp": "2026-05-11T00:00:00Z",
+                "message": {
+                    "content": [
+                        {"type": "tool_use", "name": "Edit", "input": {"file_path": str(fallback_workspace.parent / "host.py"), "old_string": "a", "new_string": "b"}},
+                    ]
+                },
+            }, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        fallback_health = health_workspace(fallback_workspace, supervisor_session_id=fallback_session, history_limit=5)
+        fallback_violations = fallback_health.get("supervisor_boundary_violations") or []
+        if len(fallback_violations) != 1 or not str(fallback_violations[0].get("transcript", "")).endswith(f"{fallback_session}.jsonl"):
+            errors.append("health should find supervisor transcripts outside the host project slug")
         bad_contract_workspace = _write_workspace(root / "bad-contract")
         load_state(bad_contract_workspace)
         (bad_contract_workspace / "feature_ledger.yaml").write_text(

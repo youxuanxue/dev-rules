@@ -28,11 +28,13 @@
 #   ~/Codes/dev-rules/                      ← 本机规范副本（local canonical mirror）
 #   ├── rules/*.mdc                            symlink 与 fan-out 都从这里出发
 #   ├── commands/*.md
-#   └── global/CLAUDE.md
+#   ├── global/CLAUDE.md
+#   └── personas/*.md                          xuejiao twin persona 源
 #        │
 #        ├──→ ~/.cursor/rules/*.mdc          本地 Cursor 交互式会话（symlink）
 #        ├──→ ~/.claude/commands/*           本地 Claude Code 自定义命令（symlink）
 #        ├──→ ~/.claude/CLAUDE.md            全局工作宪法（symlink）
+#        ├──→ ~/.xuejiao-twin/*.md           twin workspace snapshot 源（symlink）
 #        └──→ 各项目/.cursor/rules/*.mdc     云端 Agent 可读（real copy, git tracked）
 #
 #   为什么 home 用 symlink，项目用 real copy？
@@ -49,6 +51,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RULES_DIR="$SCRIPT_DIR/rules"
 COMMANDS_DIR="$SCRIPT_DIR/commands"
 GLOBAL_DIR="$SCRIPT_DIR/global"
+PERSONAS_DIR="$SCRIPT_DIR/personas"
 
 # Canonical local mirror (the symlink target). symlinks must always point here,
 # never into a project's submodule (which would couple home rules to a project).
@@ -56,10 +59,12 @@ HOME_CANONICAL="${DEV_RULES_HOME:-$HOME/Codes/dev-rules}"
 HOME_RULES_DIR="$HOME_CANONICAL/rules"
 HOME_COMMANDS_DIR="$HOME_CANONICAL/commands"
 HOME_GLOBAL_DIR="$HOME_CANONICAL/global"
+HOME_PERSONAS_DIR="$HOME_CANONICAL/personas"
 
 CURSOR_HOME="$HOME/.cursor/rules"
 CLAUDE_COMMANDS="$HOME/.claude/commands"
 CLAUDE_GLOBAL_MD="$HOME/.claude/CLAUDE.md"
+XUEJIAO_TWIN_HOME="$HOME/.xuejiao-twin"
 
 LAUNCH_AGENT_LABEL="local.dev-rules.sync"
 LAUNCH_AGENT_PLIST="$HOME/Library/LaunchAgents/${LAUNCH_AGENT_LABEL}.plist"
@@ -224,6 +229,31 @@ sync_to_home() {
         fi
         ln -sf "$global_src" "$CLAUDE_GLOBAL_MD"
         echo "  linked: CLAUDE.md → $global_src"
+    fi
+
+    echo ""
+    echo "=== Syncing to ~/.xuejiao-twin/ (symlinks → $HOME_PERSONAS_DIR) ==="
+    mkdir -p "$XUEJIAO_TWIN_HOME"
+    if [ ! -d "$HOME_PERSONAS_DIR" ]; then
+        echo "  WARN: $HOME_PERSONAS_DIR not found, skipping"
+    else
+        for persona in "$HOME_PERSONAS_DIR"/*.md; do
+            [ -f "$persona" ] || continue
+            local basename
+            basename="$(basename "$persona")"
+            local target="$XUEJIAO_TWIN_HOME/$basename"
+            if [ -L "$target" ] && [ "$(readlink "$target")" = "$persona" ]; then
+                echo "  ok: $basename"
+            else
+                if [ -e "$target" ] && [ ! -L "$target" ]; then
+                    local backup="$target.bak.$(date +%Y%m%d%H%M%S)"
+                    mv "$target" "$backup"
+                    echo "  backup: $target → $backup"
+                fi
+                ln -sf "$persona" "$target"
+                echo "  linked: $basename → $persona"
+            fi
+        done
     fi
 }
 
@@ -586,6 +616,11 @@ print_status() {
         [ -f "$cmd" ] && echo "  $(basename "$cmd")"
     done
     echo ""
+    echo "Twin personas in mirror:"
+    for persona in "$HOME_PERSONAS_DIR"/*.md; do
+        [ -f "$persona" ] && echo "  $(basename "$persona")"
+    done
+    echo ""
     echo "Home ~/.cursor/rules/ (must symlink → $HOME_RULES_DIR):"
     local any=0
     for rule in "$CURSOR_HOME"/*.mdc; do
@@ -619,6 +654,28 @@ print_status() {
     else
         echo "  ✗ missing"
     fi
+    echo ""
+    echo "Home ~/.xuejiao-twin/ (must symlink → $HOME_PERSONAS_DIR):"
+    local persona_any=0
+    for persona in "$HOME_PERSONAS_DIR"/*.md; do
+        [ -f "$persona" ] || continue
+        persona_any=1
+        local target="$XUEJIAO_TWIN_HOME/$(basename "$persona")"
+        if [ -L "$target" ]; then
+            local persona_target
+            persona_target="$(readlink "$target")"
+            if [ "$persona_target" = "$persona" ]; then
+                echo "  ✓ $(basename "$persona")"
+            else
+                echo "  ⚠ $(basename "$persona") → $persona_target (not pointing to canonical mirror)"
+            fi
+        elif [ -e "$target" ]; then
+            echo "  ⚠ $(basename "$persona") (regular file, should be symlink)"
+        else
+            echo "  ✗ $(basename "$persona") missing"
+        fi
+    done
+    [ "$persona_any" -eq 0 ] && echo "  (none in mirror)"
     echo ""
     echo "LaunchAgent ($LAUNCH_AGENT_LABEL):"
     if [ -f "$LAUNCH_AGENT_PLIST" ]; then

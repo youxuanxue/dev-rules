@@ -42,6 +42,24 @@ def _supervisor_transcript_path(host_root: Path, session_id: str) -> Path:
     return Path.home() / ".claude" / "projects" / _claude_project_slug(host_root) / f"{session_id}.jsonl"
 
 
+def _supervisor_transcript_paths(host_root: Path, session_id: str) -> list[Path]:
+    direct = _supervisor_transcript_path(host_root, session_id)
+    paths: list[Path] = []
+    if direct.exists():
+        paths.append(direct)
+    projects_root = Path.home() / ".claude" / "projects"
+    try:
+        candidates = sorted(projects_root.iterdir(), key=lambda item: item.name)
+    except OSError:
+        return paths
+    for project_dir in candidates:
+        candidate = project_dir / f"{session_id}.jsonl"
+        if candidate == direct or not candidate.exists():
+            continue
+        paths.append(candidate)
+    return paths
+
+
 def _gap_key(review: dict[str, Any]) -> str:
     parts = [str(item).strip() for item in review.get("remaining_gaps", []) if str(item).strip()]
     if not parts:
@@ -232,57 +250,59 @@ def _supervisor_boundary_violations(workspace: Path, session_id: str, limit: int
         return []
     host_root = workspace.parent.resolve()
     workspace_root = workspace.resolve()
-    transcript = _supervisor_transcript_path(host_root, session_id.strip())
-    if not transcript.exists():
+    transcripts = _supervisor_transcript_paths(host_root, session_id.strip())
+    if not transcripts:
         return []
     violations: deque[dict[str, Any]] = deque(maxlen=limit)
-    try:
-        with transcript.open(encoding="utf-8") as handle:
-            for line_number, line in enumerate(handle, 1):
-                if not line.strip():
-                    continue
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                message = event.get("message") if isinstance(event, dict) else None
-                content = message.get("content") if isinstance(message, dict) else None
-                if not isinstance(content, list):
-                    continue
-                for item in content:
-                    if not isinstance(item, dict) or item.get("type") != "tool_use" or item.get("name") not in {"Edit", "Write", "NotebookEdit"}:
+    for transcript in transcripts:
+        try:
+            with transcript.open(encoding="utf-8") as handle:
+                for line_number, line in enumerate(handle, 1):
+                    if not line.strip():
                         continue
-                    tool_input = item.get("input") if isinstance(item.get("input"), dict) else {}
-                    raw_path = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
-                    if not raw_path:
-                        continue
-                    target = Path(raw_path).expanduser()
-                    if not target.is_absolute():
-                        target = host_root / target
                     try:
-                        target = target.resolve()
-                    except OSError:
-                        target = target.absolute()
-                    try:
-                        target.relative_to(workspace_root)
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
                         continue
-                    except ValueError:
-                        pass
-                    try:
-                        target.relative_to(host_root)
-                    except ValueError:
+                    message = event.get("message") if isinstance(event, dict) else None
+                    content = message.get("content") if isinstance(message, dict) else None
+                    if not isinstance(content, list):
                         continue
-                    violations.append({
-                        "kind": "supervisor_boundary",
-                        "flag": "SUPERVISOR_BOUNDARY_VIOLATION",
-                        "session_id": session_id.strip(),
-                        "tool": item.get("name"),
-                        "path": str(target),
-                        "line_number": line_number,
-                        "timestamp": event.get("timestamp"),
-                    })
-    except OSError:
-        return []
+                    for item in content:
+                        if not isinstance(item, dict) or item.get("type") != "tool_use" or item.get("name") not in {"Edit", "Write", "NotebookEdit"}:
+                            continue
+                        tool_input = item.get("input") if isinstance(item.get("input"), dict) else {}
+                        raw_path = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
+                        if not raw_path:
+                            continue
+                        target = Path(raw_path).expanduser()
+                        if not target.is_absolute():
+                            target = host_root / target
+                        try:
+                            target = target.resolve()
+                        except OSError:
+                            target = target.absolute()
+                        try:
+                            target.relative_to(workspace_root)
+                            continue
+                        except ValueError:
+                            pass
+                        try:
+                            target.relative_to(host_root)
+                        except ValueError:
+                            continue
+                        violations.append({
+                            "kind": "supervisor_boundary",
+                            "flag": "SUPERVISOR_BOUNDARY_VIOLATION",
+                            "session_id": session_id.strip(),
+                            "transcript": str(transcript),
+                            "tool": item.get("name"),
+                            "path": str(target),
+                            "line_number": line_number,
+                            "timestamp": event.get("timestamp"),
+                        })
+        except OSError:
+            continue
     return list(violations)
 
 
@@ -681,7 +701,13 @@ def _validate_review_actions(review: dict[str, Any]) -> None:
         raise WorkspaceError("mark_ledger_gap requires ledger_updates")
 
 
-def apply_supervisor_review(workspace: Path, run_id: str, review: dict[str, Any]) -> dict[str, Any]:
+def apply_supervisor_review(
+    workspace: Path,
+    run_id: str,
+    review: dict[str, Any],
+    *,
+    supervisor_session_id: str | None = None,
+) -> dict[str, Any]:
     errors = validate_schema(review, SUPERVISOR_REVIEW_SCHEMA)
     if errors:
         raise WorkspaceError("supervisor_review schema errors: " + "; ".join(errors))
@@ -717,6 +743,13 @@ def apply_supervisor_review(workspace: Path, run_id: str, review: dict[str, Any]
         done_errors = _validate_accepted_done(goal, ledger, review, workspace)
         if done_errors:
             raise WorkspaceError("ACCEPTED_DONE errors: " + "; ".join(done_errors))
+        boundary_violations = _supervisor_boundary_violations(workspace, supervisor_session_id or "", 1)
+        if boundary_violations:
+            violation = boundary_violations[0]
+            raise WorkspaceError(
+                "ACCEPTED_DONE blocked: supervisor wrote outside twin workspace; "
+                f"tool={violation.get('tool')} path={violation.get('path')}"
+            )
         state["status"] = "accepted_done"
         state["next_instruction"] = ""
         state["needs_human"] = None

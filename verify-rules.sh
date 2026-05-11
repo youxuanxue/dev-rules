@@ -15,6 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RULES_DIR="$SCRIPT_DIR/rules"
 COMMANDS_DIR="$SCRIPT_DIR/commands"
 GLOBAL_DIR="$SCRIPT_DIR/global"
+PERSONAS_DIR="$SCRIPT_DIR/personas"
 README="$SCRIPT_DIR/README.md"
 
 QUIET=0
@@ -99,6 +100,19 @@ else
         fi
     done
 fi
+
+# ── twin persona files present ─────────────────────────────────────────
+# personas/ is the single source of truth for supervisor + worker persona;
+# sync.sh symlinks them into ~/.xuejiao-twin/. Missing files break the twin
+# harness silently, so assert them here.
+section "twin persona files present"
+for required in personas/supervisor-persona.md personas/worker-persona.md; do
+    if [ -f "$SCRIPT_DIR/$required" ]; then
+        ok "$required"
+    else
+        fail "$required missing"
+    fi
+done
 
 # ── rule carrier partition anchor ─────────────────────────────────────
 # Prevent the system-level simplification rule from drifting into another
