@@ -386,6 +386,37 @@ def run_fixture_validation() -> list[str]:
         if not any(item.get("flag") == "WORKER_RETURN_CODE_NONZERO" for item in nonzero_health.get("history_warnings", [])):
             errors.append("health should summarize historical nonzero worker exits")
 
+        stale_workspace = _write_workspace(root / "stale-running")
+        stale_state = load_state(stale_workspace)
+        stale_state["status"] = "worker_running"
+        stale_state["current_run_id"] = "run-stale"
+        stale_state["next_instruction"] = "fixture instruction from abandoned worker"
+        write_state(stale_workspace, stale_state)
+        stale_runner = FakeRunner()
+        stale_run = start_worker_turn(stale_workspace, "恢复 stale worker_running", runner=stale_runner)
+        if stale_run.get("outcome") != "review_required" or len(stale_runner.calls) != 1:
+            errors.append("stale worker_running without artifacts should allow a fresh worker turn")
+        stale_after = load_state(stale_workspace)
+        if stale_after.get("current_run_id") == "run-stale" or stale_after.get("status") != "review_required":
+            errors.append("stale worker_running recovery should replace the abandoned run id")
+
+        active_workspace = _write_workspace(root / "active-running")
+        active_state = load_state(active_workspace)
+        active_state["status"] = "worker_running"
+        active_state["current_run_id"] = "run-active"
+        write_state(active_workspace, active_state)
+        active_pending = active_workspace / "runs" / "run-active" / "pending.json"
+        active_pending.parent.mkdir(parents=True, exist_ok=True)
+        active_pending.write_text(
+            '{"schema_version":1,"run_id":"run-active","started_at":"2026-05-11T00:00:00Z","status":"worker_running"}\n',
+            encoding="utf-8",
+        )
+        try:
+            start_worker_turn(active_workspace, "不应抢占真实 running", runner=FakeRunner())
+            errors.append("worker_running with pending artifact should still block a fresh worker turn")
+        except WorkspaceError:
+            pass
+
         runner = FakeRunner()
         try:
             start_worker_turn(workspace, "", runner=runner)

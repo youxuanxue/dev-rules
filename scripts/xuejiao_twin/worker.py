@@ -203,6 +203,21 @@ def _events_path(workspace: Path, run_id: str) -> Path:
     return _run_dir(workspace, run_id) / "events.jsonl"
 
 
+def _is_stale_worker_running_state(workspace: Path, state: dict[str, Any]) -> bool:
+    run_id = str(state.get("current_run_id") or "")
+    if state.get("status") != "worker_running" or not run_id:
+        return False
+    run_dir = _run_dir(workspace, run_id)
+    return not any(
+        path.exists()
+        for path in (
+            run_dir / "pending.json",
+            run_dir / "events.jsonl",
+            run_dir / "run.json",
+        )
+    )
+
+
 def _write_events(workspace: Path, run_id: str, events: list[dict[str, Any]]) -> None:
     path = _events_path(workspace, run_id)
     if path.exists() and path.stat().st_size > 0:
@@ -245,7 +260,12 @@ def start_worker_turn(
             "previous worker turn requires supervisor review before the next worker turn"
         )
     if state.get("status") == "worker_running":
-        raise WorkspaceError("worker is already running for this workspace")
+        if _is_stale_worker_running_state(workspace, state):
+            state["status"] = "continue"
+            state["worker_session_id"] = None
+            write_state(workspace, state)
+        else:
+            raise WorkspaceError("worker is already running for this workspace")
 
     instruction = instruction.strip()
     if not instruction:
