@@ -207,7 +207,7 @@ def _is_stale_worker_running_state(workspace: Path, state: dict[str, Any]) -> bo
     run_id = str(state.get("current_run_id") or "")
     if state.get("status") != "worker_running" or not run_id:
         return False
-    run_dir = _run_dir(workspace, run_id)
+    run_dir = workspace / RUNS_DIR / run_id
     return not any(
         path.exists()
         for path in (

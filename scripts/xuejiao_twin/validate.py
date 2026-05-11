@@ -399,6 +399,8 @@ def run_fixture_validation() -> list[str]:
         stale_after = load_state(stale_workspace)
         if stale_after.get("current_run_id") == "run-stale" or stale_after.get("status") != "review_required":
             errors.append("stale worker_running recovery should replace the abandoned run id")
+        if (stale_workspace / "runs" / "run-stale").exists():
+            errors.append("stale worker_running detection should not create an empty abandoned run directory")
 
         active_workspace = _write_workspace(root / "active-running")
         active_state = load_state(active_workspace)
