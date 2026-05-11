@@ -32,7 +32,7 @@ from .runtime import (
 from .schema_contract import validate_artifact, validate_schema
 from .util import read_json
 from .worker import DEFAULT_WORKER_MAX_BUDGET_USD, assess_run_quality, changed_files_from_status, default_worker_max_budget_usd
-from .workspace import WorkspaceError, load_ledger, load_state, write_ledger
+from .workspace import WorkspaceError, load_ledger, load_state, write_ledger, write_state
 
 
 class FakeRunner:
@@ -463,6 +463,79 @@ def run_fixture_validation() -> list[str]:
         if state_path.read_text(encoding="utf-8") != health_state_text or (workspace / "runs" / run["run_id"] / "run.json").read_text(encoding="utf-8") != health_run_text:
             errors.append("health should not rewrite state or run artifacts")
         write_json(workspace / "runs" / run["run_id"] / "run.json", run)
+        running_workspace = _write_workspace(root / "running")
+        running_state = load_state(running_workspace)
+        running_state["status"] = "worker_running"
+        running_state["current_run_id"] = "run-pending"
+        running_state["next_instruction"] = "fixture instruction still running"
+        write_state(running_workspace, running_state)
+        running_dir = running_workspace / "runs" / "run-pending"
+        running_dir.mkdir(parents=True, exist_ok=True)
+        (running_dir / "pending.json").write_text(
+            '{"schema_version":1,"run_id":"run-pending","started_at":"2026-05-11T00:00:00Z","status":"worker_running"}\n',
+            encoding="utf-8",
+        )
+        (running_dir / "events.jsonl").write_text('{"type":"assistant","message":{"content":[{"type":"text","text":"fixture running"}]}}\n', encoding="utf-8")
+        running_health = health_workspace(running_workspace, history_limit=5)
+        if running_health.get("current_run", {}).get("outcome") != "worker_running":
+            errors.append("health should expose pending current_run while worker is still running")
+        running_warning_flags = [item.get("flag") for item in running_health.get("history_warnings", [])]
+        if "CURRENT_RUN_MISSING" in running_warning_flags or "PENDING_RUN_MISSING_ARTIFACT" in running_warning_flags:
+            errors.append("worker_running without run artifact should not be reported as missing while current pending marker exists")
+        if running_health.get("events_tail_summary", {}).get("events", [{}])[-1].get("type") != "assistant":
+            errors.append("health should summarize live running events")
+        if not str(running_health.get("artifact_paths", {}).get("run", "")).endswith("runs/run-pending/run.json"):
+            errors.append("running health should expose the pending run artifact path")
+        missing_workspace = _write_workspace(root / "missing-run")
+        missing_state = load_state(missing_workspace)
+        missing_state["status"] = "review_required"
+        missing_state["current_run_id"] = "run-missing"
+        write_state(missing_workspace, missing_state)
+        missing_health = health_workspace(missing_workspace, history_limit=5)
+        if not any(item.get("flag") == "CURRENT_RUN_MISSING" for item in missing_health.get("history_warnings", [])):
+            errors.append("non-running state with missing run artifact should report CURRENT_RUN_MISSING")
+        abandoned_workspace = _write_workspace(root / "abandoned-pending")
+        abandoned_state = load_state(abandoned_workspace)
+        abandoned_state["status"] = "worker_running"
+        abandoned_state["current_run_id"] = "run-current"
+        write_state(abandoned_workspace, abandoned_state)
+        abandoned_pending = abandoned_workspace / "runs" / "run-abandoned" / "pending.json"
+        abandoned_pending.parent.mkdir(parents=True, exist_ok=True)
+        abandoned_pending.write_text(
+            '{"schema_version":1,"run_id":"run-abandoned","started_at":"2026-05-11T00:00:00Z","status":"worker_running"}\n',
+            encoding="utf-8",
+        )
+        abandoned_health = health_workspace(abandoned_workspace, history_limit=5)
+        if not any(item.get("flag") == "ABANDONED_PENDING_RUN" and item.get("run_id") == "run-abandoned" for item in abandoned_health.get("history_warnings", [])):
+            errors.append("health should report abandoned pending worker starts")
+        if not abandoned_health.get("pending_runs"):
+            errors.append("health should expose pending run markers")
+        bad_contract_workspace = _write_workspace(root / "bad-contract")
+        load_state(bad_contract_workspace)
+        (bad_contract_workspace / "feature_ledger.yaml").write_text(
+            """schema_version: 1
+goal_id: fixture-goal
+items:
+  - id: F1
+    deliverable: 完成 fixture 主流程
+    scope: 只覆盖 greenfield worker turn
+    covers_ac: [AC1, AC2]
+    evidence_plan: [tests pass]
+    actual_evidence:
+      - path: docs/bugs/report.md
+    depends_on: []
+    status: completed
+    next_action: ""
+""",
+            encoding="utf-8",
+        )
+        bad_contract_health = health_workspace(bad_contract_workspace, history_limit=5)
+        if not bad_contract_health.get("degraded"):
+            errors.append("health should return degraded report for invalid workspace contract")
+        if not any(item.get("flag") == "WORKSPACE_CONTRACT_INVALID" for item in bad_contract_health.get("history_warnings", [])):
+            errors.append("degraded health should expose workspace contract errors")
+        if not bad_contract_health.get("run_health", {}).get("requires_attention"):
+            errors.append("degraded health should require attention")
         cli = subprocess.run(
             [
                 sys.executable,

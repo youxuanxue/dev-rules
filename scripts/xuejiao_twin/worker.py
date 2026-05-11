@@ -195,6 +195,10 @@ def _run_dir(workspace: Path, run_id: str) -> Path:
     return path
 
 
+def _pending_path(workspace: Path, run_id: str) -> Path:
+    return _run_dir(workspace, run_id) / "pending.json"
+
+
 def _events_path(workspace: Path, run_id: str) -> Path:
     return _run_dir(workspace, run_id) / "events.jsonl"
 
@@ -252,6 +256,15 @@ def start_worker_turn(
     state["status"] = "worker_running"
     state["current_run_id"] = run_id
     state["next_instruction"] = instruction
+    write_json(_pending_path(workspace, run_id), {
+        "schema_version": SCHEMA_VERSION,
+        "run_id": run_id,
+        "workspace_ref": str(workspace),
+        "state_ref": str(workspace / "supervisor_state.json"),
+        "started_at": started_at,
+        "status": "worker_running",
+        "instruction": instruction,
+    })
     write_state(workspace, state)
     pre_git_status = git_status(workspace)
     pre_git_diff_stat = git_diff_stat(workspace)
@@ -265,6 +278,7 @@ def start_worker_turn(
         session_id=previous_session_id,
         permission_mode="bypassPermissions",
         role="worker",
+        stream_output_path=_events_path(workspace, run_id),
     )
     resume_used = bool(previous_session_id)
     worker_session_reset = False
@@ -281,6 +295,7 @@ def start_worker_turn(
             session_id="",
             permission_mode="bypassPermissions",
             role="worker",
+            stream_output_path=_events_path(workspace, run_id),
         )
         resume_used = False
         worker_session_reset = True
@@ -297,6 +312,7 @@ def start_worker_turn(
             session_id="",
             permission_mode="bypassPermissions",
             role="worker",
+            stream_output_path=_events_path(workspace, run_id),
         )
         resume_used = False
         worker_session_reset = True
@@ -369,6 +385,9 @@ def start_worker_turn(
     if errors:
         raise WorkspaceError("run schema errors: " + "; ".join(errors))
     write_json(run_dir / "run.json", run)
+    pending_path = _pending_path(workspace, run_id)
+    if pending_path.exists():
+        pending_path.unlink()
     render_current(workspace, load_goal(workspace), load_ledger(workspace), state)
     _consume_human_response(workspace, run_id)
     return run

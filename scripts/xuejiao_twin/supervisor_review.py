@@ -7,7 +7,7 @@ from collections import Counter, deque
 from pathlib import Path
 from typing import Any
 
-from .contracts import CURRENT_FILE, HUMAN_RESPONSE_FILE, RUN_SCHEMA, SUPERVISOR_REVIEW_SCHEMA, SUPERVISOR_STATE_FILE
+from .contracts import CURRENT_FILE, GOAL_FILE, HUMAN_RESPONSE_FILE, LEDGER_FILE, RUN_SCHEMA, SUPERVISOR_REVIEW_SCHEMA, SUPERVISOR_STATE_FILE
 from .ledger import acceptance_evidence, acceptance_focus, apply_ledger_updates, choose_next_item, item_counts, ledger_gaps
 from .schema_contract import validate_schema
 from .util import now_utc, read_json, write_json
@@ -280,6 +280,27 @@ def _recent_runs(workspace: Path, limit: int) -> list[dict[str, Any]]:
     return runs[:limit]
 
 
+def _pending_runs(workspace: Path, limit: int) -> list[dict[str, Any]]:
+    runs_root = workspace / "runs"
+    if limit <= 0 or not runs_root.exists():
+        return []
+    pending: list[dict[str, Any]] = []
+    for pending_path in runs_root.glob("*/pending.json"):
+        run_json = pending_path.with_name("run.json")
+        if run_json.exists():
+            continue
+        try:
+            value = read_json(pending_path)
+        except (OSError, json.JSONDecodeError):
+            value = {"run_id": pending_path.parent.name, "status": "unknown"}
+        if isinstance(value, dict):
+            value.setdefault("run_id", pending_path.parent.name)
+            value["pending_ref"] = str(pending_path)
+            pending.append(value)
+    pending.sort(key=lambda item: str(item.get("started_at") or ""), reverse=True)
+    return pending[:limit]
+
+
 def _history_warnings(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     flags: Counter[str] = Counter()
     outcomes: Counter[str] = Counter()
@@ -322,7 +343,21 @@ def _history_warnings(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def build_health_report(workspace: Path, *, run_id: str | None = None, events_tail: int = 20, history_limit: int = 20) -> dict[str, Any]:
     workspace = resolve_workspace(workspace)
-    goal, ledger, state = validate_workspace_readonly(workspace)
+    degraded_errors: list[str] = []
+    try:
+        goal, ledger, state = validate_workspace_readonly(workspace)
+    except WorkspaceError as exc:
+        degraded_errors.append(str(exc))
+        goal = {}
+        ledger = {"items": []}
+        try:
+            state_path = workspace / SUPERVISOR_STATE_FILE
+            if not state_path.exists():
+                raise WorkspaceError(f"missing {SUPERVISOR_STATE_FILE}; run /twin <workspace> to initialize runtime state")
+            state = read_json(state_path)
+        except (OSError, json.JSONDecodeError, WorkspaceError) as state_exc:
+            degraded_errors.append(str(state_exc))
+            state = {"status": "unknown", "current_run_id": None, "round_index": None, "next_instruction": ""}
     current_run_id = str(run_id or state.get("current_run_id") or "")
     next_item = choose_next_item(ledger)
     status = {
@@ -350,14 +385,64 @@ def build_health_report(workspace: Path, *, run_id: str | None = None, events_ta
         "history_warnings": [],
         "artifact_paths": {
             "current": str(workspace / CURRENT_FILE),
+            "goal": str(workspace / GOAL_FILE),
+            "ledger": str(workspace / LEDGER_FILE),
             "state": str(workspace / SUPERVISOR_STATE_FILE),
             "human_response": str(workspace / HUMAN_RESPONSE_FILE),
         },
     }
+    if degraded_errors:
+        report["degraded"] = True
+        report["history_warnings"].extend({"kind": "workspace_contract", "flag": "WORKSPACE_CONTRACT_INVALID", "message": error} for error in degraded_errors)
+        report["run_health"] = {
+            "quality_flags": ["WORKSPACE_CONTRACT_INVALID"],
+            "has_validation": False,
+            "has_changed_files": False,
+            "requires_attention": True,
+            "recommended_actions": ["Fix workspace contract errors before supervisor review."],
+        }
     if current_run_id:
         run = _read_run_artifact(workspace, current_run_id)
         if run is None:
-            report["history_warnings"].append({"kind": "missing_artifact", "flag": "CURRENT_RUN_MISSING", "run_id": current_run_id})
+            if state.get("status") == "worker_running":
+                expected_run_path = _run_path(workspace, current_run_id)
+                expected_events_path = workspace / "runs" / current_run_id / "events.jsonl"
+                expected_pending_path = workspace / "runs" / current_run_id / "pending.json"
+                report["current_run"] = {
+                    "run_id": current_run_id,
+                    "outcome": "worker_running",
+                    "started_at": state.get("updated_at"),
+                    "ended_at": None,
+                    "worker_returncode": None,
+                    "session_lost": None,
+                    "resume_used": None,
+                    "quality_flags": [],
+                    "validation_count": 0,
+                    "changed_files_count": 0,
+                }
+                stale_worker_state = not expected_pending_path.exists() and not expected_events_path.exists()
+                if not degraded_errors:
+                    report["run_health"] = {
+                        "quality_flags": ["STALE_WORKER_RUNNING"] if stale_worker_state else [],
+                        "has_validation": False,
+                        "has_changed_files": False,
+                        "requires_attention": stale_worker_state,
+                        "recommended_actions": [
+                            "Worker-running state has no pending marker or live events; reset state before continuing."
+                            if stale_worker_state else "Wait for worker-turn to finish before requesting review."
+                        ],
+                    }
+                if stale_worker_state:
+                    report["history_warnings"].append({
+                        "kind": "stale_state",
+                        "flag": "STALE_WORKER_RUNNING",
+                        "run_id": current_run_id,
+                        "message": "state is worker_running but no run directory, pending marker, events, or run artifact exists",
+                    })
+                report["events_tail_summary"] = _events_tail_summary(expected_events_path, events_tail)
+                report["artifact_paths"].update({"run": str(expected_run_path), "events": str(expected_events_path)})
+            else:
+                report["history_warnings"].append({"kind": "missing_artifact", "flag": "CURRENT_RUN_MISSING", "run_id": current_run_id})
         else:
             worker = run.get("worker") if isinstance(run.get("worker"), dict) else {}
             evidence = run.get("evidence") if isinstance(run.get("evidence"), dict) else {}
@@ -388,8 +473,29 @@ def build_health_report(workspace: Path, *, run_id: str | None = None, events_ta
                     "human_question": review.get("human_question"),
                 }
     history = _recent_runs(workspace, history_limit)
+    pending_runs = _pending_runs(workspace, history_limit)
+    for pending_run in pending_runs:
+        pending_run_id = str(pending_run.get("run_id") or "")
+        if pending_run_id and pending_run_id == current_run_id and state.get("status") == "worker_running":
+            continue
+        flag = "PENDING_RUN_MISSING_ARTIFACT"
+        if pending_run_id and pending_run_id != current_run_id:
+            flag = "ABANDONED_PENDING_RUN"
+        report["history_warnings"].append({
+            "kind": "missing_artifact",
+            "flag": flag,
+            "run_id": pending_run_id,
+            "started_at": pending_run.get("started_at"),
+            "pending_ref": pending_run.get("pending_ref"),
+        })
+    report["pending_runs"] = pending_runs
     report["history_warnings"].extend(_history_warnings(history))
-    report["scan_meta"] = {"events_tail": events_tail, "history_limit": history_limit, "history_runs_scanned": len(history)}
+    report["scan_meta"] = {
+        "events_tail": events_tail,
+        "history_limit": history_limit,
+        "history_runs_scanned": len(history),
+        "pending_runs_scanned": len(pending_runs),
+    }
     return report
 
 
