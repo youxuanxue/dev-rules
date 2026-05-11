@@ -109,7 +109,11 @@ def _host_repo_root(workspace: Path) -> Path | None:
     if completed.returncode != 0:
         return None
     root = completed.stdout.strip()
-    return Path(root) if root else None
+    return Path(root).resolve() if root else None
+
+
+def _host_root_for_workspace(workspace: Path) -> Path:
+    return _host_repo_root(workspace) or workspace.parent.resolve()
 
 
 def _validate_git_state_for_accepted_done(review: dict[str, Any], workspace: Path) -> list[str]:
@@ -345,7 +349,7 @@ def _bash_command_writes_path(command: str, protected_root: Path, host_root: Pat
 def _supervisor_boundary_violations(workspace: Path, session_id: str, limit: int) -> list[dict[str, Any]]:
     if limit <= 0 or not session_id.strip():
         return []
-    host_root = workspace.parent.resolve()
+    host_root = _host_root_for_workspace(workspace)
     workspace_root = workspace.resolve()
     personas_dir = PERSONAS_DIR.expanduser().resolve()
     transcripts = _supervisor_transcript_paths(host_root, session_id.strip())
@@ -408,7 +412,7 @@ def _run_persona_write_violations(workspace: Path, run: dict[str, Any], limit: i
     path = Path(events_ref)
     if not path.exists():
         return []
-    host_root = workspace.parent.resolve()
+    host_root = _host_root_for_workspace(workspace)
     personas_dir = PERSONAS_DIR.expanduser().resolve()
     violations: deque[dict[str, Any]] = deque(maxlen=limit)
     try:
@@ -925,7 +929,7 @@ def apply_supervisor_review(
         state["status"] = "continue"
         state["next_instruction"] = instruction
         state["needs_human"] = None
-        run["outcome"] = "review_required"
+        run["outcome"] = "continued"
     elif decision == "NEEDS_HUMAN":
         question = str(review.get("human_question") or "").strip()
         if not question:

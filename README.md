@@ -19,7 +19,7 @@
 | `commands/decompose.md` | `/user:decompose [需求描述]` | 先做风险分级，再拆解任务与 PR 形状 |
 | `commands/review.md` | `/user:review [范围]` | 默认对话内精简审查；按需写 PR comment / 严格记录 |
 | `commands/calibrate.md` | `/user:calibrate [日期范围]` | 从历史 PR review 证据校准审查噪音与漏报 |
-| `commands/twin.md` | `/user:twin <workspace>\|status\|respond` | 运行 xuejiao persona supervisor，驱动 Claude Code worker 完成目标工作区 |
+| `commands/twin.md` | `/twin <workspace>\|status [workspace]\|respond <text>` | 运行 xuejiao persona supervisor，驱动 Claude Code worker 完成目标工作区 |
 
 ## 关键入口
 

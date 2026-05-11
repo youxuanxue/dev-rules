@@ -146,7 +146,7 @@ while not done:
 
 ## supervisor 运行模式
 
-`/twin` 或 `/xuejiao-twin` 本身就是 supervisor：它运行在当前 Claude Code 交互会话中，直接复用 Claude Code 原生高级能力：
+`/twin` 本身就是 supervisor：它运行在当前 Claude Code 交互会话中，直接复用 Claude Code 原生高级能力：
 
 - `TaskCreate` / `TaskUpdate` / `TaskList`：维护本轮交互可见任务，不作为长期事实源。
 - `Agent` subagents：做大范围只读调研、独立 review、Claude Code 功能调研；不替代 worker 主执行链路。
@@ -227,7 +227,7 @@ human gate 的机械边界由 Claude Code 原生 `--allowedTools` / `--disallowe
 
 ```text
 /twin <workspace>     # 执行已包含 goal + feature_ledger 的目标工作区；自动 run/review/continue
-/twin status          # 查看 goal、ledger 进度、阻塞、人类需要回答什么
+/twin status [workspace]  # 查看 goal、ledger 进度、阻塞、人类需要回答什么
 /twin respond <text>  # 回答 NEEDS_HUMAN 后继续
 ```
 
@@ -257,7 +257,7 @@ P1：闭环推进
 - 每轮 worker 后必须 supervisor review，不能把 worker stop 当完成。
 - 支持 `CONTINUE` 自动进入下一轮。
 - 支持 `fix_drift`、`validate_more`、`mark_ledger_gap`。
-- 只有 `NEEDS_HUMAN / ACCEPTED_DONE / failed` 才 terminal。
+- 只有 `NEEDS_HUMAN / ACCEPTED_DONE / FAILED` 才 terminal。
 
 P2：OPC 固化
 

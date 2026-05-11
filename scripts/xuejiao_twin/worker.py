@@ -78,6 +78,19 @@ def _run_command(args: list[str], cwd: Path, *, timeout: int = 30) -> str:
 
 
 def _repo_root(workspace: Path) -> Path:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(workspace), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return workspace.parent
+    root = completed.stdout.strip()
+    if completed.returncode == 0 and root:
+        return Path(root)
     return workspace.parent
 
 
