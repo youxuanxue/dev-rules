@@ -364,12 +364,22 @@ def run_fixture_validation() -> list[str]:
 
         workspace_persona = _write_workspace(root / "workspace-persona")
         (workspace_persona / "worker-persona.md").write_text("goal-specific worker persona", encoding="utf-8")
+        (workspace_persona / "nested").mkdir()
+        (workspace_persona / "nested" / "supervisor-persona.md").write_text("goal-specific supervisor persona", encoding="utf-8")
         try:
             validate_workspace(workspace_persona)
             errors.append("workspace-local persona files should fail")
         except WorkspaceError as exc:
-            if "persona files must not live in the target workspace" not in str(exc):
+            message = str(exc)
+            if "persona files must not live in the target workspace" not in message:
                 errors.append(f"workspace-local persona failure should name the contract: {exc}")
+            if "worker-persona.md" not in message or "nested/supervisor-persona.md" not in message:
+                errors.append(f"workspace-local persona failure should include root and nested paths: {exc}")
+        try:
+            build_supervisor_context(workspace_persona)
+            errors.append("supervisor context should reject workspace-local persona files")
+        except WorkspaceError:
+            pass
 
         legacy_json = _write_workspace(root / "legacy-json")
         (legacy_json / "feature_ledger.json").write_text("{}\n", encoding="utf-8")

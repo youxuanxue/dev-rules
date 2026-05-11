@@ -83,11 +83,12 @@ def load_worker_persona() -> str:
 
 
 def validate_persona_contract(workspace: Path) -> None:
-    forbidden = [name for name in (SUPERVISOR_PERSONA_FILE, WORKER_PERSONA_FILE) if (workspace / name).exists()]
+    persona_names = {SUPERVISOR_PERSONA_FILE, WORKER_PERSONA_FILE}
+    forbidden = [str(path.relative_to(workspace)) for path in workspace.rglob("*.md") if path.name in persona_names]
     if forbidden:
         raise WorkspaceError(
             "persona files must not live in the target workspace; use "
-            f"{SUPERVISOR_PERSONA_PATH} and {WORKER_PERSONA_PATH} directly: " + ", ".join(forbidden)
+            f"{SUPERVISOR_PERSONA_PATH} and {WORKER_PERSONA_PATH} directly: " + ", ".join(sorted(forbidden))
         )
     load_supervisor_persona()
     load_worker_persona()

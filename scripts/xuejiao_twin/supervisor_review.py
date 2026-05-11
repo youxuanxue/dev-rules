@@ -22,6 +22,7 @@ from .workspace import (
     load_supervisor_persona,
     render_current,
     resolve_workspace,
+    validate_workspace,
     validate_workspace_readonly,
     write_ledger,
     write_state,
@@ -783,8 +784,7 @@ def build_health_report(
 
 
 def build_supervisor_context(workspace: Path, run_id: str | None = None) -> dict[str, Any]:
-    goal = load_goal(workspace)
-    ledger = load_ledger(workspace)
+    goal, ledger = validate_workspace(workspace)
     state = load_state(workspace)
     next_item = choose_next_item(ledger)
     focus = acceptance_focus(goal, ledger)
