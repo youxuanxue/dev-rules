@@ -22,12 +22,20 @@ def status_workspace(workspace: Path | str) -> dict[str, Any]:
     return status_summary(Path(workspace).expanduser().resolve())
 
 
-def health_workspace(workspace: Path | str, *, run_id: str | None = None, events_tail: int = 20, history_limit: int = 20) -> dict[str, Any]:
+def health_workspace(
+    workspace: Path | str,
+    *,
+    run_id: str | None = None,
+    events_tail: int = 20,
+    history_limit: int = 20,
+    supervisor_session_id: str | None = None,
+) -> dict[str, Any]:
     return build_health_report(
         Path(workspace).expanduser().resolve(),
         run_id=run_id,
         events_tail=events_tail,
         history_limit=history_limit,
+        supervisor_session_id=supervisor_session_id,
     )
 
 

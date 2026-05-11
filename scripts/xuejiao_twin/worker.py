@@ -195,12 +195,33 @@ def _run_dir(workspace: Path, run_id: str) -> Path:
     return path
 
 
+def _pending_path(workspace: Path, run_id: str) -> Path:
+    return _run_dir(workspace, run_id) / "pending.json"
+
+
 def _events_path(workspace: Path, run_id: str) -> Path:
     return _run_dir(workspace, run_id) / "events.jsonl"
 
 
+def _is_stale_worker_running_state(workspace: Path, state: dict[str, Any]) -> bool:
+    run_id = str(state.get("current_run_id") or "")
+    if state.get("status") != "worker_running" or not run_id:
+        return False
+    run_dir = workspace / RUNS_DIR / run_id
+    return not any(
+        path.exists()
+        for path in (
+            run_dir / "pending.json",
+            run_dir / "events.jsonl",
+            run_dir / "run.json",
+        )
+    )
+
+
 def _write_events(workspace: Path, run_id: str, events: list[dict[str, Any]]) -> None:
     path = _events_path(workspace, run_id)
+    if path.exists() and path.stat().st_size > 0:
+        return
     with path.open("w", encoding="utf-8") as handle:
         for event in events:
             handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
@@ -239,7 +260,12 @@ def start_worker_turn(
             "previous worker turn requires supervisor review before the next worker turn"
         )
     if state.get("status") == "worker_running":
-        raise WorkspaceError("worker is already running for this workspace")
+        if _is_stale_worker_running_state(workspace, state):
+            state["status"] = "continue"
+            state["worker_session_id"] = None
+            write_state(workspace, state)
+        else:
+            raise WorkspaceError("worker is already running for this workspace")
 
     instruction = instruction.strip()
     if not instruction:
@@ -252,6 +278,15 @@ def start_worker_turn(
     state["status"] = "worker_running"
     state["current_run_id"] = run_id
     state["next_instruction"] = instruction
+    write_json(_pending_path(workspace, run_id), {
+        "schema_version": SCHEMA_VERSION,
+        "run_id": run_id,
+        "workspace_ref": str(workspace),
+        "state_ref": str(workspace / "supervisor_state.json"),
+        "started_at": started_at,
+        "status": "worker_running",
+        "instruction_hash": stable_hash(instruction),
+    })
     write_state(workspace, state)
     pre_git_status = git_status(workspace)
     pre_git_diff_stat = git_diff_stat(workspace)
@@ -265,6 +300,7 @@ def start_worker_turn(
         session_id=previous_session_id,
         permission_mode="bypassPermissions",
         role="worker",
+        stream_output_path=_events_path(workspace, run_id),
     )
     resume_used = bool(previous_session_id)
     worker_session_reset = False
@@ -281,6 +317,7 @@ def start_worker_turn(
             session_id="",
             permission_mode="bypassPermissions",
             role="worker",
+            stream_output_path=_events_path(workspace, run_id),
         )
         resume_used = False
         worker_session_reset = True
@@ -297,6 +334,7 @@ def start_worker_turn(
             session_id="",
             permission_mode="bypassPermissions",
             role="worker",
+            stream_output_path=_events_path(workspace, run_id),
         )
         resume_used = False
         worker_session_reset = True
@@ -369,6 +407,9 @@ def start_worker_turn(
     if errors:
         raise WorkspaceError("run schema errors: " + "; ".join(errors))
     write_json(run_dir / "run.json", run)
+    pending_path = _pending_path(workspace, run_id)
+    if pending_path.exists():
+        pending_path.unlink()
     render_current(workspace, load_goal(workspace), load_ledger(workspace), state)
     _consume_human_response(workspace, run_id)
     return run

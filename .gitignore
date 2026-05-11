@@ -7,3 +7,5 @@ __pycache__/
 
 # Per-machine project materialization map (git-tracked counterpart is .registered-projects)
 .local-projects
+
+.claude/scheduled_tasks.lock

@@ -32,7 +32,7 @@ from .runtime import (
 from .schema_contract import validate_artifact, validate_schema
 from .util import read_json
 from .worker import DEFAULT_WORKER_MAX_BUDGET_USD, assess_run_quality, changed_files_from_status, default_worker_max_budget_usd
-from .workspace import WorkspaceError, load_ledger, load_state, write_ledger
+from .workspace import WorkspaceError, load_ledger, load_state, write_ledger, write_state
 
 
 class FakeRunner:
@@ -51,6 +51,10 @@ class FakeRunner:
         self.output_text = output_text or "Summary:\n- fixture worker ran\n\nEvidence:\n- tests: fixture pass\n\nRemaining:\n- none"
 
     def __call__(self, prompt: str, **kwargs: Any) -> ClaudeRunResult:
+        stream_output_path = kwargs.get("stream_output_path")
+        if isinstance(stream_output_path, Path):
+            stream_output_path.parent.mkdir(parents=True, exist_ok=True)
+            stream_output_path.write_text('{"type":"assistant","message":{"content":[{"type":"text","text":"fixture streamed"}]}}\n', encoding="utf-8")
         self.calls.append({"prompt": prompt, **kwargs})
         requested_session = str(kwargs.get("session_id") or "")
         if self.session_lost_once and requested_session:
@@ -382,6 +386,39 @@ def run_fixture_validation() -> list[str]:
         if not any(item.get("flag") == "WORKER_RETURN_CODE_NONZERO" for item in nonzero_health.get("history_warnings", [])):
             errors.append("health should summarize historical nonzero worker exits")
 
+        stale_workspace = _write_workspace(root / "stale-running")
+        stale_state = load_state(stale_workspace)
+        stale_state["status"] = "worker_running"
+        stale_state["current_run_id"] = "run-stale"
+        stale_state["next_instruction"] = "fixture instruction from abandoned worker"
+        write_state(stale_workspace, stale_state)
+        stale_runner = FakeRunner()
+        stale_run = start_worker_turn(stale_workspace, "恢复 stale worker_running", runner=stale_runner)
+        if stale_run.get("outcome") != "review_required" or len(stale_runner.calls) != 1:
+            errors.append("stale worker_running without artifacts should allow a fresh worker turn")
+        stale_after = load_state(stale_workspace)
+        if stale_after.get("current_run_id") == "run-stale" or stale_after.get("status") != "review_required":
+            errors.append("stale worker_running recovery should replace the abandoned run id")
+        if (stale_workspace / "runs" / "run-stale").exists():
+            errors.append("stale worker_running detection should not create an empty abandoned run directory")
+
+        active_workspace = _write_workspace(root / "active-running")
+        active_state = load_state(active_workspace)
+        active_state["status"] = "worker_running"
+        active_state["current_run_id"] = "run-active"
+        write_state(active_workspace, active_state)
+        active_pending = active_workspace / "runs" / "run-active" / "pending.json"
+        active_pending.parent.mkdir(parents=True, exist_ok=True)
+        active_pending.write_text(
+            '{"schema_version":1,"run_id":"run-active","started_at":"2026-05-11T00:00:00Z","status":"worker_running"}\n',
+            encoding="utf-8",
+        )
+        try:
+            start_worker_turn(active_workspace, "不应抢占真实 running", runner=FakeRunner())
+            errors.append("worker_running with pending artifact should still block a fresh worker turn")
+        except WorkspaceError:
+            pass
+
         runner = FakeRunner()
         try:
             start_worker_turn(workspace, "", runner=runner)
@@ -392,6 +429,9 @@ def run_fixture_validation() -> list[str]:
         errors.extend(validate_schema(run, RUN_SCHEMA))
         if not run.get("evidence", {}).get("validation"):
             errors.append("worker run should record validation evidence")
+        events_text = (workspace / "runs" / run["run_id"] / "events.jsonl").read_text(encoding="utf-8")
+        if "fixture streamed" not in events_text:
+            errors.append("worker turn should preserve streamed events instead of overwriting them at completion")
         if "quality_flags" not in run.get("evidence", {}):
             errors.append("worker run should record quality_flags")
         call = runner.calls[0]
@@ -463,6 +503,140 @@ def run_fixture_validation() -> list[str]:
         if state_path.read_text(encoding="utf-8") != health_state_text or (workspace / "runs" / run["run_id"] / "run.json").read_text(encoding="utf-8") != health_run_text:
             errors.append("health should not rewrite state or run artifacts")
         write_json(workspace / "runs" / run["run_id"] / "run.json", run)
+        running_workspace = _write_workspace(root / "running")
+        running_state = load_state(running_workspace)
+        running_state["status"] = "worker_running"
+        running_state["current_run_id"] = "run-pending"
+        running_state["next_instruction"] = "fixture instruction still running"
+        write_state(running_workspace, running_state)
+        running_dir = running_workspace / "runs" / "run-pending"
+        running_dir.mkdir(parents=True, exist_ok=True)
+        (running_dir / "pending.json").write_text(
+            '{"schema_version":1,"run_id":"run-pending","started_at":"2026-05-11T00:00:00Z","status":"worker_running"}\n',
+            encoding="utf-8",
+        )
+        (running_dir / "events.jsonl").write_text('{"type":"assistant","message":{"content":[{"type":"text","text":"fixture running"}]}}\n', encoding="utf-8")
+        running_health = health_workspace(running_workspace, history_limit=5)
+        if running_health.get("current_run", {}).get("outcome") != "worker_running":
+            errors.append("health should expose pending current_run while worker is still running")
+        running_warning_flags = [item.get("flag") for item in running_health.get("history_warnings", [])]
+        if "CURRENT_RUN_MISSING" in running_warning_flags or "PENDING_RUN_MISSING_ARTIFACT" in running_warning_flags:
+            errors.append("worker_running without run artifact should not be reported as missing while current pending marker exists")
+        if running_health.get("events_tail_summary", {}).get("events", [{}])[-1].get("type") != "assistant":
+            errors.append("health should summarize live running events")
+        if not str(running_health.get("artifact_paths", {}).get("run", "")).endswith("runs/run-pending/run.json"):
+            errors.append("running health should expose the pending run artifact path")
+        missing_workspace = _write_workspace(root / "missing-run")
+        missing_state = load_state(missing_workspace)
+        missing_state["status"] = "review_required"
+        missing_state["current_run_id"] = "run-missing"
+        write_state(missing_workspace, missing_state)
+        missing_health = health_workspace(missing_workspace, history_limit=5)
+        if not any(item.get("flag") == "CURRENT_RUN_MISSING" for item in missing_health.get("history_warnings", [])):
+            errors.append("non-running state with missing run artifact should report CURRENT_RUN_MISSING")
+        no_events_workspace = _write_workspace(root / "pending-no-events")
+        no_events_state = load_state(no_events_workspace)
+        no_events_state["status"] = "worker_running"
+        no_events_state["current_run_id"] = "run-no-events"
+        write_state(no_events_workspace, no_events_state)
+        no_events_pending = no_events_workspace / "runs" / "run-no-events" / "pending.json"
+        no_events_pending.parent.mkdir(parents=True, exist_ok=True)
+        no_events_pending.write_text(
+            '{"schema_version":1,"run_id":"run-no-events","started_at":"2026-05-11T00:00:00Z","status":"worker_running","instruction_hash":"abc"}\n',
+            encoding="utf-8",
+        )
+        no_events_health = health_workspace(no_events_workspace, history_limit=5)
+        if "WORKER_STARTED_NO_EVENTS" not in no_events_health.get("run_health", {}).get("quality_flags", []):
+            errors.append("current pending worker without events should require process inspection")
+        abandoned_workspace = _write_workspace(root / "abandoned-pending")
+        abandoned_state = load_state(abandoned_workspace)
+        abandoned_state["status"] = "worker_running"
+        abandoned_state["current_run_id"] = "run-current"
+        write_state(abandoned_workspace, abandoned_state)
+        abandoned_pending = abandoned_workspace / "runs" / "run-abandoned" / "pending.json"
+        abandoned_pending.parent.mkdir(parents=True, exist_ok=True)
+        abandoned_pending.write_text(
+            '{"schema_version":1,"run_id":"run-abandoned","started_at":"2026-05-11T00:00:00Z","status":"worker_running"}\n',
+            encoding="utf-8",
+        )
+        abandoned_health = health_workspace(abandoned_workspace, history_limit=5)
+        if not any(item.get("flag") == "ABANDONED_PENDING_RUN" and item.get("run_id") == "run-abandoned" for item in abandoned_health.get("history_warnings", [])):
+            errors.append("health should report abandoned pending worker starts")
+        if not abandoned_health.get("pending_runs"):
+            errors.append("health should expose pending run markers")
+        if any("instruction" in item for item in abandoned_health.get("pending_runs", [])):
+            errors.append("pending run markers should not carry full next_instruction text")
+        boundary_workspace = _write_workspace(root / "boundary")
+        load_state(boundary_workspace)
+        project_slug = str(boundary_workspace.parent.resolve()).replace("/", "-")
+        transcript_dir = Path.home() / ".claude" / "projects" / project_slug
+        transcript_dir.mkdir(parents=True, exist_ok=True)
+        boundary_session = "fixture-supervisor-boundary"
+        transcript_path = transcript_dir / f"{boundary_session}.jsonl"
+        transcript_path.write_text(
+            json.dumps({
+                "timestamp": "2026-05-11T00:00:00Z",
+                "message": {
+                    "content": [
+                        {"type": "tool_use", "name": "Write", "input": {"file_path": str(boundary_workspace / "CURRENT.md"), "content": "ok"}},
+                        {"type": "tool_use", "name": "Edit", "input": {"file_path": str(boundary_workspace.parent / "app.py"), "old_string": "a", "new_string": "b"}},
+                    ]
+                },
+            }, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        boundary_health = health_workspace(boundary_workspace, supervisor_session_id=boundary_session, history_limit=5)
+        boundary_violations = boundary_health.get("supervisor_boundary_violations") or []
+        if len(boundary_violations) != 1 or not str(boundary_violations[0].get("path", "")).endswith("app.py"):
+            errors.append("health should report supervisor edits to host files outside the twin workspace")
+        if "SUPERVISOR_BOUNDARY_VIOLATION" not in boundary_health.get("run_health", {}).get("quality_flags", []):
+            errors.append("supervisor boundary violations should require attention")
+        fallback_workspace = _write_workspace(root / "boundary-fallback")
+        load_state(fallback_workspace)
+        fallback_session = "fixture-supervisor-boundary-fallback"
+        fallback_transcript_dir = Path.home() / ".claude" / "projects" / "-tmp-fixture-other-project"
+        fallback_transcript_dir.mkdir(parents=True, exist_ok=True)
+        (fallback_transcript_dir / f"{fallback_session}.jsonl").write_text(
+            json.dumps({
+                "timestamp": "2026-05-11T00:00:00Z",
+                "message": {
+                    "content": [
+                        {"type": "tool_use", "name": "Edit", "input": {"file_path": str(fallback_workspace.parent / "host.py"), "old_string": "a", "new_string": "b"}},
+                    ]
+                },
+            }, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        fallback_health = health_workspace(fallback_workspace, supervisor_session_id=fallback_session, history_limit=5)
+        fallback_violations = fallback_health.get("supervisor_boundary_violations") or []
+        if len(fallback_violations) != 1 or not str(fallback_violations[0].get("transcript", "")).endswith(f"{fallback_session}.jsonl"):
+            errors.append("health should find supervisor transcripts outside the host project slug")
+        bad_contract_workspace = _write_workspace(root / "bad-contract")
+        load_state(bad_contract_workspace)
+        (bad_contract_workspace / "feature_ledger.yaml").write_text(
+            """schema_version: 1
+goal_id: fixture-goal
+items:
+  - id: F1
+    deliverable: 完成 fixture 主流程
+    scope: 只覆盖 greenfield worker turn
+    covers_ac: [AC1, AC2]
+    evidence_plan: [tests pass]
+    actual_evidence:
+      - path: docs/bugs/report.md
+    depends_on: []
+    status: completed
+    next_action: ""
+""",
+            encoding="utf-8",
+        )
+        bad_contract_health = health_workspace(bad_contract_workspace, history_limit=5)
+        if not bad_contract_health.get("degraded"):
+            errors.append("health should return degraded report for invalid workspace contract")
+        if not any(item.get("flag") == "WORKSPACE_CONTRACT_INVALID" for item in bad_contract_health.get("history_warnings", [])):
+            errors.append("degraded health should expose workspace contract errors")
+        if not bad_contract_health.get("run_health", {}).get("requires_attention"):
+            errors.append("degraded health should require attention")
         cli = subprocess.run(
             [
                 sys.executable,

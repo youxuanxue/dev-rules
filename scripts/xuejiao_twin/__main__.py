@@ -119,6 +119,7 @@ def _cmd_health(args: argparse.Namespace) -> int:
             run_id=args.run_id,
             events_tail=args.events_tail,
             history_limit=args.history_limit,
+            supervisor_session_id=args.supervisor_session_id,
         )
     except WorkspaceError as exc:
         print(str(exc), file=sys.stderr)
@@ -149,7 +150,12 @@ def _cmd_health(args: argparse.Namespace) -> int:
 def _cmd_review(args: argparse.Namespace) -> int:
     try:
         review = json.loads(Path(args.review_file).read_text(encoding="utf-8"))
-        state = apply_supervisor_review(_workspace_arg(args), args.run_id, review)
+        state = apply_supervisor_review(
+            _workspace_arg(args),
+            args.run_id,
+            review,
+            supervisor_session_id=args.supervisor_session_id,
+        )
         status = status_workspace(_workspace_arg(args))
     except (OSError, json.JSONDecodeError, WorkspaceError) as exc:
         print(str(exc), file=sys.stderr)
@@ -217,6 +223,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_health.add_argument("--run-id")
     p_health.add_argument("--events-tail", type=int, default=20)
     p_health.add_argument("--history-limit", type=int, default=20)
+    p_health.add_argument("--supervisor-session-id")
     p_health.add_argument("--json", action="store_true")
     p_health.set_defaults(func=_cmd_health)
 
@@ -224,6 +231,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_review.add_argument("--workspace", required=True)
     p_review.add_argument("--run-id", required=True)
     p_review.add_argument("--review-file", required=True)
+    p_review.add_argument("--supervisor-session-id")
     p_review.add_argument("--json", action="store_true")
     p_review.set_defaults(func=_cmd_review)
 
