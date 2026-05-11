@@ -27,7 +27,7 @@
 | `/user:decompose [需求描述]` | 先判定风险，再拆解子任务；默认单 PR，高风险才升级到原型与审批门禁 |
 | `/user:review [范围]` | 默认对话内精简代码审查；高风险或明确要求时再留 PR comment / 结构化记录 |
 | `/user:calibrate [日期范围]` | 从历史 PR review 证据校准审查噪音、误报与漏报 |
-| `/user:twin init|run|validate|replay` | 运行本机 xuejiao 分身 supervisor harness |
+| `/twin <workspace>|status [workspace]|respond <text>` | 运行本机 xuejiao persona supervisor，驱动 worker 完成目标工作区 |
 
 新增命令编辑 `dev-rules/commands/*.md`，运行 `dev-rules/sync.sh` 后立即在所有会话生效（symlink）。
 

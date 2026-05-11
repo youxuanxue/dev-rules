@@ -3,7 +3,7 @@
   "$id": "https://github.com/youxuanxue/dev-rules/schemas/xuejiao_twin.supervisor_state.schema.json",
   "title": "xuejiao twin supervisor state",
   "type": "object",
-  "required": ["schema_version", "workspace_id", "status", "round_index", "next_instruction", "updated_at"],
+  "required": ["schema_version", "workspace_id", "status", "round_index", "current_run_id", "current_item_id", "worker_session_id", "next_instruction", "last_decision", "needs_human", "failure_streaks", "updated_at"],
   "additionalProperties": false,
   "properties": {
     "schema_version": { "type": "integer", "enum": [1] },
@@ -17,11 +17,12 @@
     "last_decision": { "type": ["string", "null"] },
     "needs_human": {
       "type": ["object", "null"],
+      "required": ["question", "context", "created_at"],
       "additionalProperties": false,
       "properties": {
-        "question": { "type": "string" },
+        "question": { "type": "string", "minLength": 1 },
         "context": { "type": "string" },
-        "created_at": { "type": "string" }
+        "created_at": { "type": "string", "minLength": 1 }
       }
     },
     "failure_streaks": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },

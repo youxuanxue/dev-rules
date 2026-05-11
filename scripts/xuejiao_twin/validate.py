@@ -421,6 +421,21 @@ def run_fixture_validation() -> list[str]:
         if (stale_workspace / "runs" / "run-stale").exists():
             errors.append("stale worker_running detection should not create an empty abandoned run directory")
 
+        nested_root = root / "nested-host"
+        nested_workspace = _write_workspace(nested_root / "plans" / "feature")
+        git_init = subprocess.run(["git", "init"], cwd=nested_root, capture_output=True, text=True, check=False)
+        if git_init.returncode == 0:
+            nested_runner = FakeRunner()
+            nested_run = start_worker_turn(nested_workspace, "嵌套 workspace fixture", runner=nested_runner)
+            if nested_runner.calls[-1].get("cwd") != nested_root.resolve():
+                errors.append("worker should run from git root when workspace is nested")
+            (nested_root / "app.py").write_text("print('dirty')\n", encoding="utf-8")
+            try:
+                apply_supervisor_review(nested_workspace, nested_run["run_id"], _review("ACCEPTED_DONE"))
+                errors.append("ACCEPTED_DONE should inspect git root when workspace is nested")
+            except WorkspaceError:
+                pass
+
         active_workspace = _write_workspace(root / "active-running")
         active_state = load_state(active_workspace)
         active_state["status"] = "worker_running"
@@ -797,6 +812,9 @@ items:
         state = apply_supervisor_review(workspace, run["run_id"], continue_review)
         if state.get("status") != "continue" or state.get("next_instruction") != "继续 fixture":
             errors.append("CONTINUE review should store supervisor-authored next instruction unchanged")
+        continued_run_artifact = read_json(workspace / "runs" / run["run_id"] / "run.json")
+        if continued_run_artifact.get("outcome") != "continued":
+            errors.append("CONTINUE review should mark reviewed run outcome as continued")
 
         second = start_worker_turn(workspace, "继续 F1", runner=runner)
         if not runner.calls[-1].get("session_id"):

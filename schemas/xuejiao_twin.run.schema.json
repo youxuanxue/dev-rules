@@ -3,7 +3,7 @@
   "$id": "https://github.com/youxuanxue/dev-rules/schemas/xuejiao_twin.run.schema.json",
   "title": "xuejiao twin worker run",
   "type": "object",
-  "required": ["schema_version", "run_id", "workspace_ref", "goal_ref", "ledger_ref", "worker_persona_ref", "supervisor_persona_ref", "state_ref", "events_ref", "started_at", "ended_at", "worker", "instruction", "evidence", "outcome"],
+  "required": ["schema_version", "run_id", "workspace_ref", "goal_ref", "ledger_ref", "worker_persona_ref", "supervisor_persona_ref", "state_ref", "events_ref", "started_at", "ended_at", "worker", "instruction", "evidence", "review_ref", "outcome"],
   "additionalProperties": false,
   "properties": {
     "schema_version": { "type": "integer", "enum": [1] },
@@ -32,7 +32,7 @@
     "instruction": { "type": "string" },
     "evidence": {
       "type": "object",
-      "required": ["worker_output", "changed_files", "validation", "git_status", "git_diff_stat"],
+      "required": ["worker_output", "changed_files", "validation", "quality_flags", "git_status", "git_diff_stat"],
       "additionalProperties": false,
       "properties": {
         "worker_output": { "type": "string" },
@@ -44,6 +44,6 @@
       }
     },
     "review_ref": { "type": ["string", "null"] },
-    "outcome": { "type": "string", "enum": ["review_required", "needs_human", "accepted_done", "failed"] }
+    "outcome": { "type": "string", "enum": ["review_required", "continued", "needs_human", "accepted_done", "failed"] }
   }
 }
