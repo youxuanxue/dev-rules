@@ -14,9 +14,11 @@ from .contracts import (
     RUNS_DIR,
     SCHEMA_VERSION,
     SUPERVISOR_PERSONA_FILE,
+    SUPERVISOR_PERSONA_PATH,
     SUPERVISOR_STATE_FILE,
     SUPERVISOR_STATE_SCHEMA,
     WORKER_PERSONA_FILE,
+    WORKER_PERSONA_PATH,
 )
 from .ledger import choose_next_item, item_counts, ledger_gaps, validate_ledger_semantics
 from .schema_contract import validate_schema
@@ -64,11 +66,32 @@ def write_ledger(workspace: Path, ledger: dict[str, Any]) -> None:
     write_yaml_like(workspace / LEDGER_FILE, ledger)
 
 
-def read_text_file(workspace: Path, name: str) -> str:
-    path = workspace / name
+def read_persona_file(path: Path) -> str:
     if not path.exists():
-        raise WorkspaceError(f"missing {name}")
+        raise WorkspaceError(f"missing twin persona: {path}")
+    if not path.is_file():
+        raise WorkspaceError(f"twin persona is not a file: {path}")
     return path.read_text(encoding="utf-8")
+
+
+def load_supervisor_persona() -> str:
+    return read_persona_file(SUPERVISOR_PERSONA_PATH)
+
+
+def load_worker_persona() -> str:
+    return read_persona_file(WORKER_PERSONA_PATH)
+
+
+def validate_persona_contract(workspace: Path) -> None:
+    persona_names = {SUPERVISOR_PERSONA_FILE, WORKER_PERSONA_FILE}
+    forbidden = [str(path.relative_to(workspace)) for path in workspace.rglob("*.md") if path.name in persona_names]
+    if forbidden:
+        raise WorkspaceError(
+            "persona files must not live in the target workspace; use "
+            f"{SUPERVISOR_PERSONA_PATH} and {WORKER_PERSONA_PATH} directly: " + ", ".join(sorted(forbidden))
+        )
+    load_supervisor_persona()
+    load_worker_persona()
 
 
 def default_state(workspace: Path) -> dict[str, Any]:
@@ -115,9 +138,7 @@ def validate_workspace_readonly(workspace: Path) -> tuple[dict[str, Any], dict[s
         raise WorkspaceError(f"workspace does not exist: {workspace}")
     goal = load_goal(workspace)
     ledger = load_ledger(workspace)
-    for name in (SUPERVISOR_PERSONA_FILE, WORKER_PERSONA_FILE):
-        if not (workspace / name).exists():
-            raise WorkspaceError(f"missing {name}; copy the persona snapshot into the target workspace before running twin")
+    validate_persona_contract(workspace)
     semantic_errors = validate_ledger_semantics(goal, ledger)
     if semantic_errors:
         raise WorkspaceError("feature_ledger semantic errors: " + "; ".join(semantic_errors))
@@ -137,9 +158,7 @@ def validate_workspace(workspace: Path) -> tuple[dict[str, Any], dict[str, Any]]
         raise WorkspaceError(f"workspace does not exist: {workspace}")
     goal = load_goal(workspace)
     ledger = load_ledger(workspace)
-    for name in (SUPERVISOR_PERSONA_FILE, WORKER_PERSONA_FILE):
-        if not (workspace / name).exists():
-            raise WorkspaceError(f"missing {name}; copy the persona snapshot into the target workspace before running twin")
+    validate_persona_contract(workspace)
     semantic_errors = validate_ledger_semantics(goal, ledger)
     if semantic_errors:
         raise WorkspaceError("feature_ledger semantic errors: " + "; ".join(semantic_errors))

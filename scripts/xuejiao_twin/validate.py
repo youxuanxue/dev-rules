@@ -14,9 +14,11 @@ from .claude_runner import ClaudeRunResult
 from .contracts import (
     GOAL_SCHEMA,
     LEDGER_SCHEMA,
+    PERSONAS_DIR,
     RUN_SCHEMA,
     SUPERVISOR_REVIEW_SCHEMA,
     SUPERVISOR_STATE_SCHEMA,
+    WORKER_PERSONA_PATH,
 )
 from .ledger import acceptance_evidence, ledger_gaps, validate_ledger_semantics
 from .runtime import (
@@ -177,8 +179,6 @@ items:
 """,
         encoding="utf-8",
     )
-    (workspace / "supervisor-persona.md").write_text("supervisor persona", encoding="utf-8")
-    (workspace / "worker-persona.md").write_text("worker persona", encoding="utf-8")
     return workspace
 
 
@@ -362,6 +362,25 @@ def run_fixture_validation() -> list[str]:
         except WorkspaceError:
             pass
 
+        workspace_persona = _write_workspace(root / "workspace-persona")
+        (workspace_persona / "worker-persona.md").write_text("goal-specific worker persona", encoding="utf-8")
+        (workspace_persona / "nested").mkdir()
+        (workspace_persona / "nested" / "supervisor-persona.md").write_text("goal-specific supervisor persona", encoding="utf-8")
+        try:
+            validate_workspace(workspace_persona)
+            errors.append("workspace-local persona files should fail")
+        except WorkspaceError as exc:
+            message = str(exc)
+            if "persona files must not live in the target workspace" not in message:
+                errors.append(f"workspace-local persona failure should name the contract: {exc}")
+            if "worker-persona.md" not in message or "nested/supervisor-persona.md" not in message:
+                errors.append(f"workspace-local persona failure should include root and nested paths: {exc}")
+        try:
+            build_supervisor_context(workspace_persona)
+            errors.append("supervisor context should reject workspace-local persona files")
+        except WorkspaceError:
+            pass
+
         legacy_json = _write_workspace(root / "legacy-json")
         (legacy_json / "feature_ledger.json").write_text("{}\n", encoding="utf-8")
         try:
@@ -441,11 +460,24 @@ def run_fixture_validation() -> list[str]:
             errors.append("first worker turn should not resume")
         if call.get("permission_mode") != "bypassPermissions":
             errors.append("worker permission mode should be bypassPermissions")
+        if call.get("extra_env", {}).get("DEV_RULES") != str(contracts.DEV_RULES_ROOT):
+            errors.append("worker should receive DEV_RULES env pointing at persona source")
         allowed = call.get("allowed_tools") or []
         if "Bash" not in allowed or "Read" not in allowed:
             errors.append("worker should receive explicit allowed tools")
+        disallowed = call.get("disallowed_tools") or []
+        expected_persona_denies = {
+            f"Edit({PERSONAS_DIR / '**'})",
+            f"Write({PERSONAS_DIR / '**'})",
+            f"NotebookEdit({PERSONAS_DIR / '**'})",
+            "Bash(*$DEV_RULES/personas*)",
+            "Bash(*${DEV_RULES}/personas*)",
+            f"Bash(*{PERSONAS_DIR}*)",
+        }
+        if not expected_persona_denies.issubset(set(disallowed)):
+            errors.append("worker should disallow writes inside $DEV_RULES/personas")
         prompt = str(call.get("prompt") or "")
-        if "worker persona" not in prompt or "fixture-goal" not in prompt or "推进 ledger item F1" not in prompt:
+        if f"# {WORKER_PERSONA_PATH}" not in prompt or "fixture-goal" not in prompt or "推进 ledger item F1" not in prompt:
             errors.append("worker prompt missing persona/goal/supervisor-authored instruction")
         if "supervisor persona" in prompt:
             errors.append("worker prompt should not include supervisor persona")
@@ -475,7 +507,7 @@ def run_fixture_validation() -> list[str]:
             pass
 
         context = build_review_context(workspace, run["run_id"])
-        if "supervisor persona" not in context.get("supervisor_persona", ""):
+        if "xuejiao supervisor persona" not in context.get("supervisor_persona", ""):
             errors.append("review context should include supervisor persona")
         if context.get("review_skeleton", {}).get("decision") != "<ACCEPTED_DONE|CONTINUE|NEEDS_HUMAN|FAILED>":
             errors.append("review context should not preselect a decision")
@@ -498,6 +530,61 @@ def run_fixture_validation() -> list[str]:
             errors.append("health should report the requested current run")
         if "WORKER_MAX_BUDGET_EXCEEDED" not in health.get("run_health", {}).get("quality_flags", []):
             errors.append("health should infer budget-exceeded flag from run events")
+        events_path.write_text(
+            json.dumps({
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {"type": "tool_use", "name": "Write", "input": {"file_path": str(PERSONAS_DIR / "worker-persona.md"), "content": "polluted"}},
+                    ]
+                },
+            }, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        persona_worker_context = build_review_context(workspace, run["run_id"])
+        if "PERSONA_SOURCE_WRITE" not in persona_worker_context.get("run_health", {}).get("quality_flags", []):
+            errors.append("review context should flag worker writes inside $DEV_RULES/personas")
+        if not persona_worker_context.get("run_health", {}).get("requires_attention"):
+            errors.append("worker writes inside $DEV_RULES/personas should require attention")
+        for write_command in (
+            "printf polluted > $DEV_RULES/personas/worker-persona.md",
+            "printf polluted | tee $DEV_RULES/personas/worker-persona.md",
+        ):
+            events_path.write_text(
+                json.dumps({
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {"type": "tool_use", "name": "Bash", "input": {"command": write_command}},
+                        ]
+                    },
+                }, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            persona_bash_context = build_review_context(workspace, run["run_id"])
+            if "PERSONA_SOURCE_WRITE" not in persona_bash_context.get("run_health", {}).get("quality_flags", []):
+                errors.append("review context should flag worker shell writes inside $DEV_RULES/personas")
+        for read_only_command in (
+            "grep -R PERSONA_SOURCE_WRITE $DEV_RULES/personas",
+            "cat $DEV_RULES/personas/worker-persona.md > /tmp/persona-copy.txt",
+            "sed -n '1p' $DEV_RULES/personas/worker-persona.md",
+        ):
+            events_path.write_text(
+                json.dumps({
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {"type": "tool_use", "name": "Bash", "input": {"command": read_only_command}},
+                        ]
+                    },
+                }, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            persona_read_context = build_review_context(workspace, run["run_id"])
+            if "PERSONA_SOURCE_WRITE" in persona_read_context.get("run_health", {}).get("quality_flags", []):
+                errors.append("review context should not flag read-only shell commands inside $DEV_RULES/personas")
+        write_json(workspace / "runs" / run["run_id"] / "run.json", budget_run)
+        events_path.write_text('{"type":"result","subtype":"error_max_budget_usd","is_error":true}\n', encoding="utf-8")
         if health.get("events_tail_summary", {}).get("events", [{}])[-1].get("subtype") != "error_max_budget_usd":
             errors.append("health should summarize events tail")
         if state_path.read_text(encoding="utf-8") != health_state_text or (workspace / "runs" / run["run_id"] / "run.json").read_text(encoding="utf-8") != health_run_text:
@@ -591,6 +678,28 @@ def run_fixture_validation() -> list[str]:
             errors.append("health should report supervisor edits to host files outside the twin workspace")
         if "SUPERVISOR_BOUNDARY_VIOLATION" not in boundary_health.get("run_health", {}).get("quality_flags", []):
             errors.append("supervisor boundary violations should require attention")
+        persona_workspace = _write_workspace(root / "persona-boundary")
+        load_state(persona_workspace)
+        persona_session = "fixture-supervisor-persona-boundary"
+        persona_transcript = transcript_dir / f"{persona_session}.jsonl"
+        persona_transcript.write_text(
+            json.dumps({
+                "timestamp": "2026-05-11T00:00:00Z",
+                "message": {
+                    "content": [
+                        {"type": "tool_use", "name": "Write", "input": {"file_path": str(PERSONAS_DIR / "worker-persona.md"), "content": "polluted"}},
+                        {"type": "tool_use", "name": "Bash", "input": {"command": "printf polluted > $DEV_RULES/personas/supervisor-persona.md"}},
+                    ]
+                },
+            }, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        persona_health = health_workspace(persona_workspace, supervisor_session_id=persona_session, history_limit=5)
+        persona_violations = persona_health.get("supervisor_boundary_violations") or []
+        if not persona_violations or any(item.get("flag") != "PERSONA_SOURCE_WRITE" for item in persona_violations):
+            errors.append("health should report supervisor writes inside $DEV_RULES/personas")
+        if "PERSONA_SOURCE_WRITE" not in persona_health.get("run_health", {}).get("quality_flags", []):
+            errors.append("persona source writes should require attention")
         fallback_workspace = _write_workspace(root / "boundary-fallback")
         load_state(fallback_workspace)
         fallback_session = "fixture-supervisor-boundary-fallback"
