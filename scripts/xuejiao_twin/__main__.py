@@ -5,10 +5,12 @@ import json
 import sys
 from pathlib import Path
 
+from .worker import DEFAULT_WORKER_MAX_BUDGET_USD, WORKER_MAX_BUDGET_ENV
 from .runtime import (
     apply_supervisor_review,
     build_review_context,
     build_supervisor_context,
+    health_workspace,
     record_human_response,
     start_worker_turn,
     status_workspace,
@@ -110,6 +112,40 @@ def _cmd_review_context(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_health(args: argparse.Namespace) -> int:
+    try:
+        report = health_workspace(
+            _workspace_arg(args),
+            run_id=args.run_id,
+            events_tail=args.events_tail,
+            history_limit=args.history_limit,
+        )
+    except WorkspaceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if args.json:
+        _print_json(report)
+    else:
+        status = report.get("status") if isinstance(report.get("status"), dict) else {}
+        run = report.get("current_run") if isinstance(report.get("current_run"), dict) else {}
+        health = report.get("run_health") if isinstance(report.get("run_health"), dict) else {}
+        events = report.get("events_tail_summary") if isinstance(report.get("events_tail_summary"), dict) else {}
+        tail_events = events.get("events") if isinstance(events.get("events"), list) else []
+        last_event = tail_events[-1] if tail_events else {}
+        print(f"workspace={report['workspace']}")
+        print(f"status={status.get('status')}")
+        print(f"current_run_id={report.get('current_run_id') or 'none'}")
+        print(f"run_outcome={run.get('outcome') or 'none'}")
+        print(f"requires_attention={health.get('requires_attention')}")
+        print(f"quality_flags={','.join(health.get('quality_flags') or []) or 'none'}")
+        print(f"events_last={last_event.get('type', 'none')}:{last_event.get('subtype', 'none')}")
+        warnings = report.get("history_warnings") if isinstance(report.get("history_warnings"), list) else []
+        print(f"history_warnings={len(warnings)}")
+        for warning in warnings[:5]:
+            print(f"warning={warning.get('flag') or warning.get('kind')} count={warning.get('count', '')} latest={warning.get('latest_run_id', '')}")
+    return 0
+
+
 def _cmd_review(args: argparse.Namespace) -> int:
     try:
         review = json.loads(Path(args.review_file).read_text(encoding="utf-8"))
@@ -161,14 +197,28 @@ def build_parser() -> argparse.ArgumentParser:
     p_worker = sub.add_parser("worker-turn")
     p_worker.add_argument("--workspace", required=True)
     p_worker.add_argument("--instruction", required=True)
-    p_worker.add_argument("--max-budget-usd", type=float, default=1.0)
+    p_worker.add_argument(
+        "--max-budget-usd",
+        type=float,
+        default=None,
+        help=f"Worker max budget in USD (default: {DEFAULT_WORKER_MAX_BUDGET_USD}, override with {WORKER_MAX_BUDGET_ENV})",
+    )
     p_worker.add_argument("--json", action="store_true")
     p_worker.set_defaults(func=_cmd_worker_turn)
 
     p_review_context = sub.add_parser("review-context")
     p_review_context.add_argument("--workspace", required=True)
     p_review_context.add_argument("--run-id", required=True)
+    p_review_context.add_argument("--json", action="store_true")
     p_review_context.set_defaults(func=_cmd_review_context)
+
+    p_health = sub.add_parser("health")
+    p_health.add_argument("--workspace", required=True)
+    p_health.add_argument("--run-id")
+    p_health.add_argument("--events-tail", type=int, default=20)
+    p_health.add_argument("--history-limit", type=int, default=20)
+    p_health.add_argument("--json", action="store_true")
+    p_health.set_defaults(func=_cmd_health)
 
     p_review = sub.add_parser("review")
     p_review.add_argument("--workspace", required=True)

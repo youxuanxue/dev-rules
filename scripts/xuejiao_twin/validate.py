@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import builtins
 import json
+import os
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -20,6 +23,7 @@ from .runtime import (
     apply_supervisor_review,
     build_review_context,
     build_supervisor_context,
+    health_workspace,
     record_human_response,
     start_worker_turn,
     status_workspace,
@@ -27,7 +31,7 @@ from .runtime import (
 )
 from .schema_contract import validate_artifact, validate_schema
 from .util import read_json
-from .worker import assess_run_quality, changed_files_from_status
+from .worker import DEFAULT_WORKER_MAX_BUDGET_USD, assess_run_quality, changed_files_from_status, default_worker_max_budget_usd
 from .workspace import WorkspaceError, load_ledger, load_state, write_ledger
 
 
@@ -215,6 +219,9 @@ def _behavior_helper_errors() -> list[str]:
     ]
     if changed != expected:
         errors.append(f"changed_files_from_status should preserve paths: {changed!r}")
+    first_unstaged = changed_files_from_status(" M scripts/preflight_common.sh\n")[0]
+    if first_unstaged != "scripts/preflight_common.sh":
+        errors.append(f"changed_files_from_status should preserve first unstaged path: {first_unstaged!r}")
     weak_flags = assess_run_quality(
         worker_output="我会继续收敛 F6/AC1",
         validation=[],
@@ -243,6 +250,32 @@ def _behavior_helper_errors() -> list[str]:
     for flag in ("STDIN_WARNING", "WORKER_OUTPUT_EMPTY_OR_WARNING_ONLY"):
         if flag not in warning_flags:
             errors.append(f"warning-only run should flag {flag}")
+    budget_flags = assess_run_quality(
+        worker_output="partial",
+        validation=[],
+        returncode=1,
+        session_lost=False,
+        resume_used=True,
+        pre_git_status="",
+        post_git_status=" M file.py",
+        pre_git_diff_stat="",
+        post_git_diff_stat=" file.py | 1 +",
+        raw_events=[{"type": "result", "subtype": "error_max_budget_usd", "is_error": True}],
+    )
+    if "WORKER_MAX_BUDGET_EXCEEDED" not in budget_flags:
+        errors.append("budget-exceeded run should record WORKER_MAX_BUDGET_EXCEEDED")
+    old_budget_env = os.environ.pop("XUEJIAO_TWIN_WORKER_MAX_BUDGET_USD", None)
+    try:
+        if DEFAULT_WORKER_MAX_BUDGET_USD != 20.0 or default_worker_max_budget_usd() != 20.0:
+            errors.append("default worker budget should be 20 USD")
+        os.environ["XUEJIAO_TWIN_WORKER_MAX_BUDGET_USD"] = "5"
+        if default_worker_max_budget_usd() != 5.0:
+            errors.append("worker budget env override should be honored")
+    finally:
+        if old_budget_env is None:
+            os.environ.pop("XUEJIAO_TWIN_WORKER_MAX_BUDGET_USD", None)
+        else:
+            os.environ["XUEJIAO_TWIN_WORKER_MAX_BUDGET_USD"] = old_budget_env
     return errors
 
 
@@ -306,9 +339,13 @@ def run_fixture_validation() -> list[str]:
             if fallback_context.get("ledger", {}).get("items", [{}])[0].get("scope") != "只覆盖 greenfield worker turn":
                 errors.append("fallback yaml parser should preserve ledger item mapping fields")
             ledger_roundtrip = load_ledger(workspace)
+            ledger_roundtrip["items"][0]["actual_evidence"] = ["第一行\n第二行"]
             ledger_roundtrip["items"][0]["next_action"] = "多行\n下一步"
             write_ledger(workspace, ledger_roundtrip)
-            if load_ledger(workspace)["items"][0].get("next_action") != "多行\n下一步":
+            reloaded_ledger = load_ledger(workspace)
+            if reloaded_ledger["items"][0].get("actual_evidence") != ["第一行\n第二行"]:
+                errors.append("yaml fallback parser should preserve list block scalars")
+            if reloaded_ledger["items"][0].get("next_action") != "多行\n下一步":
                 errors.append("yaml fallback writer should round-trip multiline ledger values")
         finally:
             builtins.__import__ = original_import
@@ -341,6 +378,9 @@ def run_fixture_validation() -> list[str]:
             errors.append("nonzero worker exit should still block next turn until review")
         except WorkspaceError:
             pass
+        nonzero_health = health_workspace(nonzero_workspace, history_limit=5)
+        if not any(item.get("flag") == "WORKER_RETURN_CODE_NONZERO" for item in nonzero_health.get("history_warnings", [])):
+            errors.append("health should summarize historical nonzero worker exits")
 
         runner = FakeRunner()
         try:
@@ -373,9 +413,20 @@ def run_fixture_validation() -> list[str]:
             errors.append("worker prompt should not include harness-generated completion contracts")
         if "supervisor_session_id" in json.dumps(run):
             errors.append("run artifact should not contain supervisor session fields")
-        current_text = (workspace / "CURRENT.md").read_text(encoding="utf-8")
+        current_path = workspace / "CURRENT.md"
+        current_text = current_path.read_text(encoding="utf-8")
         if "Status: review_required" not in current_text or f"Current item: {run['run_id']}" in current_text:
             errors.append("worker turn should refresh CURRENT.md after completion")
+        current_mtime = current_path.stat().st_mtime_ns
+        state_path = workspace / "supervisor_state.json"
+        run_path = workspace / "runs" / run["run_id"] / "run.json"
+        state_text = state_path.read_text(encoding="utf-8")
+        run_text = run_path.read_text(encoding="utf-8")
+        status_workspace(workspace)
+        if current_path.stat().st_mtime_ns != current_mtime:
+            errors.append("status should not rewrite CURRENT.md")
+        if state_path.read_text(encoding="utf-8") != state_text or run_path.read_text(encoding="utf-8") != run_text:
+            errors.append("status should not rewrite state or run artifacts")
 
         try:
             start_worker_turn(workspace, "强行再启动", runner=runner)
@@ -390,6 +441,74 @@ def run_fixture_validation() -> list[str]:
             errors.append("review context should not preselect a decision")
         if not context.get("run_health") or "next_instruction_guidance" not in context:
             errors.append("review context should expose run health and next instruction guidance")
+        budget_run = read_json(workspace / "runs" / run["run_id"] / "run.json")
+        events_path = workspace / "runs" / run["run_id"] / "events.jsonl"
+        budget_run["events_ref"] = str(events_path)
+        budget_run["evidence"]["quality_flags"] = []
+        events_path.write_text('{"type":"result","subtype":"error_max_budget_usd","is_error":true}\n', encoding="utf-8")
+        from .util import write_json
+        write_json(workspace / "runs" / run["run_id"] / "run.json", budget_run)
+        budget_context = build_review_context(workspace, run["run_id"])
+        if "WORKER_MAX_BUDGET_EXCEEDED" not in budget_context.get("run_health", {}).get("quality_flags", []):
+            errors.append("review context should infer budget-exceeded flag from run events")
+        health_state_text = state_path.read_text(encoding="utf-8")
+        health_run_text = (workspace / "runs" / run["run_id"] / "run.json").read_text(encoding="utf-8")
+        health = health_workspace(workspace, run_id=run["run_id"], events_tail=1, history_limit=5)
+        if health.get("current_run", {}).get("run_id") != run["run_id"]:
+            errors.append("health should report the requested current run")
+        if "WORKER_MAX_BUDGET_EXCEEDED" not in health.get("run_health", {}).get("quality_flags", []):
+            errors.append("health should infer budget-exceeded flag from run events")
+        if health.get("events_tail_summary", {}).get("events", [{}])[-1].get("subtype") != "error_max_budget_usd":
+            errors.append("health should summarize events tail")
+        if state_path.read_text(encoding="utf-8") != health_state_text or (workspace / "runs" / run["run_id"] / "run.json").read_text(encoding="utf-8") != health_run_text:
+            errors.append("health should not rewrite state or run artifacts")
+        write_json(workspace / "runs" / run["run_id"] / "run.json", run)
+        cli = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "scripts.xuejiao_twin",
+                "review-context",
+                "--workspace",
+                str(workspace),
+                "--run-id",
+                run["run_id"],
+                "--json",
+            ],
+            cwd=Path(__file__).resolve().parents[2],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if cli.returncode != 0:
+            errors.append(f"review-context --json should be accepted by CLI: {cli.stderr.strip()}")
+        health_cli = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "scripts.xuejiao_twin",
+                "health",
+                "--workspace",
+                str(workspace),
+                "--run-id",
+                run["run_id"],
+                "--json",
+            ],
+            cwd=Path(__file__).resolve().parents[2],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if health_cli.returncode != 0:
+            errors.append(f"health --json should be accepted by CLI: {health_cli.stderr.strip()}")
+        else:
+            try:
+                parsed_health = json.loads(health_cli.stdout)
+            except json.JSONDecodeError as exc:
+                errors.append(f"health --json should emit JSON: {exc}")
+            else:
+                if "run_health" not in parsed_health or "history_warnings" not in parsed_health:
+                    errors.append("health --json should expose run_health and history_warnings")
 
         continue_review = _review("CONTINUE", gaps=["F1 missing"], actions=["fix_drift", "validate_more"])
         state = apply_supervisor_review(workspace, run["run_id"], continue_review)
@@ -512,6 +631,24 @@ def run_fixture_validation() -> list[str]:
             errors.append("ACCEPTED_DONE with remaining gaps should fail")
         except WorkspaceError:
             pass
+
+        dirty_root = root / "dirty-host"
+        dirty_workspace = _write_workspace(dirty_root, completed=True)
+        git_init = subprocess.run(["git", "init"], cwd=dirty_root, capture_output=True, text=True, check=False)
+        if git_init.returncode == 0:
+            (dirty_root / "app.py").write_text("print('dirty')\n", encoding="utf-8")
+            dirty_runner = FakeRunner()
+            dirty_run = start_worker_turn(dirty_workspace, "final", runner=dirty_runner)
+            try:
+                apply_supervisor_review(dirty_workspace, dirty_run["run_id"], _review("ACCEPTED_DONE"))
+                errors.append("ACCEPTED_DONE should fail when host repo has uncommitted non-workspace changes")
+            except WorkspaceError:
+                pass
+            allowed_dirty = _review("ACCEPTED_DONE", actions=["allow_uncommitted_evidence"])
+            state = apply_supervisor_review(dirty_workspace, dirty_run["run_id"], allowed_dirty)
+            if state.get("status") != "accepted_done":
+                errors.append("allow_uncommitted_evidence should permit explicit dirty-host handoff")
+
         done = _review("ACCEPTED_DONE")
         state = apply_supervisor_review(done_workspace, done_run["run_id"], done)
         if state.get("status") != "accepted_done":

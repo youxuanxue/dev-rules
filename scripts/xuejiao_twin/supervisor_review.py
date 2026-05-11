@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import subprocess
+from collections import Counter, deque
 from pathlib import Path
 from typing import Any
 
 from .contracts import CURRENT_FILE, HUMAN_RESPONSE_FILE, RUN_SCHEMA, SUPERVISOR_REVIEW_SCHEMA, SUPERVISOR_STATE_FILE
-from .ledger import acceptance_evidence, acceptance_focus, apply_ledger_updates, choose_next_item, ledger_gaps
+from .ledger import acceptance_evidence, acceptance_focus, apply_ledger_updates, choose_next_item, item_counts, ledger_gaps
 from .schema_contract import validate_schema
 from .util import now_utc, read_json, write_json
 from .workspace import (
@@ -16,6 +19,8 @@ from .workspace import (
     load_state,
     read_text_file,
     render_current,
+    resolve_workspace,
+    validate_workspace_readonly,
     write_ledger,
     write_state,
 )
@@ -48,7 +53,7 @@ def _reset_other_failure_streaks(state: dict[str, Any], key: str) -> None:
             streaks[existing] = 0
 
 
-def _validate_accepted_done(goal: dict[str, Any], ledger: dict[str, Any], review: dict[str, Any]) -> list[str]:
+def _validate_accepted_done(goal: dict[str, Any], ledger: dict[str, Any], review: dict[str, Any], workspace: Path) -> list[str]:
     errors: list[str] = []
     if review.get("remaining_gaps"):
         errors.append("ACCEPTED_DONE cannot have remaining_gaps")
@@ -60,12 +65,76 @@ def _validate_accepted_done(goal: dict[str, Any], ledger: dict[str, Any], review
     open_items = [str(item.get("id")) for item in ledger.get("items", []) if isinstance(item, dict) and item.get("status") != "completed"]
     if open_items:
         errors.append("ledger has open items: " + ", ".join(open_items))
+    errors.extend(_validate_git_state_for_accepted_done(review, workspace))
     return errors
+
+
+def _host_repo_root(workspace: Path) -> Path | None:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(workspace), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, check=False, timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return None
+    if completed.returncode != 0:
+        return None
+    root = completed.stdout.strip()
+    return Path(root) if root else None
+
+
+def _validate_git_state_for_accepted_done(review: dict[str, Any], workspace: Path) -> list[str]:
+    actions = set(review.get("actions") or [])
+    if "allow_uncommitted_evidence" in actions:
+        return []
+    host = _host_repo_root(workspace)
+    if host is None:
+        return []
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(host), "status", "--porcelain"],
+            capture_output=True, text=True, check=False, timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return []
+    if completed.returncode != 0:
+        return []
+    try:
+        ws_rel = workspace.resolve().relative_to(host.resolve()).as_posix()
+    except ValueError:
+        ws_rel = ""
+    dirty: list[str] = []
+    for line in completed.stdout.splitlines():
+        if not line.strip():
+            continue
+        path = line[3:] if len(line) > 3 else line
+        if ws_rel and (path == ws_rel or path.startswith(ws_rel + "/")):
+            continue
+        dirty.append(path)
+    if not dirty:
+        return []
+    preview = ", ".join(dirty[:5])
+    suffix = "" if len(dirty) <= 5 else f" (+{len(dirty) - 5} more)"
+    return [
+        "host repo has uncommitted changes outside the workspace; commit, stash, or set "
+        f'actions: ["allow_uncommitted_evidence"] before ACCEPTED_DONE: {preview}{suffix}'
+    ]
 
 
 def _worker_output_without_stdin_warning(output: str) -> str:
     warning = "Warning: no stdin data received in 3s, proceeding without it..."
     return "\n".join(line for line in output.splitlines() if warning not in line).strip()
+
+
+def _events_include_budget_exceeded(run: dict[str, Any]) -> bool:
+    events_ref = str(run.get("events_ref") or "")
+    if not events_ref:
+        return False
+    try:
+        with Path(events_ref).open(encoding="utf-8") as handle:
+            return any('"subtype": "error_max_budget_usd"' in line or '"subtype":"error_max_budget_usd"' in line for line in handle)
+    except OSError:
+        return False
 
 
 def summarize_run_health(run: dict[str, Any]) -> dict[str, Any]:
@@ -74,6 +143,8 @@ def summarize_run_health(run: dict[str, Any]) -> dict[str, Any]:
     worker_output = str(evidence.get("worker_output") or "")
     changed_files = list(evidence.get("changed_files") or [])
     quality_flags = list(evidence.get("quality_flags") or [])
+    if _events_include_budget_exceeded(run):
+        quality_flags.append("WORKER_MAX_BUDGET_EXCEEDED")
     if not validation:
         quality_flags.append("VALIDATION_EMPTY_LEGACY")
     if "Warning: no stdin data received in 3s" in worker_output:
@@ -92,6 +163,7 @@ def summarize_run_health(run: dict[str, Any]) -> dict[str, Any]:
             "NO_PROGRESS_DETECTED",
             "SESSION_LOST",
             "WORKER_RETURN_CODE_NONZERO",
+            "WORKER_MAX_BUDGET_EXCEEDED",
         )
     )
     recommended_actions: list[str] = []
@@ -99,6 +171,8 @@ def summarize_run_health(run: dict[str, Any]) -> dict[str, Any]:
         recommended_actions.append("Do not accept this run as completion evidence without independent validation.")
     if any(flag in quality_flags for flag in ("STDIN_WARNING", "NO_PROGRESS_DETECTED", "WORKER_OUTPUT_EMPTY_OR_WARNING_ONLY")):
         recommended_actions.append("Consider reset_worker_session before the next worker turn.")
+    if "WORKER_MAX_BUDGET_EXCEEDED" in quality_flags:
+        recommended_actions.append("Increase worker max budget or narrow the next instruction before continuing.")
     return {
         "quality_flags": quality_flags,
         "has_validation": bool(validation) and not all(str(item).startswith("NOT_REPORTED:") for item in validation),
@@ -118,6 +192,205 @@ def _next_instruction_guidance(focus: dict[str, Any], run_health: dict[str, Any]
     if run_health and run_health.get("requires_attention"):
         guidance.append("Address run_health flags before accepting completion evidence.")
     return guidance
+
+
+def _event_summary(event: dict[str, Any]) -> dict[str, Any]:
+    summary: dict[str, Any] = {}
+    for key in ("type", "subtype", "is_error", "session_id", "duration_ms", "total_cost_usd", "num_turns"):
+        if key in event:
+            summary[key] = event.get(key)
+    result = event.get("result")
+    if isinstance(result, str):
+        summary["result_preview"] = result[:240]
+    message = event.get("message")
+    if isinstance(message, dict):
+        content = message.get("content")
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") == "text":
+                    parts.append(str(item.get("text") or "")[:120])
+                elif item.get("type"):
+                    parts.append(str(item.get("type")))
+            if parts:
+                summary["content_preview"] = " | ".join(parts)[:240]
+    return summary
+
+
+def _events_tail_summary(path: Path, limit: int) -> dict[str, Any]:
+    if limit <= 0:
+        return {"path": str(path), "events": [], "warnings": []}
+    if not path.exists():
+        return {"path": str(path), "events": [], "warnings": ["events file missing"]}
+    events: deque[dict[str, Any]] = deque(maxlen=limit)
+    total = 0
+    invalid = 0
+    try:
+        with path.open(encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                total += 1
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    invalid += 1
+                    continue
+                if isinstance(event, dict):
+                    events.append(_event_summary(event))
+    except OSError as exc:
+        return {"path": str(path), "events": [], "warnings": [f"events file unreadable: {exc}"]}
+    return {
+        "path": str(path),
+        "total_events": total,
+        "invalid_events": invalid,
+        "events": list(events),
+    }
+
+
+def _read_run_artifact(workspace: Path, run_id: str) -> dict[str, Any] | None:
+    path = _run_path(workspace, run_id)
+    if not path.exists():
+        return None
+    return read_json(path)
+
+
+def _read_review_artifact(workspace: Path, run_id: str) -> dict[str, Any] | None:
+    path = _review_path(workspace, run_id)
+    if not path.exists():
+        return None
+    return read_json(path)
+
+
+def _recent_runs(workspace: Path, limit: int) -> list[dict[str, Any]]:
+    runs_root = workspace / "runs"
+    if limit <= 0 or not runs_root.exists():
+        return []
+    runs: list[dict[str, Any]] = []
+    for run_path in runs_root.glob("*/run.json"):
+        try:
+            run = read_json(run_path)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(run, dict):
+            runs.append(run)
+    runs.sort(key=lambda item: str(item.get("ended_at") or item.get("started_at") or ""), reverse=True)
+    return runs[:limit]
+
+
+def _history_warnings(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    flags: Counter[str] = Counter()
+    outcomes: Counter[str] = Counter()
+    latest_by_flag: dict[str, str] = {}
+    nonzero_runs: list[str] = []
+    for run in runs:
+        run_id = str(run.get("run_id") or "")
+        outcome = str(run.get("outcome") or "")
+        if outcome:
+            outcomes[outcome] += 1
+        evidence = run.get("evidence") if isinstance(run.get("evidence"), dict) else {}
+        run_flags = {str(flag) for flag in evidence.get("quality_flags") or []}
+        worker = run.get("worker") if isinstance(run.get("worker"), dict) else {}
+        if int(worker.get("returncode") or 0) != 0:
+            run_flags.add("WORKER_RETURN_CODE_NONZERO")
+            nonzero_runs.append(run_id)
+        if worker.get("session_lost"):
+            run_flags.add("SESSION_LOST")
+        for flag_text in run_flags:
+            flags[flag_text] += 1
+            latest_by_flag.setdefault(flag_text, run_id)
+    warnings: list[dict[str, Any]] = []
+    for flag in (
+        "WORKER_RETURN_CODE_NONZERO",
+        "NO_PROGRESS_DETECTED",
+        "WORKER_SESSION_RESET",
+        "WORKER_MAX_BUDGET_EXCEEDED",
+        "SESSION_LOST",
+        "VALIDATION_NOT_REPORTED",
+        "WORKER_OUTPUT_WEAK",
+    ):
+        count = flags.get(flag, 0)
+        if count:
+            warnings.append({"kind": "quality_flag", "flag": flag, "count": count, "latest_run_id": latest_by_flag.get(flag, "")})
+    review_required = outcomes.get("review_required", 0)
+    if review_required >= 3:
+        warnings.append({"kind": "history", "flag": "MANY_REVIEW_REQUIRED_RUNS", "count": review_required})
+    return warnings
+
+
+def build_health_report(workspace: Path, *, run_id: str | None = None, events_tail: int = 20, history_limit: int = 20) -> dict[str, Any]:
+    workspace = resolve_workspace(workspace)
+    goal, ledger, state = validate_workspace_readonly(workspace)
+    current_run_id = str(run_id or state.get("current_run_id") or "")
+    next_item = choose_next_item(ledger)
+    status = {
+        "workspace": str(workspace),
+        "goal": goal.get("one_liner"),
+        "status": state.get("status"),
+        "current_run_id": state.get("current_run_id"),
+        "current_item_id": state.get("current_item_id") or (next_item.get("id") if next_item else None),
+        "round_index": state.get("round_index"),
+        "last_decision": state.get("last_decision"),
+        "next_instruction": state.get("next_instruction"),
+        "needs_human": state.get("needs_human"),
+        "ledger_counts": item_counts(ledger),
+        "remaining_gaps": ledger_gaps(goal, ledger),
+    }
+    report: dict[str, Any] = {
+        "workspace": str(workspace),
+        "status": status,
+        "terminal_state": state.get("status") in {"accepted_done", "failed", "needs_human"},
+        "current_run_id": current_run_id,
+        "run_health": None,
+        "current_run": None,
+        "review": None,
+        "events_tail_summary": None,
+        "history_warnings": [],
+        "artifact_paths": {
+            "current": str(workspace / CURRENT_FILE),
+            "state": str(workspace / SUPERVISOR_STATE_FILE),
+            "human_response": str(workspace / HUMAN_RESPONSE_FILE),
+        },
+    }
+    if current_run_id:
+        run = _read_run_artifact(workspace, current_run_id)
+        if run is None:
+            report["history_warnings"].append({"kind": "missing_artifact", "flag": "CURRENT_RUN_MISSING", "run_id": current_run_id})
+        else:
+            worker = run.get("worker") if isinstance(run.get("worker"), dict) else {}
+            evidence = run.get("evidence") if isinstance(run.get("evidence"), dict) else {}
+            report["current_run"] = {
+                "run_id": run.get("run_id"),
+                "outcome": run.get("outcome"),
+                "started_at": run.get("started_at"),
+                "ended_at": run.get("ended_at"),
+                "worker_returncode": worker.get("returncode"),
+                "session_lost": worker.get("session_lost"),
+                "resume_used": worker.get("resume_used"),
+                "quality_flags": list(evidence.get("quality_flags") or []),
+                "validation_count": len(evidence.get("validation") or []),
+                "changed_files_count": len(evidence.get("changed_files") or []),
+            }
+            report["run_health"] = summarize_run_health(run)
+            events_ref = Path(str(run.get("events_ref") or workspace / "runs" / current_run_id / "events.jsonl"))
+            report["events_tail_summary"] = _events_tail_summary(events_ref, events_tail)
+            report["artifact_paths"].update({"run": str(_run_path(workspace, current_run_id)), "events": str(events_ref)})
+            review = _read_review_artifact(workspace, current_run_id)
+            report["artifact_paths"]["review"] = str(_review_path(workspace, current_run_id))
+            if isinstance(review, dict):
+                report["review"] = {
+                    "recorded_decision": review.get("decision"),
+                    "remaining_gaps": list(review.get("remaining_gaps") or []),
+                    "risk_flags": list(review.get("risk_flags") or []),
+                    "actions": list(review.get("actions") or []),
+                    "human_question": review.get("human_question"),
+                }
+    history = _recent_runs(workspace, history_limit)
+    report["history_warnings"].extend(_history_warnings(history))
+    report["scan_meta"] = {"events_tail": events_tail, "history_limit": history_limit, "history_runs_scanned": len(history)}
+    return report
 
 
 def build_supervisor_context(workspace: Path, run_id: str | None = None) -> dict[str, Any]:
@@ -216,7 +489,7 @@ def apply_supervisor_review(workspace: Path, run_id: str, review: dict[str, Any]
 
     decision = str(review.get("decision"))
     if decision == "ACCEPTED_DONE":
-        done_errors = _validate_accepted_done(goal, ledger, review)
+        done_errors = _validate_accepted_done(goal, ledger, review, workspace)
         if done_errors:
             raise WorkspaceError("ACCEPTED_DONE errors: " + "; ".join(done_errors))
         state["status"] = "accepted_done"
