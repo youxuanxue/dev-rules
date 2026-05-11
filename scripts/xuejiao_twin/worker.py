@@ -205,6 +205,8 @@ def _events_path(workspace: Path, run_id: str) -> Path:
 
 def _write_events(workspace: Path, run_id: str, events: list[dict[str, Any]]) -> None:
     path = _events_path(workspace, run_id)
+    if path.exists() and path.stat().st_size > 0:
+        return
     with path.open("w", encoding="utf-8") as handle:
         for event in events:
             handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
@@ -263,7 +265,7 @@ def start_worker_turn(
         "state_ref": str(workspace / "supervisor_state.json"),
         "started_at": started_at,
         "status": "worker_running",
-        "instruction": instruction,
+        "instruction_hash": stable_hash(instruction),
     })
     write_state(workspace, state)
     pre_git_status = git_status(workspace)

@@ -296,6 +296,14 @@ def _pending_runs(workspace: Path, limit: int) -> list[dict[str, Any]]:
         if isinstance(value, dict):
             value.setdefault("run_id", pending_path.parent.name)
             value["pending_ref"] = str(pending_path)
+            events_path = pending_path.with_name("events.jsonl")
+            value["events_ref"] = str(events_path)
+            if events_path.exists():
+                value["events_size"] = events_path.stat().st_size
+                value["events_mtime"] = events_path.stat().st_mtime
+            else:
+                value["events_size"] = 0
+                value["events_mtime"] = None
             pending.append(value)
     pending.sort(key=lambda item: str(item.get("started_at") or ""), reverse=True)
     return pending[:limit]
@@ -421,16 +429,25 @@ def build_health_report(workspace: Path, *, run_id: str | None = None, events_ta
                     "changed_files_count": 0,
                 }
                 stale_worker_state = not expected_pending_path.exists() and not expected_events_path.exists()
+                pending_without_events = expected_pending_path.exists() and not expected_events_path.exists()
                 if not degraded_errors:
+                    quality_flags = []
+                    recommended_actions = ["Wait for worker-turn to finish before requesting review."]
+                    requires_attention = False
+                    if stale_worker_state:
+                        quality_flags.append("STALE_WORKER_RUNNING")
+                        requires_attention = True
+                        recommended_actions = ["Worker-running state has no pending marker or live events; reset state before continuing."]
+                    elif pending_without_events:
+                        quality_flags.append("WORKER_STARTED_NO_EVENTS")
+                        requires_attention = True
+                        recommended_actions = ["Worker has a pending marker but no live events yet; inspect process health before waiting longer."]
                     report["run_health"] = {
-                        "quality_flags": ["STALE_WORKER_RUNNING"] if stale_worker_state else [],
+                        "quality_flags": quality_flags,
                         "has_validation": False,
                         "has_changed_files": False,
-                        "requires_attention": stale_worker_state,
-                        "recommended_actions": [
-                            "Worker-running state has no pending marker or live events; reset state before continuing."
-                            if stale_worker_state else "Wait for worker-turn to finish before requesting review."
-                        ],
+                        "requires_attention": requires_attention,
+                        "recommended_actions": recommended_actions,
                     }
                 if stale_worker_state:
                     report["history_warnings"].append({
@@ -438,6 +455,13 @@ def build_health_report(workspace: Path, *, run_id: str | None = None, events_ta
                         "flag": "STALE_WORKER_RUNNING",
                         "run_id": current_run_id,
                         "message": "state is worker_running but no run directory, pending marker, events, or run artifact exists",
+                    })
+                elif pending_without_events:
+                    report["history_warnings"].append({
+                        "kind": "stale_state",
+                        "flag": "WORKER_STARTED_NO_EVENTS",
+                        "run_id": current_run_id,
+                        "message": "worker has pending marker but no live events file yet",
                     })
                 report["events_tail_summary"] = _events_tail_summary(expected_events_path, events_tail)
                 report["artifact_paths"].update({"run": str(expected_run_path), "events": str(expected_events_path)})

@@ -51,6 +51,10 @@ class FakeRunner:
         self.output_text = output_text or "Summary:\n- fixture worker ran\n\nEvidence:\n- tests: fixture pass\n\nRemaining:\n- none"
 
     def __call__(self, prompt: str, **kwargs: Any) -> ClaudeRunResult:
+        stream_output_path = kwargs.get("stream_output_path")
+        if isinstance(stream_output_path, Path):
+            stream_output_path.parent.mkdir(parents=True, exist_ok=True)
+            stream_output_path.write_text('{"type":"assistant","message":{"content":[{"type":"text","text":"fixture streamed"}]}}\n', encoding="utf-8")
         self.calls.append({"prompt": prompt, **kwargs})
         requested_session = str(kwargs.get("session_id") or "")
         if self.session_lost_once and requested_session:
@@ -392,6 +396,9 @@ def run_fixture_validation() -> list[str]:
         errors.extend(validate_schema(run, RUN_SCHEMA))
         if not run.get("evidence", {}).get("validation"):
             errors.append("worker run should record validation evidence")
+        events_text = (workspace / "runs" / run["run_id"] / "events.jsonl").read_text(encoding="utf-8")
+        if "fixture streamed" not in events_text:
+            errors.append("worker turn should preserve streamed events instead of overwriting them at completion")
         if "quality_flags" not in run.get("evidence", {}):
             errors.append("worker run should record quality_flags")
         call = runner.calls[0]
@@ -494,6 +501,20 @@ def run_fixture_validation() -> list[str]:
         missing_health = health_workspace(missing_workspace, history_limit=5)
         if not any(item.get("flag") == "CURRENT_RUN_MISSING" for item in missing_health.get("history_warnings", [])):
             errors.append("non-running state with missing run artifact should report CURRENT_RUN_MISSING")
+        no_events_workspace = _write_workspace(root / "pending-no-events")
+        no_events_state = load_state(no_events_workspace)
+        no_events_state["status"] = "worker_running"
+        no_events_state["current_run_id"] = "run-no-events"
+        write_state(no_events_workspace, no_events_state)
+        no_events_pending = no_events_workspace / "runs" / "run-no-events" / "pending.json"
+        no_events_pending.parent.mkdir(parents=True, exist_ok=True)
+        no_events_pending.write_text(
+            '{"schema_version":1,"run_id":"run-no-events","started_at":"2026-05-11T00:00:00Z","status":"worker_running","instruction_hash":"abc"}\n',
+            encoding="utf-8",
+        )
+        no_events_health = health_workspace(no_events_workspace, history_limit=5)
+        if "WORKER_STARTED_NO_EVENTS" not in no_events_health.get("run_health", {}).get("quality_flags", []):
+            errors.append("current pending worker without events should require process inspection")
         abandoned_workspace = _write_workspace(root / "abandoned-pending")
         abandoned_state = load_state(abandoned_workspace)
         abandoned_state["status"] = "worker_running"
@@ -510,6 +531,8 @@ def run_fixture_validation() -> list[str]:
             errors.append("health should report abandoned pending worker starts")
         if not abandoned_health.get("pending_runs"):
             errors.append("health should expose pending run markers")
+        if any("instruction" in item for item in abandoned_health.get("pending_runs", [])):
+            errors.append("pending run markers should not carry full next_instruction text")
         bad_contract_workspace = _write_workspace(root / "bad-contract")
         load_state(bad_contract_workspace)
         (bad_contract_workspace / "feature_ledger.yaml").write_text(
