@@ -21,7 +21,7 @@ from .contracts import (
     SUPERVISOR_STATE_SCHEMA,
     WORKER_PERSONA_PATH,
 )
-from .loop import run_supervisor_loop
+from .loop_harness import run_supervisor_loop_harness
 from .plan import acceptance_evidence, plan_gaps, validate_plan_semantics
 from .runtime import (
     apply_supervisor_review,
@@ -351,6 +351,20 @@ def run_fixture_validation() -> list[str]:
             validate_workspace(authored_workspace)
         except WorkspaceError as exc:
             errors.append(f"supervisor-authored bootstrap artifacts should validate: {exc}")
+        try:
+            write_workspace_draft(authored_draft)
+            errors.append("bootstrap should reject existing workspace inputs without overwrite")
+        except WorkspaceError:
+            pass
+        bad_plan_source = _write_workspace(root / "bad-plan-source")
+        bad_plan = load_plan(bad_plan_source)
+        bad_plan["goal_id"] = "wrong-goal"
+        write_plan(bad_plan_source, bad_plan)
+        try:
+            draft_from_files(root / "bad-plan-target", bad_plan_source / "goal.yaml", bad_plan_source / "plan.yaml")
+            errors.append("bootstrap should reject supervisor-authored plan with mismatched goal_id")
+        except WorkspaceError:
+            pass
 
         workspace = _write_workspace(root)
         try:
@@ -657,7 +671,7 @@ def run_fixture_validation() -> list[str]:
             review_count["value"] += 1
             return _review("continue" if review_count["value"] == 1 else "accepted_done")
 
-        loop_result = run_supervisor_loop(
+        loop_result = run_supervisor_loop_harness(
             loop_workspace,
             instruction="执行 loop fixture",
             review_fn=loop_review,
@@ -665,7 +679,38 @@ def run_fixture_validation() -> list[str]:
             max_rounds=3,
         )
         if loop_result.get("status") != "accepted_done" or len(loop_result.get("runs") or []) != 2:
-            errors.append("supervisor loop should continue automatically until terminal status")
+            errors.append("supervisor loop harness should continue automatically until terminal status")
+        try:
+            run_supervisor_loop_harness(
+                _write_workspace(root / "loop-limit"),
+                instruction="执行 loop limit fixture",
+                review_fn=lambda _context: _review("continue"),
+                runner=FakeRunner(),
+                max_rounds=1,
+            )
+            errors.append("supervisor loop harness should fail when max_rounds is exceeded")
+        except WorkspaceError:
+            pass
+        try:
+            run_supervisor_loop_harness(
+                _write_workspace(root / "loop-missing-instruction"),
+                instruction="执行 missing instruction fixture",
+                review_fn=lambda _context: {**_review("continue"), "next_instruction": ""},
+                runner=FakeRunner(),
+                max_rounds=2,
+            )
+            errors.append("supervisor loop harness should fail when continue lacks next_instruction")
+        except WorkspaceError:
+            pass
+        needs_loop = run_supervisor_loop_harness(
+            _write_workspace(root / "loop-needs-human"),
+            instruction="执行 needs_human loop fixture",
+            review_fn=lambda _context: _review("needs_human", question="请确认 loop fixture"),
+            runner=FakeRunner(),
+            max_rounds=2,
+        )
+        if needs_loop.get("status") != "needs_human":
+            errors.append("supervisor loop harness should stop on needs_human")
 
         weak_workspace = _write_workspace(root / "weak-output")
         weak_runner = FakeRunner(output_text="我会继续收敛 F6/AC1")

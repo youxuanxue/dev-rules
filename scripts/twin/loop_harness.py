@@ -12,7 +12,7 @@ TERMINAL_STATUSES = {"accepted_done", "needs_human", "failed"}
 ReviewFn = Callable[[dict[str, Any]], dict[str, Any]]
 
 
-def run_supervisor_loop(
+def run_supervisor_loop_harness(
     workspace: Path,
     *,
     instruction: str,

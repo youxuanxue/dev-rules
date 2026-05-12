@@ -131,22 +131,9 @@ def _cmd_review(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_bootstrap(args: argparse.Namespace) -> int:
+def _cmd_scaffold(args: argparse.Namespace) -> int:
     try:
-        if args.goal_file or args.plan_file:
-            if not args.workspace or not args.goal_file or not args.plan_file:
-                raise WorkspaceError("--workspace, --goal-file, and --plan-file are required together")
-            draft = draft_from_files(Path(args.workspace), Path(args.goal_file), Path(args.plan_file))
-        else:
-            draft = draft_workspace(args.goal or "", Path(args.workspace) if args.workspace else None)
-        if args.write:
-            workspace = write_workspace_draft(draft, overwrite=args.overwrite)
-            if args.json:
-                _print_json({"workspace": str(workspace), "status": "written"})
-            else:
-                print(f"workspace={workspace}")
-                print("status=written")
-            return 0
+        draft = draft_workspace(args.goal, Path(args.workspace) if args.workspace else None)
     except WorkspaceError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -156,7 +143,24 @@ def _cmd_bootstrap(args: argparse.Namespace) -> int:
         print(f"workspace={draft['workspace']}")
         print(f"goal={draft['goal']['one_liner']}")
         print("files=goal.yaml, plan.yaml")
-        print("next=review draft, then rerun with --write or use /twin confirmation flow")
+        print("next=edit this scaffold or use supervisor-authored bootstrap artifacts")
+    return 0
+
+
+def _cmd_bootstrap(args: argparse.Namespace) -> int:
+    try:
+        if not args.workspace or not args.goal_file or not args.plan_file:
+            raise WorkspaceError("bootstrap requires --workspace, --goal-file, and --plan-file")
+        draft = draft_from_files(Path(args.workspace), Path(args.goal_file), Path(args.plan_file))
+        workspace = write_workspace_draft(draft, overwrite=args.overwrite)
+    except WorkspaceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if args.json:
+        _print_json({"workspace": str(workspace), "status": "written"})
+    else:
+        print(f"workspace={workspace}")
+        print("status=written")
     return 0
 
 
@@ -216,12 +220,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_review.add_argument("--json", action="store_true")
     p_review.set_defaults(func=_cmd_review)
 
+    p_scaffold = sub.add_parser("scaffold")
+    p_scaffold.add_argument("goal")
+    p_scaffold.add_argument("--workspace")
+    p_scaffold.add_argument("--json", action="store_true")
+    p_scaffold.set_defaults(func=_cmd_scaffold)
+
     p_bootstrap = sub.add_parser("bootstrap")
-    p_bootstrap.add_argument("goal", nargs="?", default="")
-    p_bootstrap.add_argument("--workspace")
-    p_bootstrap.add_argument("--goal-file")
-    p_bootstrap.add_argument("--plan-file")
-    p_bootstrap.add_argument("--write", action="store_true")
+    p_bootstrap.add_argument("--workspace", required=True)
+    p_bootstrap.add_argument("--goal-file", required=True)
+    p_bootstrap.add_argument("--plan-file", required=True)
     p_bootstrap.add_argument("--overwrite", action="store_true")
     p_bootstrap.add_argument("--json", action="store_true")
     p_bootstrap.set_defaults(func=_cmd_bootstrap)

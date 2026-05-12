@@ -9,10 +9,10 @@
 supervisor 用 `AskUserQuestion` 展示 goal、AC、non-goals、plan items，并请求确认。确认后把草稿写到临时文件，再调用：
 
 ```bash
-PYTHONPATH=$DEV_RULES python3 -m scripts.twin bootstrap --workspace <ws> --goal-file <goal.yaml> --plan-file <plan.yaml> --write
+PYTHONPATH=$DEV_RULES python3 -m scripts.twin bootstrap --workspace <ws> --goal-file <goal.yaml> --plan-file <plan.yaml>
 ```
 
-这一步只写入并校验 workspace。`python3 -m scripts.twin bootstrap "<goal>" --json` 只提供最小 scaffold fallback，用于契约测试或快速起草，不代表真实 planning。
+这一步只写入并校验 workspace。`python3 -m scripts.twin scaffold "<goal>" --json` 只提供最小 scaffold fallback，用于契约测试或快速起草，不代表真实 planning。
 
 ## 每轮调用顺序
 
