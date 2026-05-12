@@ -33,6 +33,7 @@ from .runtime import (
 )
 from .schema_contract import validate_artifact, validate_schema
 from .util import read_json
+from .claude_runner import DEFAULT_WORKER_TIMEOUT_SECONDS, WORKER_TIMEOUT_ENV, default_worker_timeout_seconds
 from .worker import DEFAULT_WORKER_MAX_BUDGET_USD, assess_run_quality, changed_files_from_status, default_worker_max_budget_usd
 from .workspace import WorkspaceError, load_ledger, load_state, write_ledger, write_state
 
@@ -280,6 +281,24 @@ def _behavior_helper_errors() -> list[str]:
             os.environ.pop("XUEJIAO_TWIN_WORKER_MAX_BUDGET_USD", None)
         else:
             os.environ["XUEJIAO_TWIN_WORKER_MAX_BUDGET_USD"] = old_budget_env
+    old_timeout_env = os.environ.pop(WORKER_TIMEOUT_ENV, None)
+    try:
+        if DEFAULT_WORKER_TIMEOUT_SECONDS != 3600 or default_worker_timeout_seconds() != 3600:
+            errors.append("default worker timeout should be 3600 seconds")
+        os.environ[WORKER_TIMEOUT_ENV] = "120"
+        if default_worker_timeout_seconds() != 120:
+            errors.append("worker timeout env override should be honored")
+        os.environ[WORKER_TIMEOUT_ENV] = "0"
+        try:
+            default_worker_timeout_seconds()
+            errors.append("worker timeout env must reject non-positive values")
+        except ValueError:
+            pass
+    finally:
+        if old_timeout_env is None:
+            os.environ.pop(WORKER_TIMEOUT_ENV, None)
+        else:
+            os.environ[WORKER_TIMEOUT_ENV] = old_timeout_env
     return errors
 
 
@@ -898,6 +917,10 @@ items:
         repeat_state = apply_supervisor_review(repeat_workspace, repeat_run["run_id"], repeat_review)
         if repeat_state.get("status") != "needs_human":
             errors.append("same gap for three rounds should require human")
+        record_human_response(repeat_workspace, "改方向：先补 AC2 证据")
+        repeat_after_respond = load_state(repeat_workspace)
+        if repeat_after_respond.get("failure_streaks"):
+            errors.append("respond should reset failure_streaks so the next round is not immediately escalated")
 
         weak_workspace = _write_workspace(root / "weak-output")
         weak_runner = FakeRunner(output_text="我会继续收敛 F6/AC1")

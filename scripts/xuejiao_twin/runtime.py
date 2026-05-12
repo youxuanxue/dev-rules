@@ -49,6 +49,7 @@ def record_human_response(workspace: Path | str, text: str) -> Path:
     state["status"] = "continue"
     state["needs_human"] = None
     state["next_instruction"] = ""
+    state["failure_streaks"] = {}
     write_state(workspace_path, state)
     render_current(workspace_path, goal, ledger, state)
     return target
