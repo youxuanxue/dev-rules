@@ -15,10 +15,10 @@ from .schema_contract import validate_schema
 from .util import now_utc, read_json, write_json
 from .workspace import (
     WorkspaceError,
-    ledger_path,
+    plan_path,
     load_goal,
     load_human_response,
-    load_ledger,
+    load_plan,
     load_state,
     load_worker_persona,
     render_current,
@@ -108,7 +108,6 @@ VALIDATION_KEYWORDS = re.compile(
     r"\b(pytest|ruff|preflight|scripts/preflight\.sh|passed|failed|PASS|FAIL)\b",
     re.IGNORECASE,
 )
-STRUCTURED_OUTPUT_HEADINGS = ("DIFF:", "TESTS:", "PREFLIGHT:", "REMAINING:")
 
 
 def changed_files_from_status(status: str) -> list[str]:
@@ -145,11 +144,6 @@ def extract_validation_evidence(worker_output: str) -> list[str]:
     return evidence
 
 
-def _has_structured_output(worker_output: str) -> bool:
-    upper = worker_output.upper()
-    return all(heading in upper for heading in STRUCTURED_OUTPUT_HEADINGS)
-
-
 def assess_run_quality(
     *,
     worker_output: str,
@@ -166,7 +160,7 @@ def assess_run_quality(
 ) -> list[str]:
     flags: list[str] = []
     output_without_warning = _without_stdin_warning(worker_output)
-    weak_output = not _has_structured_output(worker_output) and not validation
+    weak_output = bool(output_without_warning) and not validation
     if STDIN_WARNING_TEXT in worker_output:
         flags.append("STDIN_WARNING")
     if not output_without_warning:
@@ -197,15 +191,15 @@ def assess_run_quality(
 def build_worker_prompt(workspace: Path, instruction: str) -> str:
     worker_persona = load_worker_persona()
     goal = (workspace / "goal.yaml").read_text(encoding="utf-8")
-    ledger_file = ledger_path(workspace)
-    ledger = ledger_file.read_text(encoding="utf-8")
+    plan_file = plan_path(workspace)
+    plan = plan_file.read_text(encoding="utf-8")
     parts = [
         f"# {WORKER_PERSONA_PATH}",
         worker_persona.strip(),
         "# goal.yaml",
         goal.strip(),
-        f"# {ledger_file.name}",
-        ledger.strip(),
+        f"# {plan_file.name}",
+        plan.strip(),
     ]
     human_response = load_human_response(workspace)
     if human_response and not human_response.get("consumed_by_run_id"):
@@ -405,7 +399,7 @@ def start_worker_turn(
         "run_id": run_id,
         "workspace_ref": str(workspace),
         "goal_ref": str(workspace / "goal.yaml"),
-        "ledger_ref": str(ledger_path(workspace)),
+        "plan_ref": str(plan_path(workspace)),
         "worker_persona_ref": str(WORKER_PERSONA_PATH),
         "supervisor_persona_ref": str(SUPERVISOR_PERSONA_PATH),
         "state_ref": str(workspace / "supervisor_state.json"),
@@ -428,8 +422,8 @@ def start_worker_turn(
             "git_status": post_git_status,
             "git_diff_stat": post_git_diff_stat,
         },
-        "review_ref": None,
-        "outcome": "failed" if result.session_lost else "review_required",
+        "review": None,
+        "status": "failed" if result.session_lost else "review_required",
     }
     errors = validate_schema(run, RUN_SCHEMA)
     if errors:
@@ -438,6 +432,6 @@ def start_worker_turn(
     pending_path = _pending_path(workspace, run_id)
     if pending_path.exists():
         pending_path.unlink()
-    render_current(workspace, load_goal(workspace), load_ledger(workspace), state)
+    render_current(workspace, load_goal(workspace), load_plan(workspace), state)
     _consume_human_response(workspace, run_id)
     return run

@@ -141,8 +141,8 @@ fi
 
 section "twin persona source is read-only"
 if grep -q 'disallowed_tools=worker_disallowed_tools()' "$SCRIPT_DIR/scripts/twin/worker.py" && \
-   grep -q 'Self-verification before ACCEPTED_DONE' "$PERSONAS_DIR/supervisor-persona.md"; then
-    ok "worker denies persona source writes and supervisor self-verifies before ACCEPTED_DONE"
+   grep -q 'Self-verification before accepted_done' "$PERSONAS_DIR/supervisor-persona.md"; then
+    ok "worker denies persona source writes and supervisor self-verifies before accepted_done"
 else
     fail "twin worker must deny persona writes and supervisor persona must include Self-verification section"
 fi

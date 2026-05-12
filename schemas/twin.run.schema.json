@@ -3,14 +3,14 @@
   "$id": "https://github.com/youxuanxue/dev-rules/schemas/twin.run.schema.json",
   "title": "twin worker run",
   "type": "object",
-  "required": ["schema_version", "run_id", "workspace_ref", "goal_ref", "ledger_ref", "worker_persona_ref", "supervisor_persona_ref", "state_ref", "events_ref", "started_at", "ended_at", "worker", "instruction", "evidence", "review_ref", "outcome"],
+  "required": ["schema_version", "run_id", "workspace_ref", "goal_ref", "plan_ref", "worker_persona_ref", "supervisor_persona_ref", "state_ref", "events_ref", "started_at", "ended_at", "worker", "instruction", "evidence", "review", "status"],
   "additionalProperties": false,
   "properties": {
     "schema_version": { "type": "integer", "enum": [1] },
     "run_id": { "type": "string", "minLength": 1 },
     "workspace_ref": { "type": "string", "minLength": 1 },
     "goal_ref": { "type": "string", "minLength": 1 },
-    "ledger_ref": { "type": "string", "minLength": 1 },
+    "plan_ref": { "type": "string", "minLength": 1 },
     "worker_persona_ref": { "type": "string", "minLength": 1 },
     "supervisor_persona_ref": { "type": "string", "minLength": 1 },
     "state_ref": { "type": "string", "minLength": 1 },
@@ -43,7 +43,50 @@
         "git_diff_stat": { "type": "string" }
       }
     },
-    "review_ref": { "type": ["string", "null"] },
-    "outcome": { "type": "string", "enum": ["review_required", "continued", "needs_human", "accepted_done", "failed"] }
+    "review": {
+      "type": ["object", "null"],
+      "required": ["status", "summary", "next_instruction", "remaining_gaps", "acceptance_evidence", "risk_flags"],
+      "additionalProperties": false,
+      "properties": {
+        "status": { "type": "string", "enum": ["accepted_done", "continue", "needs_human", "failed"] },
+        "summary": { "type": "string" },
+        "next_instruction": { "type": "string" },
+        "remaining_gaps": { "type": "array", "items": { "type": "string" } },
+        "acceptance_evidence": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["ac_id", "evidence"],
+            "additionalProperties": false,
+            "properties": {
+              "ac_id": { "type": "string", "minLength": 1 },
+              "evidence": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "risk_flags": { "type": "array", "items": { "type": "string" } },
+        "actions": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["fix_drift", "validate_more", "mark_plan_gap"] }
+        },
+        "plan_updates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["item_id"],
+            "additionalProperties": false,
+            "properties": {
+              "item_id": { "type": "string", "minLength": 1 },
+              "status": { "type": "string", "enum": ["pending", "in_progress", "blocked", "completed", "deferred"] },
+              "actual_evidence": { "type": "array", "items": { "type": "string" } },
+              "next_action": { "type": "string" },
+              "blocked_reason": { "type": ["string", "null"] }
+            }
+          }
+        },
+        "human_question": { "type": ["string", "null"] }
+      }
+    },
+    "status": { "type": "string", "enum": ["review_required", "continue", "needs_human", "accepted_done", "failed"] }
   }
 }

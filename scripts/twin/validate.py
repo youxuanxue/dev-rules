@@ -20,7 +20,7 @@ from .contracts import (
     SUPERVISOR_STATE_SCHEMA,
     WORKER_PERSONA_PATH,
 )
-from .ledger import acceptance_evidence, ledger_gaps, validate_ledger_semantics
+from .plan import acceptance_evidence, plan_gaps, validate_plan_semantics
 from .runtime import (
     apply_supervisor_review,
     build_review_context,
@@ -34,7 +34,7 @@ from .schema_contract import validate_artifact, validate_schema
 from .util import read_json
 from .claude_runner import DEFAULT_WORKER_TIMEOUT_SECONDS, WORKER_TIMEOUT_ENV, default_worker_timeout_seconds
 from .worker import DEFAULT_WORKER_MAX_BUDGET_USD, assess_run_quality, changed_files_from_status, default_worker_max_budget_usd
-from .workspace import WorkspaceError, load_ledger, load_state, write_ledger, write_state
+from .workspace import WorkspaceError, load_plan, load_state, write_plan, write_state
 
 
 class FakeRunner:
@@ -93,7 +93,7 @@ def _goal() -> dict[str, Any]:
     }
 
 
-def _ledger(*, completed: bool = False) -> dict[str, Any]:
+def _plan(*, completed: bool = False) -> dict[str, Any]:
     evidence = ["tests: fixture pass", "diff: fixture stat"] if completed else []
     return {
         "schema_version": 1,
@@ -114,11 +114,11 @@ def _ledger(*, completed: bool = False) -> dict[str, Any]:
     }
 
 
-def _review(decision: str, *, gaps: list[str] | None = None, question: str | None = None, actions: list[str] | None = None) -> dict[str, Any]:
+def _review(status: str, *, gaps: list[str] | None = None, question: str | None = None, actions: list[str] | None = None) -> dict[str, Any]:
     return {
-        "decision": decision,
+        "status": status,
         "summary": "fixture supervisor review",
-        "next_instruction": "继续 fixture" if decision == "CONTINUE" else "",
+        "next_instruction": "继续 fixture" if status == "continue" else "",
         "remaining_gaps": gaps or [],
         "acceptance_evidence": [
             {"ac_id": "AC1", "evidence": ["tests: fixture pass"]},
@@ -126,14 +126,14 @@ def _review(decision: str, *, gaps: list[str] | None = None, question: str | Non
         ],
         "risk_flags": [],
         "actions": actions or [],
-        "ledger_updates": [
+        "plan_updates": [
             {"item_id": "F1", "status": "completed", "actual_evidence": ["tests: fixture pass", "diff: fixture stat"], "next_action": ""}
         ],
         "human_question": question,
     }
 
 
-def _write_workspace(root: Path, *, completed: bool = False, ledger_evidence: bool | None = None) -> Path:
+def _write_workspace(root: Path, *, completed: bool = False, plan_evidence: bool | None = None) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     workspace = root / "workspace"
     workspace.mkdir()
@@ -156,10 +156,10 @@ non_goals:
         encoding="utf-8",
     )
     status = "completed" if completed else "pending"
-    has_evidence = completed if ledger_evidence is None else ledger_evidence
+    has_evidence = completed if plan_evidence is None else plan_evidence
     evidence = '\n      - "tests: fixture pass"\n      - "diff: fixture stat"' if has_evidence else " []"
     next_action = '""' if completed else "运行 worker fixture"
-    (workspace / "feature_ledger.yaml").write_text(
+    (workspace / "plan.yaml").write_text(
         f"""schema_version: 1
 goal_id: fixture-goal
 items:
@@ -192,17 +192,17 @@ def _schema_errors() -> list[str]:
             errors.append(f"stale util helper should not be public: {stale_name}")
     for value, schema in [
         (_goal(), GOAL_SCHEMA),
-        (_ledger(), LEDGER_SCHEMA),
-        (_review("CONTINUE", actions=["fix_drift", "validate_more", "mark_ledger_gap"]), SUPERVISOR_REVIEW_SCHEMA),
+        (_plan(), LEDGER_SCHEMA),
+        (_review("continue", actions=["fix_drift", "validate_more", "mark_plan_gap"]), SUPERVISOR_REVIEW_SCHEMA),
     ]:
         errors.extend(validate_schema(value, schema))
     old_goal = {**_goal(), "project_root": "/tmp/project", "allowed_tools": {}}
     if not validate_schema(old_goal, GOAL_SCHEMA):
         errors.append("old goal fields should be rejected")
-    old_review = {**_review("CONTINUE"), "supervisor_session_id": "legacy"}
+    old_review = {**_review("continue"), "supervisor_session_id": "legacy"}
     if not validate_schema(old_review, SUPERVISOR_REVIEW_SCHEMA):
         errors.append("old supervisor review fields should be rejected")
-    legacy_action_review = {**_review("CONTINUE"), "actions": ["reset_worker_session"]}
+    legacy_action_review = {**_review("continue"), "actions": ["reset_worker_session"]}
     if not validate_schema(legacy_action_review, SUPERVISOR_REVIEW_SCHEMA):
         errors.append("legacy supervisor actions should be rejected by trimmed enum")
     return errors
@@ -306,22 +306,22 @@ def _behavior_helper_errors() -> list[str]:
 
 def _semantic_errors() -> list[str]:
     errors: list[str] = []
-    bad_ledger = _ledger()
-    bad_ledger["items"][0]["covers_ac"] = ["NOPE"]
-    if not validate_ledger_semantics(_goal(), bad_ledger):
+    bad_plan = _plan()
+    bad_plan["items"][0]["covers_ac"] = ["NOPE"]
+    if not validate_plan_semantics(_goal(), bad_plan):
         errors.append("unknown AC reference should fail")
-    uncovered = _ledger()
+    uncovered = _plan()
     uncovered["items"][0]["covers_ac"] = ["AC1"]
-    if not validate_ledger_semantics(_goal(), uncovered):
+    if not validate_plan_semantics(_goal(), uncovered):
         errors.append("uncovered AC should fail")
-    repeated = _ledger()
+    repeated = _plan()
     repeated["items"][0]["deliverable"] = "fixture 有测试证据"
-    if not validate_ledger_semantics(_goal(), repeated):
-        errors.append("ledger repeating AC statement should fail")
-    cyclic = _ledger()
+    if not validate_plan_semantics(_goal(), repeated):
+        errors.append("plan repeating AC statement should fail")
+    cyclic = _plan()
     cyclic["items"].append({**cyclic["items"][0], "id": "F2", "depends_on": ["F1"]})
     cyclic["items"][0]["depends_on"] = ["F2"]
-    if not validate_ledger_semantics(_goal(), cyclic):
+    if not validate_plan_semantics(_goal(), cyclic):
         errors.append("dependency cycle should fail")
     return errors
 
@@ -343,12 +343,12 @@ def run_fixture_validation() -> list[str]:
         if not focus.get("last_mile") or not focus.get("current_item_acceptance_criteria"):
             errors.append("supervisor context should expose acceptance focus for the current item")
         skeleton = supervisor_context.get("review_skeleton", {})
-        if skeleton.get("decision") != "<ACCEPTED_DONE|CONTINUE|NEEDS_HUMAN|FAILED>":
+        if skeleton.get("status") != "<accepted_done|continue|needs_human|failed>":
             errors.append("supervisor context should expose an undecided review skeleton")
-        if not ledger_gaps(_goal(), _ledger()):
-            errors.append("pending ledger should have gaps")
-        if any(item["evidence"] for item in acceptance_evidence(_goal(), _ledger())):
-            errors.append("empty ledger should not produce acceptance evidence")
+        if not plan_gaps(_goal(), _plan()):
+            errors.append("pending plan should have gaps")
+        if any(item["evidence"] for item in acceptance_evidence(_goal(), _plan())):
+            errors.append("empty plan should not produce acceptance evidence")
         original_import = builtins.__import__
 
         def block_yaml_import(name: str, *args: Any, **kwargs: Any) -> Any:
@@ -361,17 +361,17 @@ def run_fixture_validation() -> list[str]:
             fallback_context = build_supervisor_context(workspace)
             if str(fallback_context.get("goal", {}).get("core_goal") or "").strip() != _goal()["core_goal"].strip():
                 errors.append("fallback yaml parser should preserve block-scalar goal text")
-            if fallback_context.get("ledger", {}).get("items", [{}])[0].get("scope") != "只覆盖 greenfield worker turn":
-                errors.append("fallback yaml parser should preserve ledger item mapping fields")
-            ledger_roundtrip = load_ledger(workspace)
-            ledger_roundtrip["items"][0]["actual_evidence"] = ["第一行\n第二行"]
-            ledger_roundtrip["items"][0]["next_action"] = "多行\n下一步"
-            write_ledger(workspace, ledger_roundtrip)
-            reloaded_ledger = load_ledger(workspace)
-            if reloaded_ledger["items"][0].get("actual_evidence") != ["第一行\n第二行"]:
+            if fallback_context.get("plan", {}).get("items", [{}])[0].get("scope") != "只覆盖 greenfield worker turn":
+                errors.append("fallback yaml parser should preserve plan item mapping fields")
+            plan_roundtrip = load_plan(workspace)
+            plan_roundtrip["items"][0]["actual_evidence"] = ["第一行\n第二行"]
+            plan_roundtrip["items"][0]["next_action"] = "多行\n下一步"
+            write_plan(workspace, plan_roundtrip)
+            reloaded_plan = load_plan(workspace)
+            if reloaded_plan["items"][0].get("actual_evidence") != ["第一行\n第二行"]:
                 errors.append("yaml fallback parser should preserve list block scalars")
-            if reloaded_ledger["items"][0].get("next_action") != "多行\n下一步":
-                errors.append("yaml fallback writer should round-trip multiline ledger values")
+            if reloaded_plan["items"][0].get("next_action") != "多行\n下一步":
+                errors.append("yaml fallback writer should round-trip multiline plan values")
         finally:
             builtins.__import__ = original_import
 
@@ -402,17 +402,19 @@ def run_fixture_validation() -> list[str]:
         except WorkspaceError:
             pass
 
-        legacy_json = _write_workspace(root / "legacy-json")
-        (legacy_json / "feature_ledger.json").write_text("{}\n", encoding="utf-8")
+        legacy_workspace = _write_workspace(root / "legacy-plan")
+        (legacy_workspace / "plan.yaml").unlink()
+        (legacy_workspace / "feature_ledger.yaml").write_text("schema_version: 1\n", encoding="utf-8")
         try:
-            validate_workspace(legacy_json)
-            errors.append("feature_ledger.json should fail even when feature_ledger.yaml exists")
-        except WorkspaceError:
-            pass
+            validate_workspace(legacy_workspace)
+            errors.append("legacy feature_ledger.yaml should fail with a plan.yaml hint")
+        except WorkspaceError as exc:
+            if "plan.yaml" not in str(exc):
+                errors.append(f"legacy plan failure should mention plan.yaml: {exc}")
 
         nonzero_workspace = _write_workspace(root / "nonzero")
         nonzero_run = start_worker_turn(nonzero_workspace, "触发 worker 非零退出 fixture", runner=FakeRunner(returncode=1))
-        if nonzero_run["outcome"] != "review_required":
+        if nonzero_run["status"] != "review_required":
             errors.append("nonzero worker exit should still require supervisor review")
         nonzero_state = load_state(nonzero_workspace)
         if nonzero_state.get("status") != "review_required":
@@ -431,7 +433,7 @@ def run_fixture_validation() -> list[str]:
         write_state(stale_workspace, stale_state)
         stale_runner = FakeRunner()
         stale_run = start_worker_turn(stale_workspace, "恢复 stale worker_running", runner=stale_runner)
-        if stale_run.get("outcome") != "review_required" or len(stale_runner.calls) != 1:
+        if stale_run.get("status") != "review_required" or len(stale_runner.calls) != 1:
             errors.append("stale worker_running without artifacts should allow a fresh worker turn")
         stale_after = load_state(stale_workspace)
         if stale_after.get("current_run_id") == "run-stale" or stale_after.get("status") != "review_required":
@@ -462,7 +464,7 @@ def run_fixture_validation() -> list[str]:
             errors.append("worker-turn should require supervisor-authored instruction")
         except WorkspaceError:
             pass
-        run = start_worker_turn(workspace, "推进 ledger item F1", runner=runner)
+        run = start_worker_turn(workspace, "推进 plan item F1", runner=runner)
         errors.extend(validate_schema(run, RUN_SCHEMA))
         if not run.get("evidence", {}).get("validation"):
             errors.append("worker run should record validation evidence")
@@ -495,7 +497,7 @@ def run_fixture_validation() -> list[str]:
         if not expected_persona_denies.issubset(set(disallowed)):
             errors.append("worker should disallow writes inside $DEV_RULES/personas")
         prompt = str(call.get("prompt") or "")
-        if f"# {WORKER_PERSONA_PATH}" not in prompt or "fixture-goal" not in prompt or "推进 ledger item F1" not in prompt:
+        if f"# {WORKER_PERSONA_PATH}" not in prompt or "fixture-goal" not in prompt or "推进 plan item F1" not in prompt:
             errors.append("worker prompt missing persona/goal/supervisor-authored instruction")
         if "supervisor persona" in prompt:
             errors.append("worker prompt should not include supervisor persona")
@@ -527,8 +529,8 @@ def run_fixture_validation() -> list[str]:
         context = build_review_context(workspace, run["run_id"])
         if "xuejiao supervisor persona" not in context.get("supervisor_persona", ""):
             errors.append("review context should include supervisor persona")
-        if context.get("review_skeleton", {}).get("decision") != "<ACCEPTED_DONE|CONTINUE|NEEDS_HUMAN|FAILED>":
-            errors.append("review context should not preselect a decision")
+        if context.get("review_skeleton", {}).get("status") != "<accepted_done|continue|needs_human|failed>":
+            errors.append("review context should not preselect a status")
         if not isinstance(context.get("run"), dict):
             errors.append("review context should expose the raw run artifact for supervisor judgment")
 
@@ -552,20 +554,20 @@ def run_fixture_validation() -> list[str]:
         if cli.returncode != 0:
             errors.append(f"review-context --json should be accepted by CLI: {cli.stderr.strip()}")
 
-        continue_review = _review("CONTINUE", gaps=["F1 missing"], actions=["fix_drift", "validate_more"])
+        continue_review = _review("continue", gaps=["F1 missing"], actions=["fix_drift", "validate_more"])
         state = apply_supervisor_review(workspace, run["run_id"], continue_review)
         if state.get("status") != "continue" or state.get("next_instruction") != "继续 fixture":
-            errors.append("CONTINUE review should store supervisor-authored next instruction unchanged")
+            errors.append("continue review should store supervisor-authored next instruction unchanged")
         continued_run_artifact = read_json(workspace / "runs" / run["run_id"] / "run.json")
-        if continued_run_artifact.get("outcome") != "continued":
-            errors.append("CONTINUE review should mark reviewed run outcome as continued")
+        if continued_run_artifact.get("status") != "continue" or continued_run_artifact.get("review", {}).get("status") != "continue":
+            errors.append("continue review should mark reviewed run status as continue and inline review")
 
         second = start_worker_turn(workspace, "继续 F1", runner=runner)
         if not runner.calls[-1].get("session_id"):
             errors.append("second worker turn should resume saved worker session")
         if not second["worker"]["resume_used"]:
             errors.append("second run artifact should mark resume_used")
-        apply_supervisor_review(workspace, second["run_id"], _review("CONTINUE"))
+        apply_supervisor_review(workspace, second["run_id"], _review("continue"))
 
         reset_runner = FakeRunner(session_lost_once=True)
         reset = start_worker_turn(workspace, "测试 session reset", runner=reset_runner)
@@ -575,7 +577,7 @@ def run_fixture_validation() -> list[str]:
             errors.append("session lost retry should be fresh")
         if reset["worker"]["resume_used"]:
             errors.append("fresh retry should not mark resume_used")
-        apply_supervisor_review(workspace, reset["run_id"], _review("CONTINUE"))
+        apply_supervisor_review(workspace, reset["run_id"], _review("continue"))
 
         warning_retry_runner = FakeRunner(warning_only_once=True)
         warning_retry = start_worker_turn(workspace, "测试 warning-only resume", runner=warning_retry_runner)
@@ -585,13 +587,13 @@ def run_fixture_validation() -> list[str]:
             errors.append("warning-only retry should be fresh")
         if warning_retry["worker"]["resume_used"]:
             errors.append("warning-only fresh retry should not mark resume_used")
-        apply_supervisor_review(workspace, warning_retry["run_id"], _review("CONTINUE"))
+        apply_supervisor_review(workspace, warning_retry["run_id"], _review("continue"))
 
         needs_run = start_worker_turn(workspace, "等人确认 fixture", runner=runner)
-        needs_human = _review("NEEDS_HUMAN", question="请确认 fixture")
+        needs_human = _review("needs_human", question="请确认 fixture")
         state = apply_supervisor_review(workspace, needs_run["run_id"], needs_human)
         if state.get("status") != "needs_human" or not state.get("needs_human"):
-            errors.append("NEEDS_HUMAN review did not update state")
+            errors.append("needs_human review did not update state")
         status = status_workspace(workspace)
         if not status.get("needs_human") or status.get("current_run_id") != needs_run["run_id"]:
             errors.append("status should expose needs_human and the latest run")
@@ -610,11 +612,11 @@ def run_fixture_validation() -> list[str]:
             errors.append("worker turn should consume human_response.json")
         if "human_response.json" not in str(runner.calls[-1].get("prompt")):
             errors.append("worker prompt should include unconsumed human response")
-        apply_supervisor_review(workspace, resumed["run_id"], _review("CONTINUE"))
+        apply_supervisor_review(workspace, resumed["run_id"], _review("continue"))
         post_consume = start_worker_turn(workspace, "再跑一轮 fixture", runner=runner)
         if "human_response.json" in str(runner.calls[-1].get("prompt")):
             errors.append("consumed human_response.json should not be re-injected into worker prompt")
-        apply_supervisor_review(workspace, post_consume["run_id"], _review("CONTINUE"))
+        apply_supervisor_review(workspace, post_consume["run_id"], _review("continue"))
 
         weak_workspace = _write_workspace(root / "weak-output")
         weak_runner = FakeRunner(output_text="我会继续收敛 F6/AC1")
@@ -624,44 +626,44 @@ def run_fixture_validation() -> list[str]:
             if flag not in weak_flags:
                 errors.append(f"weak worker output should record {flag}")
         weak_context = build_review_context(weak_workspace, weak_run["run_id"])
-        if weak_context.get("review_skeleton", {}).get("decision") != "<ACCEPTED_DONE|CONTINUE|NEEDS_HUMAN|FAILED>":
-            errors.append("weak run context should not preselect a decision")
+        if weak_context.get("review_skeleton", {}).get("status") != "<accepted_done|continue|needs_human|failed>":
+            errors.append("weak run context should not preselect a status")
 
-        done_missing_evidence_workspace = _write_workspace(root / "done-missing-evidence", completed=True, ledger_evidence=False)
+        done_missing_evidence_workspace = _write_workspace(root / "done-missing-evidence", completed=True, plan_evidence=False)
         done_missing_evidence_runner = FakeRunner()
         done_missing_evidence_run = start_worker_turn(done_missing_evidence_workspace, "final", runner=done_missing_evidence_runner)
-        review_only_evidence = _review("ACCEPTED_DONE")
-        review_only_evidence["ledger_updates"] = []
+        review_only_evidence = _review("accepted_done")
+        review_only_evidence["plan_updates"] = []
         try:
             apply_supervisor_review(done_missing_evidence_workspace, done_missing_evidence_run["run_id"], review_only_evidence)
-            errors.append("ACCEPTED_DONE should fail when only review has evidence and ledger actual_evidence is empty")
+            errors.append("accepted_done should fail when only review has evidence and plan actual_evidence is empty")
         except WorkspaceError:
             pass
 
         done_workspace = _write_workspace(root / "done", completed=True)
         done_runner = FakeRunner()
         done_run = start_worker_turn(done_workspace, "final", runner=done_runner)
-        bad_done = _review("ACCEPTED_DONE", gaps=["still missing"])
+        bad_done = _review("accepted_done", gaps=["still missing"])
         try:
             apply_supervisor_review(done_workspace, done_run["run_id"], bad_done)
-            errors.append("ACCEPTED_DONE with remaining gaps should fail")
+            errors.append("accepted_done with remaining gaps should fail")
         except WorkspaceError:
             pass
 
-        done = _review("ACCEPTED_DONE")
+        done = _review("accepted_done")
         state = apply_supervisor_review(done_workspace, done_run["run_id"], done)
         if state.get("status") != "accepted_done":
-            errors.append("ACCEPTED_DONE review did not update state")
+            errors.append("accepted_done review did not update state")
         if state.get("current_item_id"):
-            errors.append("ACCEPTED_DONE state should clear current_item_id once no items remain")
+            errors.append("accepted_done state should clear current_item_id once no items remain")
         run_artifact = read_json(done_workspace / "runs" / done_run["run_id"] / "run.json")
-        if run_artifact.get("outcome") != "accepted_done":
-            errors.append("accepted run artifact outcome not updated")
+        if run_artifact.get("status") != "accepted_done" or run_artifact.get("review", {}).get("status") != "accepted_done":
+            errors.append("accepted run artifact status/review not updated")
         status = status_workspace(done_workspace)
         if status.get("status") != "accepted_done" or status.get("remaining_gaps"):
             errors.append("status_workspace did not report clean accepted_done")
         if status.get("current_item_id"):
-            errors.append("status_workspace should not surface a completed item as current after ACCEPTED_DONE")
+            errors.append("status_workspace should not surface a completed item as current after accepted_done")
     return errors
 
 
@@ -680,5 +682,5 @@ def validate_path(path: Path) -> list[str]:
     if path.name == "run.json":
         return validate_artifact(path, RUN_SCHEMA)
     if path.name == "supervisor_review.json":
-        return validate_artifact(path, SUPERVISOR_REVIEW_SCHEMA)
+        return ["supervisor_review.json is legacy; reviews are now embedded in run.json::review"]
     return [f"unsupported validation path: {path}"]

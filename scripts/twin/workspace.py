@@ -9,8 +9,9 @@ from .contracts import (
     GOAL_SCHEMA,
     HUMAN_RESPONSE_FILE,
     HUMAN_RESPONSE_SCHEMA,
-    LEDGER_FILE,
     LEDGER_SCHEMA,
+    LEGACY_PLAN_FILES,
+    PLAN_FILE,
     RUNS_DIR,
     SCHEMA_VERSION,
     SUPERVISOR_PERSONA_FILE,
@@ -20,7 +21,7 @@ from .contracts import (
     WORKER_PERSONA_FILE,
     WORKER_PERSONA_PATH,
 )
-from .ledger import choose_next_item, item_counts, ledger_gaps, validate_ledger_semantics
+from .plan import choose_next_item, item_counts, plan_gaps, validate_plan_semantics
 from .schema_contract import validate_schema
 from .util import now_utc, read_json, read_yaml_like, write_json, write_yaml_like
 
@@ -33,20 +34,22 @@ def resolve_workspace(path: Path | str) -> Path:
     return Path(path).expanduser().resolve()
 
 
-def ledger_path(workspace: Path) -> Path:
-    path = workspace / LEDGER_FILE
-    legacy_json = workspace / "feature_ledger.json"
-    if legacy_json.exists():
-        raise WorkspaceError("feature_ledger.json is not supported; use feature_ledger.yaml")
+def plan_path(workspace: Path) -> Path:
+    path = workspace / PLAN_FILE
+    legacy = [name for name in LEGACY_PLAN_FILES if (workspace / name).exists()]
+    if legacy:
+        raise WorkspaceError(
+            f"legacy twin plan file is not supported ({', '.join(legacy)}); rename it to {PLAN_FILE}"
+        )
     if path.exists():
         return path
-    raise WorkspaceError("missing feature_ledger.yaml; run Claude Code plan mode first to prepare the ledger")
+    raise WorkspaceError(f"missing {PLAN_FILE}; run /twin \"<one-liner>\" or Claude Code plan mode first")
 
 
 def load_goal(workspace: Path) -> dict[str, Any]:
     path = workspace / GOAL_FILE
     if not path.exists():
-        raise WorkspaceError("missing goal.yaml; run Claude Code plan mode first to prepare goal.yaml and feature_ledger")
+        raise WorkspaceError("missing goal.yaml; run Claude Code plan mode first to prepare goal.yaml and plan")
     goal = read_yaml_like(path)
     errors = validate_schema(goal, GOAL_SCHEMA)
     if errors:
@@ -54,16 +57,16 @@ def load_goal(workspace: Path) -> dict[str, Any]:
     return goal
 
 
-def load_ledger(workspace: Path) -> dict[str, Any]:
-    ledger = read_yaml_like(ledger_path(workspace))
-    errors = validate_schema(ledger, LEDGER_SCHEMA)
+def load_plan(workspace: Path) -> dict[str, Any]:
+    plan = read_yaml_like(plan_path(workspace))
+    errors = validate_schema(plan, LEDGER_SCHEMA)
     if errors:
-        raise WorkspaceError("feature_ledger schema errors: " + "; ".join(errors))
-    return ledger
+        raise WorkspaceError("plan schema errors: " + "; ".join(errors))
+    return plan
 
 
-def write_ledger(workspace: Path, ledger: dict[str, Any]) -> None:
-    write_yaml_like(workspace / LEDGER_FILE, ledger)
+def write_plan(workspace: Path, plan: dict[str, Any]) -> None:
+    write_yaml_like(workspace / PLAN_FILE, plan)
 
 
 def read_persona_file(path: Path) -> str:
@@ -104,7 +107,7 @@ def default_state(workspace: Path) -> dict[str, Any]:
         "current_item_id": None,
         "worker_session_id": None,
         "next_instruction": "",
-        "last_decision": None,
+        "last_review_status": None,
         "needs_human": None,
         "updated_at": now_utc(),
     }
@@ -136,11 +139,11 @@ def validate_workspace_readonly(workspace: Path) -> tuple[dict[str, Any], dict[s
     if not workspace.exists() or not workspace.is_dir():
         raise WorkspaceError(f"workspace does not exist: {workspace}")
     goal = load_goal(workspace)
-    ledger = load_ledger(workspace)
+    plan = load_plan(workspace)
     validate_persona_contract(workspace)
-    semantic_errors = validate_ledger_semantics(goal, ledger)
+    semantic_errors = validate_plan_semantics(goal, plan)
     if semantic_errors:
-        raise WorkspaceError("feature_ledger semantic errors: " + "; ".join(semantic_errors))
+        raise WorkspaceError("plan semantic errors: " + "; ".join(semantic_errors))
     state_path = workspace / SUPERVISOR_STATE_FILE
     if not state_path.exists():
         raise WorkspaceError(f"missing {SUPERVISOR_STATE_FILE}; run /twin <workspace> to initialize runtime state")
@@ -148,7 +151,7 @@ def validate_workspace_readonly(workspace: Path) -> tuple[dict[str, Any], dict[s
     errors = validate_schema(state, SUPERVISOR_STATE_SCHEMA)
     if errors:
         raise WorkspaceError("supervisor_state schema errors: " + "; ".join(errors))
-    return goal, ledger, state
+    return goal, plan, state
 
 
 def validate_workspace(workspace: Path) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -156,14 +159,14 @@ def validate_workspace(workspace: Path) -> tuple[dict[str, Any], dict[str, Any]]
     if not workspace.exists() or not workspace.is_dir():
         raise WorkspaceError(f"workspace does not exist: {workspace}")
     goal = load_goal(workspace)
-    ledger = load_ledger(workspace)
+    plan = load_plan(workspace)
     validate_persona_contract(workspace)
-    semantic_errors = validate_ledger_semantics(goal, ledger)
+    semantic_errors = validate_plan_semantics(goal, plan)
     if semantic_errors:
-        raise WorkspaceError("feature_ledger semantic errors: " + "; ".join(semantic_errors))
+        raise WorkspaceError("plan semantic errors: " + "; ".join(semantic_errors))
     (workspace / RUNS_DIR).mkdir(exist_ok=True)
     load_state(workspace)
-    return goal, ledger
+    return goal, plan
 
 
 def write_human_response(workspace: Path, text: str) -> Path:
@@ -194,10 +197,10 @@ def load_human_response(workspace: Path) -> dict[str, Any] | None:
     return value
 
 
-def render_current(workspace: Path, goal: dict[str, Any], ledger: dict[str, Any], state: dict[str, Any]) -> None:
-    counts = item_counts(ledger)
-    gaps = ledger_gaps(goal, ledger)
-    next_item = choose_next_item(ledger)
+def render_current(workspace: Path, goal: dict[str, Any], plan: dict[str, Any], state: dict[str, Any]) -> None:
+    counts = item_counts(plan)
+    gaps = plan_gaps(goal, plan)
+    next_item = choose_next_item(plan)
     current_item_id = state.get("current_item_id") or (next_item.get("id") if next_item else None)
     lines = [
         "# twin current",
@@ -206,11 +209,11 @@ def render_current(workspace: Path, goal: dict[str, Any], ledger: dict[str, Any]
         f"- Goal: {goal.get('one_liner')}",
         f"- Current item: {current_item_id or 'none'}",
         f"- Round: {state.get('round_index')}",
-        f"- Ledger: " + ", ".join(f"{key}={value}" for key, value in sorted(counts.items())),
-        f"- Last decision: {state.get('last_decision') or 'none'}",
+        f"- Plan: " + ", ".join(f"{key}={value}" for key, value in sorted(counts.items())),
+        f"- Last review status: {state.get('last_review_status') or 'none'}",
         f"- Next instruction: {state.get('next_instruction') or 'none'}",
         "",
-        "## Ledger gaps",
+        "## Plan gaps",
         *(f"- {gap}" for gap in (gaps or ["none"])),
     ]
     needs_human = state.get("needs_human")
@@ -226,9 +229,9 @@ def render_current(workspace: Path, goal: dict[str, Any], ledger: dict[str, Any]
 
 
 def status_summary(workspace: Path) -> dict[str, Any]:
-    goal, ledger, state = validate_workspace_readonly(workspace)
+    goal, plan, state = validate_workspace_readonly(workspace)
     workspace = resolve_workspace(workspace)
-    next_item = choose_next_item(ledger)
+    next_item = choose_next_item(plan)
     return {
         "workspace": str(workspace),
         "goal": goal.get("one_liner"),
@@ -238,7 +241,7 @@ def status_summary(workspace: Path) -> dict[str, Any]:
         "round_index": state.get("round_index"),
         "next_instruction": state.get("next_instruction"),
         "needs_human": state.get("needs_human"),
-        "ledger_counts": item_counts(ledger),
-        "remaining_gaps": ledger_gaps(goal, ledger),
+        "plan_counts": item_counts(plan),
+        "remaining_gaps": plan_gaps(goal, plan),
         "current": str(workspace / CURRENT_FILE),
     }
