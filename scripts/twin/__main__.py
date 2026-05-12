@@ -10,7 +10,6 @@ from .runtime import (
     apply_supervisor_review,
     build_review_context,
     build_supervisor_context,
-    health_workspace,
     record_human_response,
     start_worker_turn,
     status_workspace,
@@ -43,7 +42,7 @@ def _print_needs_human(status: dict[str, object]) -> None:
     print(f"state={workspace / 'supervisor_state.json'}")
     print(f"run={workspace / 'runs' / str(run_id) / 'run.json'}")
     print(f"review={workspace / 'runs' / str(run_id) / 'supervisor_review.json'}")
-    print(f"respond=python3 -m scripts.xuejiao_twin respond --workspace {workspace} --text '<answer>'")
+    print(f"respond=python3 -m scripts.twin respond --workspace {workspace} --text '<answer>'")
 
 
 def _cmd_status(args: argparse.Namespace) -> int:
@@ -74,7 +73,7 @@ def _cmd_respond(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 2
     print(f"human_response_written={target}")
-    print(f"next=当前 Claude Code supervisor 读取 supervisor-context 后生成下一条 worker instruction")
+    print("next=当前 Claude Code supervisor 读取 supervisor-context 后生成下一条 worker instruction")
     return 0
 
 
@@ -112,50 +111,10 @@ def _cmd_review_context(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_health(args: argparse.Namespace) -> int:
-    try:
-        report = health_workspace(
-            _workspace_arg(args),
-            run_id=args.run_id,
-            events_tail=args.events_tail,
-            history_limit=args.history_limit,
-            supervisor_session_id=args.supervisor_session_id,
-        )
-    except WorkspaceError as exc:
-        print(str(exc), file=sys.stderr)
-        return 2
-    if args.json:
-        _print_json(report)
-    else:
-        status = report.get("status") if isinstance(report.get("status"), dict) else {}
-        run = report.get("current_run") if isinstance(report.get("current_run"), dict) else {}
-        health = report.get("run_health") if isinstance(report.get("run_health"), dict) else {}
-        events = report.get("events_tail_summary") if isinstance(report.get("events_tail_summary"), dict) else {}
-        tail_events = events.get("events") if isinstance(events.get("events"), list) else []
-        last_event = tail_events[-1] if tail_events else {}
-        print(f"workspace={report['workspace']}")
-        print(f"status={status.get('status')}")
-        print(f"current_run_id={report.get('current_run_id') or 'none'}")
-        print(f"run_outcome={run.get('outcome') or 'none'}")
-        print(f"requires_attention={health.get('requires_attention')}")
-        print(f"quality_flags={','.join(health.get('quality_flags') or []) or 'none'}")
-        print(f"events_last={last_event.get('type', 'none')}:{last_event.get('subtype', 'none')}")
-        warnings = report.get("history_warnings") if isinstance(report.get("history_warnings"), list) else []
-        print(f"history_warnings={len(warnings)}")
-        for warning in warnings[:5]:
-            print(f"warning={warning.get('flag') or warning.get('kind')} count={warning.get('count', '')} latest={warning.get('latest_run_id', '')}")
-    return 0
-
-
 def _cmd_review(args: argparse.Namespace) -> int:
     try:
         review = json.loads(Path(args.review_file).read_text(encoding="utf-8"))
-        state = apply_supervisor_review(
-            _workspace_arg(args),
-            args.run_id,
-            review,
-            supervisor_session_id=args.supervisor_session_id,
-        )
+        state = apply_supervisor_review(_workspace_arg(args), args.run_id, review)
         status = status_workspace(_workspace_arg(args))
     except (OSError, json.JSONDecodeError, WorkspaceError) as exc:
         print(str(exc), file=sys.stderr)
@@ -175,12 +134,12 @@ def _cmd_validate(args: argparse.Namespace) -> int:
         for error in errors:
             print(f"FAIL: {error}", file=sys.stderr)
         return 1
-    print("xuejiao_twin validation: PASS")
+    print("twin validation: PASS")
     return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="python3 -m scripts.xuejiao_twin")
+    parser = argparse.ArgumentParser(prog="python3 -m scripts.twin")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_status = sub.add_parser("status")
@@ -218,20 +177,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_review_context.add_argument("--json", action="store_true")
     p_review_context.set_defaults(func=_cmd_review_context)
 
-    p_health = sub.add_parser("health")
-    p_health.add_argument("--workspace", required=True)
-    p_health.add_argument("--run-id")
-    p_health.add_argument("--events-tail", type=int, default=20)
-    p_health.add_argument("--history-limit", type=int, default=20)
-    p_health.add_argument("--supervisor-session-id")
-    p_health.add_argument("--json", action="store_true")
-    p_health.set_defaults(func=_cmd_health)
-
     p_review = sub.add_parser("review")
     p_review.add_argument("--workspace", required=True)
     p_review.add_argument("--run-id", required=True)
     p_review.add_argument("--review-file", required=True)
-    p_review.add_argument("--supervisor-session-id")
     p_review.add_argument("--json", action="store_true")
     p_review.set_defaults(func=_cmd_review)
 

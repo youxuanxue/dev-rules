@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Any
 
 
-WORKER_TIMEOUT_ENV = "XUEJIAO_TWIN_WORKER_TIMEOUT_SECONDS"
-DEFAULT_WORKER_TIMEOUT_SECONDS = 3600
+WORKER_TIMEOUT_ENV = "TWIN_WORKER_TIMEOUT_SECONDS"
+DEFAULT_WORKER_TIMEOUT_SECONDS = 10800
 
 
 def default_worker_timeout_seconds() -> int:
@@ -119,7 +119,7 @@ def run_claude_headless(
         cmd.extend(["--resume", session_id])
     env = os.environ.copy()
     if role:
-        env["XUEJIAO_TWIN_ROLE"] = role
+        env["TWIN_ROLE"] = role
     if extra_env:
         env.update(extra_env)
     if stream_output_path is None:

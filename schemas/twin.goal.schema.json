@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/youxuanxue/dev-rules/schemas/xuejiao_twin.goal.schema.json",
-  "title": "xuejiao twin goal",
+  "$id": "https://github.com/youxuanxue/dev-rules/schemas/twin.goal.schema.json",
+  "title": "twin goal",
   "type": "object",
   "required": ["schema_version", "id", "one_liner", "core_goal", "acceptance_criteria", "non_goals"],
   "additionalProperties": false,

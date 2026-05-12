@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/youxuanxue/dev-rules/schemas/xuejiao_twin.run.schema.json",
-  "title": "xuejiao twin worker run",
+  "$id": "https://github.com/youxuanxue/dev-rules/schemas/twin.run.schema.json",
+  "title": "twin worker run",
   "type": "object",
   "required": ["schema_version", "run_id", "workspace_ref", "goal_ref", "ledger_ref", "worker_persona_ref", "supervisor_persona_ref", "state_ref", "events_ref", "started_at", "ended_at", "worker", "instruction", "evidence", "review_ref", "outcome"],
   "additionalProperties": false,

@@ -1,4 +1,4 @@
-# xuejiao twin supervisor 设计
+# twin supervisor 设计
 
 ## 一句话
 
@@ -8,7 +8,7 @@ worker harness 已由 dev-rules、项目 `CLAUDE.md`、hooks、preflight、workt
 
 ## 核心约束
 
-1. **greenfield**：作为全新 `xuejiao-twin` skill / capability 设计，不考虑历史 CLI、workspace、schema 兼容。
+1. **greenfield**：作为全新 `twin` skill / capability 设计，不考虑历史 CLI、workspace、schema 兼容。
 2. **plan-first**：启动前必须已有 Claude Code plan mode 产出的 `goal.yaml + feature_ledger.yaml`。缺失则不启动。
 3. **persona split**：supervisor 使用 `$DEV_RULES/personas/supervisor-persona.md`；worker 只看到 `$DEV_RULES/personas/worker-persona.md`。
 4. **interactive supervisor**：supervisor 直接复用 Claude Code 交互模式和原生高级能力，不另起 supervisor `claude -p`。
@@ -199,7 +199,7 @@ human gate 的机械边界由 Claude Code 原生 `--allowedTools` / `--disallowe
 
 ## 用户命令面
 
-权威载体是 `commands/twin.md`；本文不复述命令面。`xuejiao-twin` 是全新 skill / capability，不保留旧命令兼容包袱：`init / run / next / replay / validate / replan` 是内部阶段或维护入口，不作为日常用户命令暴露。
+权威载体是 `commands/twin.md`；本文不复述命令面。`twin` 是全新 skill / capability，不保留旧命令兼容包袱：`init / run / next / replay / validate / replan` 是内部阶段或维护入口，不作为日常用户命令暴露。
 
 ## 参考仓库取舍
 
@@ -212,7 +212,7 @@ human gate 的机械边界由 Claude Code 原生 `--allowedTools` / `--disallowe
 
 P0：greenfield 骨架
 
-- 作为全新 `xuejiao-twin` skill / capability 实现，不做历史 CLI/workspace/schema 兼容。
+- 作为全新 `twin` skill / capability 实现，不做历史 CLI/workspace/schema 兼容。
 - supervisor 运行在 Claude Code 交互模式，复用原生工具和高级能力；不另起 supervisor `claude -p`。
 - worker harness 归 dev-rules / Claude Code `-p`。
 - `goal.yaml + feature_ledger.yaml` 缺失时拒绝启动。

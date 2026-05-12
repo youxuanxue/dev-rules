@@ -35,8 +35,11 @@
 | `scripts/preflight.sh` | dev-rules 源仓库自己的提交门禁 |
 | `schemas/review.schema.json` | `/user:review` 输出契约 |
 | `schemas/skill.schema.json` | 跨项目共享的 Skill manifest 规范 |
-| `schemas/xuejiao_twin.*.schema.json` | xuejiao twin goal、ledger、state、review、run 与 human response 契约 |
-| `scripts/xuejiao_twin/` | xuejiao-twin greenfield supervisor support runtime 与 fixtures |
+| `schemas/twin.*.schema.json` | twin goal、ledger、state、review、run 与 human response 契约 |
+| `scripts/twin/` | twin supervisor support runtime 与 fixtures |
+| `docs/twin-design.md` | twin 设计单一事实来源 |
+| `docs/twin-supervisor-runbook.md` | supervisor 每轮调用契约 |
+| `templates/twin-workspace/` | `/twin` workspace 起点模板 |
 | `global/CLAUDE.md` | Claude Code 全局工作宪法 |
 
 ## 接入与日常使用
