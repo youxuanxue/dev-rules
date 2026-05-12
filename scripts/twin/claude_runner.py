@@ -10,7 +10,7 @@ from typing import Any
 
 
 WORKER_TIMEOUT_ENV = "TWIN_WORKER_TIMEOUT_SECONDS"
-DEFAULT_WORKER_TIMEOUT_SECONDS = 3600
+DEFAULT_WORKER_TIMEOUT_SECONDS = 10800
 
 
 def default_worker_timeout_seconds() -> int:

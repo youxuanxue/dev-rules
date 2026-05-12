@@ -36,7 +36,7 @@ PYTHONPATH=$DEV_RULES python3 -m scripts.twin supervisor-context --workspace <ws
 PYTHONPATH=$DEV_RULES python3 -m scripts.twin worker-turn --workspace <ws> --instruction "<supervisor-authored>" [--max-budget-usd N] --json
 ```
 
-默认预算 20 USD，可用 `TWIN_WORKER_MAX_BUDGET_USD` 覆盖；超时由 `TWIN_WORKER_TIMEOUT_SECONDS`（默认 3600）控制。返回 `run` 对象，与 `schemas/twin.run.schema.json` 对齐；`outcome` 一定是 `review_required` 或 `failed`，绝不是 `accepted_done`。
+默认预算 50 USD，可用 `TWIN_WORKER_MAX_BUDGET_USD` 覆盖；超时由 `TWIN_WORKER_TIMEOUT_SECONDS`（默认 10800，3 小时）控制。返回 `run` 对象，与 `schemas/twin.run.schema.json` 对齐；`outcome` 一定是 `review_required` 或 `failed`，绝不是 `accepted_done`。
 
 worker resume 由 `worker_session_id` 索引；session 丢失或 warning-only 输出会自动 fresh 重试一次，并在 `quality_flags` 写 `WORKER_SESSION_RESET`。详见 `docs/twin-design.md` 「worker 调用与续跑」节。
 

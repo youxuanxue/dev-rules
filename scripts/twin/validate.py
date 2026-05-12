@@ -273,8 +273,8 @@ def _behavior_helper_errors() -> list[str]:
         errors.append("budget-exceeded run should record WORKER_MAX_BUDGET_EXCEEDED")
     old_budget_env = os.environ.pop("TWIN_WORKER_MAX_BUDGET_USD", None)
     try:
-        if DEFAULT_WORKER_MAX_BUDGET_USD != 20.0 or default_worker_max_budget_usd() != 20.0:
-            errors.append("default worker budget should be 20 USD")
+        if DEFAULT_WORKER_MAX_BUDGET_USD != 50.0 or default_worker_max_budget_usd() != 50.0:
+            errors.append("default worker budget should be 50 USD")
         os.environ["TWIN_WORKER_MAX_BUDGET_USD"] = "5"
         if default_worker_max_budget_usd() != 5.0:
             errors.append("worker budget env override should be honored")
@@ -285,8 +285,8 @@ def _behavior_helper_errors() -> list[str]:
             os.environ["TWIN_WORKER_MAX_BUDGET_USD"] = old_budget_env
     old_timeout_env = os.environ.pop(WORKER_TIMEOUT_ENV, None)
     try:
-        if DEFAULT_WORKER_TIMEOUT_SECONDS != 3600 or default_worker_timeout_seconds() != 3600:
-            errors.append("default worker timeout should be 3600 seconds")
+        if DEFAULT_WORKER_TIMEOUT_SECONDS != 10800 or default_worker_timeout_seconds() != 10800:
+            errors.append("default worker timeout should be 10800 seconds")
         os.environ[WORKER_TIMEOUT_ENV] = "120"
         if default_worker_timeout_seconds() != 120:
             errors.append("worker timeout env override should be honored")
