@@ -6,7 +6,7 @@ from pathlib import Path
 SCHEMA_VERSION = 1
 
 GOAL_SCHEMA = "twin.goal.schema.json"
-LEDGER_SCHEMA = "twin.ledger.schema.json"
+PLAN_SCHEMA = "twin.plan.schema.json"
 RUN_SCHEMA = "twin.run.schema.json"
 SUPERVISOR_STATE_SCHEMA = "twin.supervisor_state.schema.json"
 SUPERVISOR_REVIEW_SCHEMA = "twin.supervisor_review.schema.json"

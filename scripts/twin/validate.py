@@ -10,16 +10,18 @@ from pathlib import Path
 from typing import Any
 
 from . import contracts, util
+from .bootstrap import draft_from_files, draft_workspace, write_workspace_draft
 from .claude_runner import ClaudeRunResult
 from .contracts import (
     GOAL_SCHEMA,
-    LEDGER_SCHEMA,
+    PLAN_SCHEMA,
     PERSONAS_DIR,
     RUN_SCHEMA,
     SUPERVISOR_REVIEW_SCHEMA,
     SUPERVISOR_STATE_SCHEMA,
     WORKER_PERSONA_PATH,
 )
+from .loop_harness import run_supervisor_loop_harness
 from .plan import acceptance_evidence, plan_gaps, validate_plan_semantics
 from .runtime import (
     apply_supervisor_review,
@@ -192,7 +194,7 @@ def _schema_errors() -> list[str]:
             errors.append(f"stale util helper should not be public: {stale_name}")
     for value, schema in [
         (_goal(), GOAL_SCHEMA),
-        (_plan(), LEDGER_SCHEMA),
+        (_plan(), PLAN_SCHEMA),
         (_review("continue", actions=["fix_drift", "validate_more", "mark_plan_gap"]), SUPERVISOR_REVIEW_SCHEMA),
     ]:
         errors.extend(validate_schema(value, schema))
@@ -330,6 +332,40 @@ def run_fixture_validation() -> list[str]:
     errors: list[str] = _schema_errors() + _semantic_errors() + _behavior_helper_errors()
     with tempfile.TemporaryDirectory(prefix="twin-greenfield-") as tmp:
         root = Path(tmp)
+        bootstrap_draft = draft_workspace("交付 bootstrap fixture", root / "bootstrap-workspace")
+        bootstrap_workspace = write_workspace_draft(bootstrap_draft)
+        try:
+            validate_workspace(bootstrap_workspace)
+        except WorkspaceError as exc:
+            errors.append(f"bootstrap workspace failed validation: {exc}")
+        if not (bootstrap_workspace / "goal.yaml").exists() or not (bootstrap_workspace / "plan.yaml").exists():
+            errors.append("bootstrap should write goal.yaml and plan.yaml")
+        authored_source = _write_workspace(root / "supervisor-authored-source")
+        authored_draft = draft_from_files(
+            root / "supervisor-authored-target",
+            authored_source / "goal.yaml",
+            authored_source / "plan.yaml",
+        )
+        authored_workspace = write_workspace_draft(authored_draft)
+        try:
+            validate_workspace(authored_workspace)
+        except WorkspaceError as exc:
+            errors.append(f"supervisor-authored bootstrap artifacts should validate: {exc}")
+        try:
+            write_workspace_draft(authored_draft)
+            errors.append("bootstrap should reject existing workspace inputs without overwrite")
+        except WorkspaceError:
+            pass
+        bad_plan_source = _write_workspace(root / "bad-plan-source")
+        bad_plan = load_plan(bad_plan_source)
+        bad_plan["goal_id"] = "wrong-goal"
+        write_plan(bad_plan_source, bad_plan)
+        try:
+            draft_from_files(root / "bad-plan-target", bad_plan_source / "goal.yaml", bad_plan_source / "plan.yaml")
+            errors.append("bootstrap should reject supervisor-authored plan with mismatched goal_id")
+        except WorkspaceError:
+            pass
+
         workspace = _write_workspace(root)
         try:
             validate_workspace(workspace)
@@ -597,6 +633,15 @@ def run_fixture_validation() -> list[str]:
         status = status_workspace(workspace)
         if not status.get("needs_human") or status.get("current_run_id") != needs_run["run_id"]:
             errors.append("status should expose needs_human and the latest run")
+        needs_cli = subprocess.run(
+            [sys.executable, "-m", "scripts.twin", "status", "--workspace", str(workspace)],
+            cwd=Path(__file__).resolve().parents[2],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if "respond=/twin respond <answer>" not in needs_cli.stdout or "evidence_review=" not in needs_cli.stdout:
+            errors.append("needs_human CLI should lead with the question and /twin respond path")
         try:
             start_worker_turn(workspace, "不应启动", runner=runner)
             errors.append("worker should not start while needs_human pending")
@@ -617,6 +662,55 @@ def run_fixture_validation() -> list[str]:
         if "human_response.json" in str(runner.calls[-1].get("prompt")):
             errors.append("consumed human_response.json should not be re-injected into worker prompt")
         apply_supervisor_review(workspace, post_consume["run_id"], _review("continue"))
+
+        loop_workspace = _write_workspace(root / "loop")
+        loop_runner = FakeRunner()
+        review_count = {"value": 0}
+
+        def loop_review(_context: dict[str, Any]) -> dict[str, Any]:
+            review_count["value"] += 1
+            return _review("continue" if review_count["value"] == 1 else "accepted_done")
+
+        loop_result = run_supervisor_loop_harness(
+            loop_workspace,
+            instruction="执行 loop fixture",
+            review_fn=loop_review,
+            runner=loop_runner,
+            max_rounds=3,
+        )
+        if loop_result.get("status") != "accepted_done" or len(loop_result.get("runs") or []) != 2:
+            errors.append("supervisor loop harness should continue automatically until terminal status")
+        try:
+            run_supervisor_loop_harness(
+                _write_workspace(root / "loop-limit"),
+                instruction="执行 loop limit fixture",
+                review_fn=lambda _context: _review("continue"),
+                runner=FakeRunner(),
+                max_rounds=1,
+            )
+            errors.append("supervisor loop harness should fail when max_rounds is exceeded")
+        except WorkspaceError:
+            pass
+        try:
+            run_supervisor_loop_harness(
+                _write_workspace(root / "loop-missing-instruction"),
+                instruction="执行 missing instruction fixture",
+                review_fn=lambda _context: {**_review("continue"), "next_instruction": ""},
+                runner=FakeRunner(),
+                max_rounds=2,
+            )
+            errors.append("supervisor loop harness should fail when continue lacks next_instruction")
+        except WorkspaceError:
+            pass
+        needs_loop = run_supervisor_loop_harness(
+            _write_workspace(root / "loop-needs-human"),
+            instruction="执行 needs_human loop fixture",
+            review_fn=lambda _context: _review("needs_human", question="请确认 loop fixture"),
+            runner=FakeRunner(),
+            max_rounds=2,
+        )
+        if needs_loop.get("status") != "needs_human":
+            errors.append("supervisor loop harness should stop on needs_human")
 
         weak_workspace = _write_workspace(root / "weak-output")
         weak_runner = FakeRunner(output_text="我会继续收敛 F6/AC1")

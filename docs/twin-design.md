@@ -8,7 +8,7 @@ worker harness 由 dev-rules、项目 `CLAUDE.md`、hooks、preflight、worktree
 
 ## 核心约束
 
-1. **bootstrap or workspace**：`/twin "<one-line goal>"` 先草拟 `goal.yaml + plan.yaml` 并请求确认；`/twin <workspace>` 直接运行已准备好的 workspace。
+1. **bootstrap or workspace**：`/twin "<one-line goal>"` 由当前 supervisor 调研并草拟 `goal.yaml + plan.yaml`，Python 只写入和校验；`/twin <workspace>` 直接运行已准备好的 workspace。
 2. **persona split**：supervisor 使用 `$DEV_RULES/personas/supervisor-persona.md`；worker 只看到 `$DEV_RULES/personas/worker-persona.md`。
 3. **interactive supervisor**：`/twin` 本身就是 supervisor，不另起 supervisor `claude -p`。
 4. **headless worker**：worker 用 Claude Code `-p --permission-mode bypassPermissions` 执行，并可用 `--resume <worker_session_id>` 续跑。

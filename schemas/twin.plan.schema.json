@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/youxuanxue/dev-rules/schemas/twin.ledger.schema.json",
+  "$id": "https://github.com/youxuanxue/dev-rules/schemas/twin.plan.schema.json",
   "title": "twin plan",
   "type": "object",
   "required": ["schema_version", "goal_id", "items"],
