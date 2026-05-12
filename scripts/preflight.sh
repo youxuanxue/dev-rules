@@ -34,15 +34,15 @@ else
     fail "./sync-stats.sh missing or not executable"
 fi
 
-section "xuejiao_twin fixtures (schema, privacy, dry-run)"
+section "twin fixtures (schema, privacy, dry-run)"
 # Scrub GIT_* env so the fixture's nested `git init/add/commit` inside a
 # TemporaryDirectory does not leak into the parent repo when this script
 # runs from a git pre-commit hook (which sets GIT_DIR / GIT_INDEX_FILE).
-if env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE -u GIT_AUTHOR_DATE -u GIT_COMMITTER_DATE -u GIT_EDITOR -u GIT_PREFIX -u GIT_INTERNAL_GETTEXT_SH_SCHEME python3 -m scripts.xuejiao_twin validate --fixtures > /tmp/dev-rules-xuejiao-twin.log 2>&1; then
-    ok "xuejiao_twin fixture validation passes"
+if env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE -u GIT_AUTHOR_DATE -u GIT_COMMITTER_DATE -u GIT_EDITOR -u GIT_PREFIX -u GIT_INTERNAL_GETTEXT_SH_SCHEME python3 -m scripts.twin validate --fixtures > /tmp/dev-rules-twin.log 2>&1; then
+    ok "twin fixture validation passes"
 else
-    cat /tmp/dev-rules-xuejiao-twin.log | sed 's/^/    /'
-    fail "xuejiao_twin fixture validation failed"
+    cat /tmp/dev-rules-twin.log | sed 's/^/    /'
+    fail "twin fixture validation failed"
 fi
 
 echo ""

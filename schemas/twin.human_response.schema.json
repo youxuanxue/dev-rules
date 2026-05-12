@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/youxuanxue/dev-rules/schemas/xuejiao_twin.human_response.schema.json",
-  "title": "xuejiao twin human response",
+  "$id": "https://github.com/youxuanxue/dev-rules/schemas/twin.human_response.schema.json",
+  "title": "twin human response",
   "type": "object",
   "required": ["schema_version", "recorded_at", "text", "consumed_by_run_id"],
   "additionalProperties": false,

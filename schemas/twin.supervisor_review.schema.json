@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/youxuanxue/dev-rules/schemas/xuejiao_twin.supervisor_review.schema.json",
-  "title": "xuejiao twin supervisor review",
+  "$id": "https://github.com/youxuanxue/dev-rules/schemas/twin.supervisor_review.schema.json",
+  "title": "twin supervisor review",
   "type": "object",
   "required": ["decision", "summary", "next_instruction", "remaining_gaps", "acceptance_evidence", "risk_flags"],
   "additionalProperties": false,
@@ -25,7 +25,7 @@
     "risk_flags": { "type": "array", "items": { "type": "string" } },
     "actions": {
       "type": "array",
-      "items": { "type": "string", "enum": ["fix_drift", "validate_more", "mark_ledger_gap", "reset_worker_session", "allow_uncommitted_evidence"] }
+      "items": { "type": "string", "enum": ["fix_drift", "validate_more", "mark_ledger_gap"] }
     },
     "ledger_updates": {
       "type": "array",

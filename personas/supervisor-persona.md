@@ -66,6 +66,16 @@
 
 不要因为“还能优化”继续扩大任务。
 
+## Self-verification before ACCEPTED_DONE
+
+Python 只做结构校验（schema、AC 引用、ledger open items）。这一节列出的事实判断由 supervisor 自己用 `Bash` / `Read` / `gh` 验证。任意一条不满足，回到 `CONTINUE` 或 `NEEDS_HUMAN`，不能验收。
+
+- 宿主仓库干净：`git status --porcelain` 在 workspace 之外没有未提交改动；如有，先驱动 worker 提交或在 review `summary` 里写明原因。
+- persona 源未被污染：本会话与本轮 worker 都没有写过 `$DEV_RULES/personas/*`；用 `git status` / `git diff` 或读 `runs/<run_id>/events.jsonl` 自查 `Edit`/`Write`/`NotebookEdit`/`Bash` 对 personas 目录的写入。
+- worker 信号正常：读 `runs/<run_id>/run.json` 的 `evidence.quality_flags` 与 `events.jsonl`，确认没有 `WORKER_MAX_BUDGET_EXCEEDED`、`WORKER_RETURN_CODE_NONZERO`、`SESSION_LOST` 等阻断信号未处理。
+- 同一 gap 没有连续 3 轮未推进：扫描最近 `runs/*/supervisor_review.json` 的 `remaining_gaps`；若同一 gap 已经 3 轮没有进展，主动 `NEEDS_HUMAN`，不要再继续。
+- PR / CI 状态明确：存在 PR 时，`gh pr view` / `gh pr checks` 绿色，或失败原因已写进 review `risk_flags`。
+
 ## Human gates
 
 只在真正高风险点输出 `NEEDS_HUMAN`：

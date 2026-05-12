@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .supervisor_review import apply_supervisor_review, build_health_report, build_review_context, build_supervisor_context
+from .supervisor_review import apply_supervisor_review, build_review_context, build_supervisor_context
 from .worker import start_worker_turn
 from .workspace import (
     WorkspaceError,
@@ -22,23 +22,6 @@ def status_workspace(workspace: Path | str) -> dict[str, Any]:
     return status_summary(Path(workspace).expanduser().resolve())
 
 
-def health_workspace(
-    workspace: Path | str,
-    *,
-    run_id: str | None = None,
-    events_tail: int = 20,
-    history_limit: int = 20,
-    supervisor_session_id: str | None = None,
-) -> dict[str, Any]:
-    return build_health_report(
-        Path(workspace).expanduser().resolve(),
-        run_id=run_id,
-        events_tail=events_tail,
-        history_limit=history_limit,
-        supervisor_session_id=supervisor_session_id,
-    )
-
-
 def record_human_response(workspace: Path | str, text: str) -> Path:
     workspace_path = Path(workspace).expanduser().resolve()
     validate_workspace(workspace_path)
@@ -49,7 +32,6 @@ def record_human_response(workspace: Path | str, text: str) -> Path:
     state["status"] = "continue"
     state["needs_human"] = None
     state["next_instruction"] = ""
-    state["failure_streaks"] = {}
     write_state(workspace_path, state)
     render_current(workspace_path, goal, ledger, state)
     return target
@@ -60,7 +42,6 @@ __all__ = [
     "apply_supervisor_review",
     "build_review_context",
     "build_supervisor_context",
-    "health_workspace",
     "record_human_response",
     "start_worker_turn",
     "status_workspace",

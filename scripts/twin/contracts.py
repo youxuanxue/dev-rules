@@ -5,12 +5,12 @@ from pathlib import Path
 
 SCHEMA_VERSION = 1
 
-GOAL_SCHEMA = "xuejiao_twin.goal.schema.json"
-LEDGER_SCHEMA = "xuejiao_twin.ledger.schema.json"
-RUN_SCHEMA = "xuejiao_twin.run.schema.json"
-SUPERVISOR_STATE_SCHEMA = "xuejiao_twin.supervisor_state.schema.json"
-SUPERVISOR_REVIEW_SCHEMA = "xuejiao_twin.supervisor_review.schema.json"
-HUMAN_RESPONSE_SCHEMA = "xuejiao_twin.human_response.schema.json"
+GOAL_SCHEMA = "twin.goal.schema.json"
+LEDGER_SCHEMA = "twin.ledger.schema.json"
+RUN_SCHEMA = "twin.run.schema.json"
+SUPERVISOR_STATE_SCHEMA = "twin.supervisor_state.schema.json"
+SUPERVISOR_REVIEW_SCHEMA = "twin.supervisor_review.schema.json"
+HUMAN_RESPONSE_SCHEMA = "twin.human_response.schema.json"
 
 ITEM_STATUSES = {"pending", "in_progress", "blocked", "completed", "deferred"}
 

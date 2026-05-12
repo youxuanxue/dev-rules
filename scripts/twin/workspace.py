@@ -106,7 +106,6 @@ def default_state(workspace: Path) -> dict[str, Any]:
         "next_instruction": "",
         "last_decision": None,
         "needs_human": None,
-        "failure_streaks": {},
         "updated_at": now_utc(),
     }
 
@@ -201,7 +200,7 @@ def render_current(workspace: Path, goal: dict[str, Any], ledger: dict[str, Any]
     next_item = choose_next_item(ledger)
     current_item_id = state.get("current_item_id") or (next_item.get("id") if next_item else None)
     lines = [
-        "# xuejiao twin current",
+        "# twin current",
         "",
         f"- Status: {state.get('status')}",
         f"- Goal: {goal.get('one_liner')}",

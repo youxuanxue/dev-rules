@@ -115,7 +115,7 @@ done
 
 section "twin workspace does not own persona"
 if grep -R "persona snapshot\|copy the persona\|workspace / \"worker-persona.md\"\|workspace / \"supervisor-persona.md\"\|read_text_file" \
-        "$SCRIPT_DIR/scripts/xuejiao_twin" "$SCRIPT_DIR/docs" "$SCRIPT_DIR/commands" "$SCRIPT_DIR/schemas" \
+        "$SCRIPT_DIR/scripts/twin" "$SCRIPT_DIR/docs" "$SCRIPT_DIR/commands" "$SCRIPT_DIR/schemas" \
         > /dev/null 2>&1; then
     fail "twin must use DEV_RULES/personas persona files directly, not workspace persona snapshots"
 else
@@ -127,7 +127,7 @@ old_persona_path_found=0
 persona_scan_files=("$SCRIPT_DIR/sync.sh" "$SCRIPT_DIR/.gitignore")
 while IFS= read -r file; do
     persona_scan_files+=("$file")
-done < <(find "$SCRIPT_DIR/scripts/xuejiao_twin" "$SCRIPT_DIR/docs" "$SCRIPT_DIR/commands" -type f ! -name '*.pyc' ! -path '*/__pycache__/*')
+done < <(find "$SCRIPT_DIR/scripts/twin" "$SCRIPT_DIR/docs" "$SCRIPT_DIR/commands" -type f ! -name '*.pyc' ! -path '*/__pycache__/*')
 for forbidden in "~/.xuejiao-twin" ".xuejiao-twin" "secure-twin-persona" "TWIN_HOME"; do
     if grep -F "$forbidden" "${persona_scan_files[@]}" > /dev/null 2>&1; then
         old_persona_path_found=1
@@ -140,11 +140,11 @@ else
 fi
 
 section "twin persona source is read-only"
-if grep -q 'disallowed_tools=worker_disallowed_tools()' "$SCRIPT_DIR/scripts/xuejiao_twin/worker.py" && \
-   grep -q 'PERSONA_SOURCE_WRITE' "$SCRIPT_DIR/scripts/xuejiao_twin/supervisor_review.py"; then
-    ok "worker denies persona source writes and review flags violations"
+if grep -q 'disallowed_tools=worker_disallowed_tools()' "$SCRIPT_DIR/scripts/twin/worker.py" && \
+   grep -q 'Self-verification before ACCEPTED_DONE' "$PERSONAS_DIR/supervisor-persona.md"; then
+    ok "worker denies persona source writes and supervisor self-verifies before ACCEPTED_DONE"
 else
-    fail "twin worker/supervisor must treat DEV_RULES/personas as read-only"
+    fail "twin worker must deny persona writes and supervisor persona must include Self-verification section"
 fi
 
 # ── rule carrier partition anchor ─────────────────────────────────────

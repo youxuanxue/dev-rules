@@ -25,7 +25,6 @@ from .runtime import (
     apply_supervisor_review,
     build_review_context,
     build_supervisor_context,
-    health_workspace,
     record_human_response,
     start_worker_turn,
     status_workspace,
@@ -203,6 +202,9 @@ def _schema_errors() -> list[str]:
     old_review = {**_review("CONTINUE"), "supervisor_session_id": "legacy"}
     if not validate_schema(old_review, SUPERVISOR_REVIEW_SCHEMA):
         errors.append("old supervisor review fields should be rejected")
+    legacy_action_review = {**_review("CONTINUE"), "actions": ["reset_worker_session"]}
+    if not validate_schema(legacy_action_review, SUPERVISOR_REVIEW_SCHEMA):
+        errors.append("legacy supervisor actions should be rejected by trimmed enum")
     return errors
 
 
@@ -269,18 +271,18 @@ def _behavior_helper_errors() -> list[str]:
     )
     if "WORKER_MAX_BUDGET_EXCEEDED" not in budget_flags:
         errors.append("budget-exceeded run should record WORKER_MAX_BUDGET_EXCEEDED")
-    old_budget_env = os.environ.pop("XUEJIAO_TWIN_WORKER_MAX_BUDGET_USD", None)
+    old_budget_env = os.environ.pop("TWIN_WORKER_MAX_BUDGET_USD", None)
     try:
         if DEFAULT_WORKER_MAX_BUDGET_USD != 20.0 or default_worker_max_budget_usd() != 20.0:
             errors.append("default worker budget should be 20 USD")
-        os.environ["XUEJIAO_TWIN_WORKER_MAX_BUDGET_USD"] = "5"
+        os.environ["TWIN_WORKER_MAX_BUDGET_USD"] = "5"
         if default_worker_max_budget_usd() != 5.0:
             errors.append("worker budget env override should be honored")
     finally:
         if old_budget_env is None:
-            os.environ.pop("XUEJIAO_TWIN_WORKER_MAX_BUDGET_USD", None)
+            os.environ.pop("TWIN_WORKER_MAX_BUDGET_USD", None)
         else:
-            os.environ["XUEJIAO_TWIN_WORKER_MAX_BUDGET_USD"] = old_budget_env
+            os.environ["TWIN_WORKER_MAX_BUDGET_USD"] = old_budget_env
     old_timeout_env = os.environ.pop(WORKER_TIMEOUT_ENV, None)
     try:
         if DEFAULT_WORKER_TIMEOUT_SECONDS != 3600 or default_worker_timeout_seconds() != 3600:
@@ -326,7 +328,7 @@ def _semantic_errors() -> list[str]:
 
 def run_fixture_validation() -> list[str]:
     errors: list[str] = _schema_errors() + _semantic_errors() + _behavior_helper_errors()
-    with tempfile.TemporaryDirectory(prefix="xuejiao-twin-greenfield-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="twin-greenfield-") as tmp:
         root = Path(tmp)
         workspace = _write_workspace(root)
         try:
@@ -420,9 +422,6 @@ def run_fixture_validation() -> list[str]:
             errors.append("nonzero worker exit should still block next turn until review")
         except WorkspaceError:
             pass
-        nonzero_health = health_workspace(nonzero_workspace, history_limit=5)
-        if not any(item.get("flag") == "WORKER_RETURN_CODE_NONZERO" for item in nonzero_health.get("history_warnings", [])):
-            errors.append("health should summarize historical nonzero worker exits")
 
         stale_workspace = _write_workspace(root / "stale-running")
         stale_state = load_state(stale_workspace)
@@ -439,21 +438,6 @@ def run_fixture_validation() -> list[str]:
             errors.append("stale worker_running recovery should replace the abandoned run id")
         if (stale_workspace / "runs" / "run-stale").exists():
             errors.append("stale worker_running detection should not create an empty abandoned run directory")
-
-        nested_root = root / "nested-host"
-        nested_workspace = _write_workspace(nested_root / "plans" / "feature")
-        git_init = subprocess.run(["git", "init"], cwd=nested_root, capture_output=True, text=True, check=False)
-        if git_init.returncode == 0:
-            nested_runner = FakeRunner()
-            nested_run = start_worker_turn(nested_workspace, "嵌套 workspace fixture", runner=nested_runner)
-            if nested_runner.calls[-1].get("cwd") != nested_root.resolve():
-                errors.append("worker should run from git root when workspace is nested")
-            (nested_root / "app.py").write_text("print('dirty')\n", encoding="utf-8")
-            try:
-                apply_supervisor_review(nested_workspace, nested_run["run_id"], _review("ACCEPTED_DONE"))
-                errors.append("ACCEPTED_DONE should inspect git root when workspace is nested")
-            except WorkspaceError:
-                pass
 
         active_workspace = _write_workspace(root / "active-running")
         active_state = load_state(active_workspace)
@@ -545,246 +529,14 @@ def run_fixture_validation() -> list[str]:
             errors.append("review context should include supervisor persona")
         if context.get("review_skeleton", {}).get("decision") != "<ACCEPTED_DONE|CONTINUE|NEEDS_HUMAN|FAILED>":
             errors.append("review context should not preselect a decision")
-        if not context.get("run_health") or "next_instruction_guidance" not in context:
-            errors.append("review context should expose run health and next instruction guidance")
-        budget_run = read_json(workspace / "runs" / run["run_id"] / "run.json")
-        events_path = workspace / "runs" / run["run_id"] / "events.jsonl"
-        budget_run["events_ref"] = str(events_path)
-        budget_run["evidence"]["quality_flags"] = []
-        events_path.write_text('{"type":"result","subtype":"error_max_budget_usd","is_error":true}\n', encoding="utf-8")
-        from .util import write_json
-        write_json(workspace / "runs" / run["run_id"] / "run.json", budget_run)
-        budget_context = build_review_context(workspace, run["run_id"])
-        if "WORKER_MAX_BUDGET_EXCEEDED" not in budget_context.get("run_health", {}).get("quality_flags", []):
-            errors.append("review context should infer budget-exceeded flag from run events")
-        health_state_text = state_path.read_text(encoding="utf-8")
-        health_run_text = (workspace / "runs" / run["run_id"] / "run.json").read_text(encoding="utf-8")
-        health = health_workspace(workspace, run_id=run["run_id"], events_tail=1, history_limit=5)
-        if health.get("current_run", {}).get("run_id") != run["run_id"]:
-            errors.append("health should report the requested current run")
-        if "WORKER_MAX_BUDGET_EXCEEDED" not in health.get("run_health", {}).get("quality_flags", []):
-            errors.append("health should infer budget-exceeded flag from run events")
-        events_path.write_text(
-            json.dumps({
-                "type": "assistant",
-                "message": {
-                    "content": [
-                        {"type": "tool_use", "name": "Write", "input": {"file_path": str(PERSONAS_DIR / "worker-persona.md"), "content": "polluted"}},
-                    ]
-                },
-            }, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-        persona_worker_context = build_review_context(workspace, run["run_id"])
-        if "PERSONA_SOURCE_WRITE" not in persona_worker_context.get("run_health", {}).get("quality_flags", []):
-            errors.append("review context should flag worker writes inside $DEV_RULES/personas")
-        if not persona_worker_context.get("run_health", {}).get("requires_attention"):
-            errors.append("worker writes inside $DEV_RULES/personas should require attention")
-        for write_command in (
-            "printf polluted > $DEV_RULES/personas/worker-persona.md",
-            "printf polluted | tee $DEV_RULES/personas/worker-persona.md",
-        ):
-            events_path.write_text(
-                json.dumps({
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {"type": "tool_use", "name": "Bash", "input": {"command": write_command}},
-                        ]
-                    },
-                }, ensure_ascii=False) + "\n",
-                encoding="utf-8",
-            )
-            persona_bash_context = build_review_context(workspace, run["run_id"])
-            if "PERSONA_SOURCE_WRITE" not in persona_bash_context.get("run_health", {}).get("quality_flags", []):
-                errors.append("review context should flag worker shell writes inside $DEV_RULES/personas")
-        for read_only_command in (
-            "grep -R PERSONA_SOURCE_WRITE $DEV_RULES/personas",
-            "cat $DEV_RULES/personas/worker-persona.md > /tmp/persona-copy.txt",
-            "sed -n '1p' $DEV_RULES/personas/worker-persona.md",
-        ):
-            events_path.write_text(
-                json.dumps({
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {"type": "tool_use", "name": "Bash", "input": {"command": read_only_command}},
-                        ]
-                    },
-                }, ensure_ascii=False) + "\n",
-                encoding="utf-8",
-            )
-            persona_read_context = build_review_context(workspace, run["run_id"])
-            if "PERSONA_SOURCE_WRITE" in persona_read_context.get("run_health", {}).get("quality_flags", []):
-                errors.append("review context should not flag read-only shell commands inside $DEV_RULES/personas")
-        write_json(workspace / "runs" / run["run_id"] / "run.json", budget_run)
-        events_path.write_text('{"type":"result","subtype":"error_max_budget_usd","is_error":true}\n', encoding="utf-8")
-        if health.get("events_tail_summary", {}).get("events", [{}])[-1].get("subtype") != "error_max_budget_usd":
-            errors.append("health should summarize events tail")
-        if state_path.read_text(encoding="utf-8") != health_state_text or (workspace / "runs" / run["run_id"] / "run.json").read_text(encoding="utf-8") != health_run_text:
-            errors.append("health should not rewrite state or run artifacts")
-        write_json(workspace / "runs" / run["run_id"] / "run.json", run)
-        running_workspace = _write_workspace(root / "running")
-        running_state = load_state(running_workspace)
-        running_state["status"] = "worker_running"
-        running_state["current_run_id"] = "run-pending"
-        running_state["next_instruction"] = "fixture instruction still running"
-        write_state(running_workspace, running_state)
-        running_dir = running_workspace / "runs" / "run-pending"
-        running_dir.mkdir(parents=True, exist_ok=True)
-        (running_dir / "pending.json").write_text(
-            '{"schema_version":1,"run_id":"run-pending","started_at":"2026-05-11T00:00:00Z","status":"worker_running"}\n',
-            encoding="utf-8",
-        )
-        (running_dir / "events.jsonl").write_text('{"type":"assistant","message":{"content":[{"type":"text","text":"fixture running"}]}}\n', encoding="utf-8")
-        running_health = health_workspace(running_workspace, history_limit=5)
-        if running_health.get("current_run", {}).get("outcome") != "worker_running":
-            errors.append("health should expose pending current_run while worker is still running")
-        running_warning_flags = [item.get("flag") for item in running_health.get("history_warnings", [])]
-        if "CURRENT_RUN_MISSING" in running_warning_flags or "PENDING_RUN_MISSING_ARTIFACT" in running_warning_flags:
-            errors.append("worker_running without run artifact should not be reported as missing while current pending marker exists")
-        if running_health.get("events_tail_summary", {}).get("events", [{}])[-1].get("type") != "assistant":
-            errors.append("health should summarize live running events")
-        if not str(running_health.get("artifact_paths", {}).get("run", "")).endswith("runs/run-pending/run.json"):
-            errors.append("running health should expose the pending run artifact path")
-        missing_workspace = _write_workspace(root / "missing-run")
-        missing_state = load_state(missing_workspace)
-        missing_state["status"] = "review_required"
-        missing_state["current_run_id"] = "run-missing"
-        write_state(missing_workspace, missing_state)
-        missing_health = health_workspace(missing_workspace, history_limit=5)
-        if not any(item.get("flag") == "CURRENT_RUN_MISSING" for item in missing_health.get("history_warnings", [])):
-            errors.append("non-running state with missing run artifact should report CURRENT_RUN_MISSING")
-        no_events_workspace = _write_workspace(root / "pending-no-events")
-        no_events_state = load_state(no_events_workspace)
-        no_events_state["status"] = "worker_running"
-        no_events_state["current_run_id"] = "run-no-events"
-        write_state(no_events_workspace, no_events_state)
-        no_events_pending = no_events_workspace / "runs" / "run-no-events" / "pending.json"
-        no_events_pending.parent.mkdir(parents=True, exist_ok=True)
-        no_events_pending.write_text(
-            '{"schema_version":1,"run_id":"run-no-events","started_at":"2026-05-11T00:00:00Z","status":"worker_running","instruction_hash":"abc"}\n',
-            encoding="utf-8",
-        )
-        no_events_health = health_workspace(no_events_workspace, history_limit=5)
-        if "WORKER_STARTED_NO_EVENTS" not in no_events_health.get("run_health", {}).get("quality_flags", []):
-            errors.append("current pending worker without events should require process inspection")
-        abandoned_workspace = _write_workspace(root / "abandoned-pending")
-        abandoned_state = load_state(abandoned_workspace)
-        abandoned_state["status"] = "worker_running"
-        abandoned_state["current_run_id"] = "run-current"
-        write_state(abandoned_workspace, abandoned_state)
-        abandoned_pending = abandoned_workspace / "runs" / "run-abandoned" / "pending.json"
-        abandoned_pending.parent.mkdir(parents=True, exist_ok=True)
-        abandoned_pending.write_text(
-            '{"schema_version":1,"run_id":"run-abandoned","started_at":"2026-05-11T00:00:00Z","status":"worker_running"}\n',
-            encoding="utf-8",
-        )
-        abandoned_health = health_workspace(abandoned_workspace, history_limit=5)
-        if not any(item.get("flag") == "ABANDONED_PENDING_RUN" and item.get("run_id") == "run-abandoned" for item in abandoned_health.get("history_warnings", [])):
-            errors.append("health should report abandoned pending worker starts")
-        if not abandoned_health.get("pending_runs"):
-            errors.append("health should expose pending run markers")
-        if any("instruction" in item for item in abandoned_health.get("pending_runs", [])):
-            errors.append("pending run markers should not carry full next_instruction text")
-        boundary_workspace = _write_workspace(root / "boundary")
-        load_state(boundary_workspace)
-        project_slug = str(boundary_workspace.parent.resolve()).replace("/", "-")
-        transcript_dir = Path.home() / ".claude" / "projects" / project_slug
-        transcript_dir.mkdir(parents=True, exist_ok=True)
-        boundary_session = "fixture-supervisor-boundary"
-        transcript_path = transcript_dir / f"{boundary_session}.jsonl"
-        transcript_path.write_text(
-            json.dumps({
-                "timestamp": "2026-05-11T00:00:00Z",
-                "message": {
-                    "content": [
-                        {"type": "tool_use", "name": "Write", "input": {"file_path": str(boundary_workspace / "CURRENT.md"), "content": "ok"}},
-                        {"type": "tool_use", "name": "Edit", "input": {"file_path": str(boundary_workspace.parent / "app.py"), "old_string": "a", "new_string": "b"}},
-                    ]
-                },
-            }, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-        boundary_health = health_workspace(boundary_workspace, supervisor_session_id=boundary_session, history_limit=5)
-        boundary_violations = boundary_health.get("supervisor_boundary_violations") or []
-        if len(boundary_violations) != 1 or not str(boundary_violations[0].get("path", "")).endswith("app.py"):
-            errors.append("health should report supervisor edits to host files outside the twin workspace")
-        if "SUPERVISOR_BOUNDARY_VIOLATION" not in boundary_health.get("run_health", {}).get("quality_flags", []):
-            errors.append("supervisor boundary violations should require attention")
-        persona_workspace = _write_workspace(root / "persona-boundary")
-        load_state(persona_workspace)
-        persona_session = "fixture-supervisor-persona-boundary"
-        persona_transcript = transcript_dir / f"{persona_session}.jsonl"
-        persona_transcript.write_text(
-            json.dumps({
-                "timestamp": "2026-05-11T00:00:00Z",
-                "message": {
-                    "content": [
-                        {"type": "tool_use", "name": "Write", "input": {"file_path": str(PERSONAS_DIR / "worker-persona.md"), "content": "polluted"}},
-                        {"type": "tool_use", "name": "Bash", "input": {"command": "printf polluted > $DEV_RULES/personas/supervisor-persona.md"}},
-                    ]
-                },
-            }, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-        persona_health = health_workspace(persona_workspace, supervisor_session_id=persona_session, history_limit=5)
-        persona_violations = persona_health.get("supervisor_boundary_violations") or []
-        if not persona_violations or any(item.get("flag") != "PERSONA_SOURCE_WRITE" for item in persona_violations):
-            errors.append("health should report supervisor writes inside $DEV_RULES/personas")
-        if "PERSONA_SOURCE_WRITE" not in persona_health.get("run_health", {}).get("quality_flags", []):
-            errors.append("persona source writes should require attention")
-        fallback_workspace = _write_workspace(root / "boundary-fallback")
-        load_state(fallback_workspace)
-        fallback_session = "fixture-supervisor-boundary-fallback"
-        fallback_transcript_dir = Path.home() / ".claude" / "projects" / "-tmp-fixture-other-project"
-        fallback_transcript_dir.mkdir(parents=True, exist_ok=True)
-        (fallback_transcript_dir / f"{fallback_session}.jsonl").write_text(
-            json.dumps({
-                "timestamp": "2026-05-11T00:00:00Z",
-                "message": {
-                    "content": [
-                        {"type": "tool_use", "name": "Edit", "input": {"file_path": str(fallback_workspace.parent / "host.py"), "old_string": "a", "new_string": "b"}},
-                    ]
-                },
-            }, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-        fallback_health = health_workspace(fallback_workspace, supervisor_session_id=fallback_session, history_limit=5)
-        fallback_violations = fallback_health.get("supervisor_boundary_violations") or []
-        if len(fallback_violations) != 1 or not str(fallback_violations[0].get("transcript", "")).endswith(f"{fallback_session}.jsonl"):
-            errors.append("health should find supervisor transcripts outside the host project slug")
-        bad_contract_workspace = _write_workspace(root / "bad-contract")
-        load_state(bad_contract_workspace)
-        (bad_contract_workspace / "feature_ledger.yaml").write_text(
-            """schema_version: 1
-goal_id: fixture-goal
-items:
-  - id: F1
-    deliverable: 完成 fixture 主流程
-    scope: 只覆盖 greenfield worker turn
-    covers_ac: [AC1, AC2]
-    evidence_plan: [tests pass]
-    actual_evidence:
-      - path: docs/bugs/report.md
-    depends_on: []
-    status: completed
-    next_action: ""
-""",
-            encoding="utf-8",
-        )
-        bad_contract_health = health_workspace(bad_contract_workspace, history_limit=5)
-        if not bad_contract_health.get("degraded"):
-            errors.append("health should return degraded report for invalid workspace contract")
-        if not any(item.get("flag") == "WORKSPACE_CONTRACT_INVALID" for item in bad_contract_health.get("history_warnings", [])):
-            errors.append("degraded health should expose workspace contract errors")
-        if not bad_contract_health.get("run_health", {}).get("requires_attention"):
-            errors.append("degraded health should require attention")
+        if not isinstance(context.get("run"), dict):
+            errors.append("review context should expose the raw run artifact for supervisor judgment")
+
         cli = subprocess.run(
             [
                 sys.executable,
                 "-m",
-                "scripts.xuejiao_twin",
+                "scripts.twin",
                 "review-context",
                 "--workspace",
                 str(workspace),
@@ -799,33 +551,6 @@ items:
         )
         if cli.returncode != 0:
             errors.append(f"review-context --json should be accepted by CLI: {cli.stderr.strip()}")
-        health_cli = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "scripts.xuejiao_twin",
-                "health",
-                "--workspace",
-                str(workspace),
-                "--run-id",
-                run["run_id"],
-                "--json",
-            ],
-            cwd=Path(__file__).resolve().parents[2],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if health_cli.returncode != 0:
-            errors.append(f"health --json should be accepted by CLI: {health_cli.stderr.strip()}")
-        else:
-            try:
-                parsed_health = json.loads(health_cli.stdout)
-            except json.JSONDecodeError as exc:
-                errors.append(f"health --json should emit JSON: {exc}")
-            else:
-                if "run_health" not in parsed_health or "history_warnings" not in parsed_health:
-                    errors.append("health --json should expose run_health and history_warnings")
 
         continue_review = _review("CONTINUE", gaps=["F1 missing"], actions=["fix_drift", "validate_more"])
         state = apply_supervisor_review(workspace, run["run_id"], continue_review)
@@ -841,19 +566,6 @@ items:
         if not second["worker"]["resume_used"]:
             errors.append("second run artifact should mark resume_used")
         apply_supervisor_review(workspace, second["run_id"], _review("CONTINUE"))
-
-        reset_action_run = start_worker_turn(workspace, "测试显式 reset action", runner=runner)
-        reset_action_state = apply_supervisor_review(
-            workspace,
-            reset_action_run["run_id"],
-            _review("CONTINUE", actions=["reset_worker_session"]),
-        )
-        if reset_action_state.get("worker_session_id") is not None:
-            errors.append("reset_worker_session action should clear worker_session_id")
-        after_reset = start_worker_turn(workspace, "reset 后 fresh start", runner=runner)
-        if runner.calls[-1].get("session_id"):
-            errors.append("worker turn after reset_worker_session should not resume")
-        apply_supervisor_review(workspace, after_reset["run_id"], _review("CONTINUE"))
 
         reset_runner = FakeRunner(session_lost_once=True)
         reset = start_worker_turn(workspace, "测试 session reset", runner=reset_runner)
@@ -904,24 +616,6 @@ items:
             errors.append("consumed human_response.json should not be re-injected into worker prompt")
         apply_supervisor_review(workspace, post_consume["run_id"], _review("CONTINUE"))
 
-        repeat_review = _review("CONTINUE", gaps=["same gap"], actions=[])
-        repeat_workspace = _write_workspace(root / "repeat")
-        repeat_runner = FakeRunner()
-        repeat_run = start_worker_turn(repeat_workspace, "重复 gap fixture", runner=repeat_runner)
-        apply_supervisor_review(repeat_workspace, repeat_run["run_id"], repeat_review)
-        repeat_run = start_worker_turn(repeat_workspace, "重复 gap fixture", runner=repeat_runner)
-        second_repeat_state = apply_supervisor_review(repeat_workspace, repeat_run["run_id"], repeat_review)
-        if second_repeat_state.get("next_instruction") != "继续 fixture":
-            errors.append("second same gap should keep supervisor-authored instruction unchanged")
-        repeat_run = start_worker_turn(repeat_workspace, "重复 gap fixture", runner=repeat_runner)
-        repeat_state = apply_supervisor_review(repeat_workspace, repeat_run["run_id"], repeat_review)
-        if repeat_state.get("status") != "needs_human":
-            errors.append("same gap for three rounds should require human")
-        record_human_response(repeat_workspace, "改方向：先补 AC2 证据")
-        repeat_after_respond = load_state(repeat_workspace)
-        if repeat_after_respond.get("failure_streaks"):
-            errors.append("respond should reset failure_streaks so the next round is not immediately escalated")
-
         weak_workspace = _write_workspace(root / "weak-output")
         weak_runner = FakeRunner(output_text="我会继续收敛 F6/AC1")
         weak_run = start_worker_turn(weak_workspace, "弱输出 fixture", runner=weak_runner)
@@ -930,8 +624,6 @@ items:
             if flag not in weak_flags:
                 errors.append(f"weak worker output should record {flag}")
         weak_context = build_review_context(weak_workspace, weak_run["run_id"])
-        if not weak_context.get("run_health", {}).get("requires_attention"):
-            errors.append("weak run health should require attention")
         if weak_context.get("review_skeleton", {}).get("decision") != "<ACCEPTED_DONE|CONTINUE|NEEDS_HUMAN|FAILED>":
             errors.append("weak run context should not preselect a decision")
 
@@ -955,23 +647,6 @@ items:
             errors.append("ACCEPTED_DONE with remaining gaps should fail")
         except WorkspaceError:
             pass
-
-        dirty_root = root / "dirty-host"
-        dirty_workspace = _write_workspace(dirty_root, completed=True)
-        git_init = subprocess.run(["git", "init"], cwd=dirty_root, capture_output=True, text=True, check=False)
-        if git_init.returncode == 0:
-            (dirty_root / "app.py").write_text("print('dirty')\n", encoding="utf-8")
-            dirty_runner = FakeRunner()
-            dirty_run = start_worker_turn(dirty_workspace, "final", runner=dirty_runner)
-            try:
-                apply_supervisor_review(dirty_workspace, dirty_run["run_id"], _review("ACCEPTED_DONE"))
-                errors.append("ACCEPTED_DONE should fail when host repo has uncommitted non-workspace changes")
-            except WorkspaceError:
-                pass
-            allowed_dirty = _review("ACCEPTED_DONE", actions=["allow_uncommitted_evidence"])
-            state = apply_supervisor_review(dirty_workspace, dirty_run["run_id"], allowed_dirty)
-            if state.get("status") != "accepted_done":
-                errors.append("allow_uncommitted_evidence should permit explicit dirty-host handoff")
 
         done = _review("ACCEPTED_DONE")
         state = apply_supervisor_review(done_workspace, done_run["run_id"], done)

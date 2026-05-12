@@ -1,0 +1,14 @@
+schema_version: 1
+goal_id: example-slug
+items:
+  - id: F1
+    deliverable: 一个可验收的交付物，不写泛泛任务
+    scope: 本项的边界；不要超出 AC 覆盖范围
+    covers_ac:
+      - AC1
+    evidence_plan:
+      - 预计产生的证据，如测试命令、preflight、diff、PR 链接
+    actual_evidence: []
+    depends_on: []
+    status: pending
+    next_action: 给 worker 的下一步最短动作；要具体到命令或文件
