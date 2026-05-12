@@ -9,6 +9,23 @@ from pathlib import Path
 from typing import Any
 
 
+WORKER_TIMEOUT_ENV = "XUEJIAO_TWIN_WORKER_TIMEOUT_SECONDS"
+DEFAULT_WORKER_TIMEOUT_SECONDS = 3600
+
+
+def default_worker_timeout_seconds() -> int:
+    raw = os.environ.get(WORKER_TIMEOUT_ENV)
+    if raw is None or raw.strip() == "":
+        return DEFAULT_WORKER_TIMEOUT_SECONDS
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{WORKER_TIMEOUT_ENV} must be an integer number of seconds") from exc
+    if value <= 0:
+        raise ValueError(f"{WORKER_TIMEOUT_ENV} must be greater than 0")
+    return value
+
+
 @dataclass
 class ClaudeRunResult:
     session_id: str
@@ -56,7 +73,7 @@ def run_claude_headless(
     max_budget_usd: float = 1.0,
     session_id: str = "",
     dry_run: bool = False,
-    timeout_seconds: int = 3600,
+    timeout_seconds: int | None = None,
     disallowed_tools: list[str] | None = None,
     permission_mode: str = "",
     role: str = "",
@@ -66,6 +83,8 @@ def run_claude_headless(
     strict_mcp_config: bool = True,
     stream_output_path: Path | None = None,
 ) -> ClaudeRunResult:
+    if timeout_seconds is None:
+        timeout_seconds = default_worker_timeout_seconds()
     if dry_run:
         return ClaudeRunResult(
             session_id=session_id or "dry-run-session",

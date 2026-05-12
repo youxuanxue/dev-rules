@@ -195,43 +195,11 @@ next turn:   claude -p --resume <worker_session_id> ...
 
 ## human gate
 
-human gate 的机械边界由 Claude Code 原生 `--allowedTools` / `--disallowedTools` / settings / hooks，加上 dev-rules 和项目 `CLAUDE.md` 承担；本节只保留 supervisor 判断语义，不新增配置层。
-
-`NEEDS_HUMAN` 只用于真正高风险：
-
-- 直接改 `main` / `master` / release 分支、force push、改写已发布历史、merge 到受保护分支。
-- 真实架构边界变更，且 plan mode / dev-rules / 项目上下文未明确覆盖。
-- 安全边界变更：鉴权、授权、租户隔离、密钥/凭证路径、输入安全模型。
-- 数据高风险：迁移、删除、不可逆状态变更、生产数据读写。
-- 云资源、IAM、网络、CI/CD 发布链路、生产配置。
-- deploy、发布 release、通知外部用户/客户、修改远端共享资源。
-- 业务目标不清，且无法从 goal / persona / repo facts 推断。
-- 同一问题连续 3 次失败。
-
-默认不需要问人：
-
-- 非 main / 非受保护分支 commit。
-- push 到任务分支或 worktree 对应远端分支。
-- 创建或更新 PR，包括 draft PR。
-- 更新 PR 描述、追加验证结果、同步分支内修复。
-- 新增普通代码依赖或 dev/test 依赖，只要理由清晰、锁文件同步、验证通过，且不改变安全/架构/基础设施边界。
-- 低风险文档、测试、脚本、局部实现调整。
-
-依赖新增不自动等于高风险。只有改变核心架构、供应链/许可证/安全边界、运行时基础设施、生产部署方式，或引入明显高爆炸半径时，才升级为 `NEEDS_HUMAN`。
+human gate 的机械边界由 Claude Code 原生 `--allowedTools` / `--disallowedTools` / settings / hooks，加上 dev-rules 和项目 `CLAUDE.md` 承担；本节只保留 supervisor 判断语义，不新增配置层。具体高风险/常规分类的权威载体是 `personas/supervisor-persona.md`，本文不复述。
 
 ## 用户命令面
 
-`xuejiao-twin` 作为全新 skill / capability 设计，不保留旧命令兼容包袱。
-
-只保留极少入口：
-
-```text
-/twin <workspace>     # 执行已包含 goal + feature_ledger 的目标工作区；自动 run/review/continue
-/twin status [workspace]  # 查看 goal、ledger 进度、阻塞、人类需要回答什么
-/twin respond <text>  # 回答 NEEDS_HUMAN 后继续
-```
-
-`init / run / next / replay / validate / replan` 是内部阶段、debug 子命令或高级维护入口，不作为日常用户命令暴露。
+权威载体是 `commands/twin.md`；本文不复述命令面。`xuejiao-twin` 是全新 skill / capability，不保留旧命令兼容包袱：`init / run / next / replay / validate / replan` 是内部阶段或维护入口，不作为日常用户命令暴露。
 
 ## 参考仓库取舍
 
