@@ -5,6 +5,7 @@ import json
 import sys
 from pathlib import Path
 
+from .bootstrap import draft_workspace, write_workspace_draft
 from .worker import DEFAULT_WORKER_MAX_BUDGET_USD, WORKER_MAX_BUDGET_ENV
 from .runtime import (
     apply_supervisor_review,
@@ -35,14 +36,16 @@ def _print_needs_human(status: dict[str, object]) -> None:
         return
     workspace = Path(str(status["workspace"]))
     run_id = status.get("current_run_id") or "<run_id>"
-    print("NEEDS_HUMAN")
+    print("status=needs_human")
     print(f"question={needs_human.get('question') or ''}")
-    print(f"context={needs_human.get('context') or ''}")
-    print(f"current={workspace / 'CURRENT.md'}")
-    print(f"state={workspace / 'supervisor_state.json'}")
-    print(f"run={workspace / 'runs' / str(run_id) / 'run.json'}")
-    print(f"review={workspace / 'runs' / str(run_id) / 'run.json'}::review")
-    print(f"respond=python3 -m scripts.twin respond --workspace {workspace} --text '<answer>'")
+    context = str(needs_human.get('context') or '')
+    if context:
+        print(f"context={context}")
+    print(f"respond=/twin respond <answer>")
+    print(f"evidence_current={workspace / 'CURRENT.md'}")
+    print(f"evidence_state={workspace / 'supervisor_state.json'}")
+    print(f"evidence_run={workspace / 'runs' / str(run_id) / 'run.json'}")
+    print(f"evidence_review={workspace / 'runs' / str(run_id) / 'run.json'}::review")
 
 
 def _cmd_status(args: argparse.Namespace) -> int:
@@ -73,7 +76,7 @@ def _cmd_respond(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 2
     print(f"human_response_written={target}")
-    print("next=当前 Claude Code supervisor 读取 supervisor-context 后生成下一条 worker instruction")
+    print("next=/twin <workspace> resumes the supervisor loop")
     return 0
 
 
@@ -125,6 +128,30 @@ def _cmd_review(args: argparse.Namespace) -> int:
         print(f"status={state['status']}")
         print(f"next_instruction={state.get('next_instruction') or 'none'}")
         _print_needs_human(status)
+    return 0
+
+
+def _cmd_bootstrap(args: argparse.Namespace) -> int:
+    try:
+        draft = draft_workspace(args.goal, Path(args.workspace) if args.workspace else None)
+        if args.write:
+            workspace = write_workspace_draft(draft, overwrite=args.overwrite)
+            if args.json:
+                _print_json({"workspace": str(workspace), "status": "written"})
+            else:
+                print(f"workspace={workspace}")
+                print("status=written")
+            return 0
+    except WorkspaceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if args.json:
+        _print_json(draft)
+    else:
+        print(f"workspace={draft['workspace']}")
+        print(f"goal={draft['goal']['one_liner']}")
+        print("files=goal.yaml, plan.yaml")
+        print("next=review draft, then rerun with --write or use /twin confirmation flow")
     return 0
 
 
@@ -183,6 +210,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_review.add_argument("--review-file", required=True)
     p_review.add_argument("--json", action="store_true")
     p_review.set_defaults(func=_cmd_review)
+
+    p_bootstrap = sub.add_parser("bootstrap")
+    p_bootstrap.add_argument("goal")
+    p_bootstrap.add_argument("--workspace")
+    p_bootstrap.add_argument("--write", action="store_true")
+    p_bootstrap.add_argument("--overwrite", action="store_true")
+    p_bootstrap.add_argument("--json", action="store_true")
+    p_bootstrap.set_defaults(func=_cmd_bootstrap)
 
     p_validate = sub.add_parser("validate")
     p_validate.add_argument("path", nargs="?", default="")

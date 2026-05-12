@@ -9,7 +9,7 @@ from .contracts import (
     GOAL_SCHEMA,
     HUMAN_RESPONSE_FILE,
     HUMAN_RESPONSE_SCHEMA,
-    LEDGER_SCHEMA,
+    PLAN_SCHEMA,
     LEGACY_PLAN_FILES,
     PLAN_FILE,
     RUNS_DIR,
@@ -59,7 +59,7 @@ def load_goal(workspace: Path) -> dict[str, Any]:
 
 def load_plan(workspace: Path) -> dict[str, Any]:
     plan = read_yaml_like(plan_path(workspace))
-    errors = validate_schema(plan, LEDGER_SCHEMA)
+    errors = validate_schema(plan, PLAN_SCHEMA)
     if errors:
         raise WorkspaceError("plan schema errors: " + "; ".join(errors))
     return plan

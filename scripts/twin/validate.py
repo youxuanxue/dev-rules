@@ -10,16 +10,18 @@ from pathlib import Path
 from typing import Any
 
 from . import contracts, util
+from .bootstrap import draft_workspace, write_workspace_draft
 from .claude_runner import ClaudeRunResult
 from .contracts import (
     GOAL_SCHEMA,
-    LEDGER_SCHEMA,
+    PLAN_SCHEMA,
     PERSONAS_DIR,
     RUN_SCHEMA,
     SUPERVISOR_REVIEW_SCHEMA,
     SUPERVISOR_STATE_SCHEMA,
     WORKER_PERSONA_PATH,
 )
+from .loop import run_supervisor_loop
 from .plan import acceptance_evidence, plan_gaps, validate_plan_semantics
 from .runtime import (
     apply_supervisor_review,
@@ -192,7 +194,7 @@ def _schema_errors() -> list[str]:
             errors.append(f"stale util helper should not be public: {stale_name}")
     for value, schema in [
         (_goal(), GOAL_SCHEMA),
-        (_plan(), LEDGER_SCHEMA),
+        (_plan(), PLAN_SCHEMA),
         (_review("continue", actions=["fix_drift", "validate_more", "mark_plan_gap"]), SUPERVISOR_REVIEW_SCHEMA),
     ]:
         errors.extend(validate_schema(value, schema))
@@ -330,6 +332,15 @@ def run_fixture_validation() -> list[str]:
     errors: list[str] = _schema_errors() + _semantic_errors() + _behavior_helper_errors()
     with tempfile.TemporaryDirectory(prefix="twin-greenfield-") as tmp:
         root = Path(tmp)
+        bootstrap_draft = draft_workspace("交付 bootstrap fixture", root / "bootstrap-workspace")
+        bootstrap_workspace = write_workspace_draft(bootstrap_draft)
+        try:
+            validate_workspace(bootstrap_workspace)
+        except WorkspaceError as exc:
+            errors.append(f"bootstrap workspace failed validation: {exc}")
+        if not (bootstrap_workspace / "goal.yaml").exists() or not (bootstrap_workspace / "plan.yaml").exists():
+            errors.append("bootstrap should write goal.yaml and plan.yaml")
+
         workspace = _write_workspace(root)
         try:
             validate_workspace(workspace)
@@ -597,6 +608,15 @@ def run_fixture_validation() -> list[str]:
         status = status_workspace(workspace)
         if not status.get("needs_human") or status.get("current_run_id") != needs_run["run_id"]:
             errors.append("status should expose needs_human and the latest run")
+        needs_cli = subprocess.run(
+            [sys.executable, "-m", "scripts.twin", "status", "--workspace", str(workspace)],
+            cwd=Path(__file__).resolve().parents[2],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if "respond=/twin respond <answer>" not in needs_cli.stdout or "evidence_review=" not in needs_cli.stdout:
+            errors.append("needs_human CLI should lead with the question and /twin respond path")
         try:
             start_worker_turn(workspace, "不应启动", runner=runner)
             errors.append("worker should not start while needs_human pending")
@@ -617,6 +637,24 @@ def run_fixture_validation() -> list[str]:
         if "human_response.json" in str(runner.calls[-1].get("prompt")):
             errors.append("consumed human_response.json should not be re-injected into worker prompt")
         apply_supervisor_review(workspace, post_consume["run_id"], _review("continue"))
+
+        loop_workspace = _write_workspace(root / "loop")
+        loop_runner = FakeRunner()
+        review_count = {"value": 0}
+
+        def loop_review(_context: dict[str, Any]) -> dict[str, Any]:
+            review_count["value"] += 1
+            return _review("continue" if review_count["value"] == 1 else "accepted_done")
+
+        loop_result = run_supervisor_loop(
+            loop_workspace,
+            instruction="执行 loop fixture",
+            review_fn=loop_review,
+            runner=loop_runner,
+            max_rounds=3,
+        )
+        if loop_result.get("status") != "accepted_done" or len(loop_result.get("runs") or []) != 2:
+            errors.append("supervisor loop should continue automatically until terminal status")
 
         weak_workspace = _write_workspace(root / "weak-output")
         weak_runner = FakeRunner(output_text="我会继续收敛 F6/AC1")

@@ -4,14 +4,13 @@
 
 ## Bootstrap
 
-`/twin "<one-line goal>"` 不是 workspace 路径时，supervisor 先草拟：
+`/twin "<one-line goal>"` 不是 workspace 路径时，supervisor 先调用：
 
-```text
-<workspace>/goal.yaml
-<workspace>/plan.yaml
+```bash
+PYTHONPATH=$DEV_RULES python3 -m scripts.twin bootstrap "<goal>" --json
 ```
 
-用 `AskUserQuestion` 展示 goal、AC、non-goals、plan items，并请求确认。确认后写入文件，再进入执行闭环。
+这会返回草稿 workspace、`goal.yaml`、`plan.yaml`。supervisor 用 `AskUserQuestion` 展示 goal、AC、non-goals、plan items，并请求确认。确认后调用同命令加 `--write` 写入文件，再进入执行闭环。
 
 ## 每轮调用顺序
 
