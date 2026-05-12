@@ -7,7 +7,7 @@ from typing import Any
 from .contracts import GOAL_FILE, PLAN_FILE, SCHEMA_VERSION
 from .plan import validate_plan_semantics
 from .schema_contract import validate_schema
-from .util import write_yaml_like
+from .util import read_yaml_like, write_yaml_like
 from .workspace import WorkspaceError, load_state, render_current, validate_workspace
 
 
@@ -63,6 +63,21 @@ def draft_workspace(goal: str, workspace: Path | None = None) -> dict[str, Any]:
         raise WorkspaceError("bootstrap draft schema errors: " + "; ".join(errors))
     return {
         "workspace": str(target),
+        "goal": goal_doc,
+        "plan": plan_doc,
+    }
+
+
+def draft_from_files(workspace: Path, goal_file: Path, plan_file: Path) -> dict[str, Any]:
+    goal_doc = read_yaml_like(goal_file.expanduser().resolve())
+    plan_doc = read_yaml_like(plan_file.expanduser().resolve())
+    errors = validate_schema(goal_doc, "twin.goal.schema.json")
+    errors.extend(validate_schema(plan_doc, "twin.plan.schema.json"))
+    errors.extend(validate_plan_semantics(goal_doc, plan_doc))
+    if errors:
+        raise WorkspaceError("supervisor-authored bootstrap artifacts are invalid: " + "; ".join(errors))
+    return {
+        "workspace": str(workspace),
         "goal": goal_doc,
         "plan": plan_doc,
     }

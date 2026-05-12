@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from .bootstrap import draft_workspace, write_workspace_draft
+from .bootstrap import draft_from_files, draft_workspace, write_workspace_draft
 from .worker import DEFAULT_WORKER_MAX_BUDGET_USD, WORKER_MAX_BUDGET_ENV
 from .runtime import (
     apply_supervisor_review,
@@ -133,7 +133,12 @@ def _cmd_review(args: argparse.Namespace) -> int:
 
 def _cmd_bootstrap(args: argparse.Namespace) -> int:
     try:
-        draft = draft_workspace(args.goal, Path(args.workspace) if args.workspace else None)
+        if args.goal_file or args.plan_file:
+            if not args.workspace or not args.goal_file or not args.plan_file:
+                raise WorkspaceError("--workspace, --goal-file, and --plan-file are required together")
+            draft = draft_from_files(Path(args.workspace), Path(args.goal_file), Path(args.plan_file))
+        else:
+            draft = draft_workspace(args.goal or "", Path(args.workspace) if args.workspace else None)
         if args.write:
             workspace = write_workspace_draft(draft, overwrite=args.overwrite)
             if args.json:
@@ -212,8 +217,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_review.set_defaults(func=_cmd_review)
 
     p_bootstrap = sub.add_parser("bootstrap")
-    p_bootstrap.add_argument("goal")
+    p_bootstrap.add_argument("goal", nargs="?", default="")
     p_bootstrap.add_argument("--workspace")
+    p_bootstrap.add_argument("--goal-file")
+    p_bootstrap.add_argument("--plan-file")
     p_bootstrap.add_argument("--write", action="store_true")
     p_bootstrap.add_argument("--overwrite", action="store_true")
     p_bootstrap.add_argument("--json", action="store_true")

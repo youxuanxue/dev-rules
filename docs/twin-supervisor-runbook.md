@@ -4,13 +4,15 @@
 
 ## Bootstrap
 
-`/twin "<one-line goal>"` 不是 workspace 路径时，supervisor 先调用：
+`/twin "<one-line goal>"` 不是 workspace 路径时，当前 Claude Code supervisor 先按 plan mode 的方式调研 repo facts，并亲自草拟 `goal.yaml + plan.yaml`。Python 不替 supervisor 做规划。
+
+supervisor 用 `AskUserQuestion` 展示 goal、AC、non-goals、plan items，并请求确认。确认后把草稿写到临时文件，再调用：
 
 ```bash
-PYTHONPATH=$DEV_RULES python3 -m scripts.twin bootstrap "<goal>" --json
+PYTHONPATH=$DEV_RULES python3 -m scripts.twin bootstrap --workspace <ws> --goal-file <goal.yaml> --plan-file <plan.yaml> --write
 ```
 
-这会返回草稿 workspace、`goal.yaml`、`plan.yaml`。supervisor 用 `AskUserQuestion` 展示 goal、AC、non-goals、plan items，并请求确认。确认后调用同命令加 `--write` 写入文件，再进入执行闭环。
+这一步只写入并校验 workspace。`python3 -m scripts.twin bootstrap "<goal>" --json` 只提供最小 scaffold fallback，用于契约测试或快速起草，不代表真实 planning。
 
 ## 每轮调用顺序
 

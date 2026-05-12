@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from . import contracts, util
-from .bootstrap import draft_workspace, write_workspace_draft
+from .bootstrap import draft_from_files, draft_workspace, write_workspace_draft
 from .claude_runner import ClaudeRunResult
 from .contracts import (
     GOAL_SCHEMA,
@@ -340,6 +340,17 @@ def run_fixture_validation() -> list[str]:
             errors.append(f"bootstrap workspace failed validation: {exc}")
         if not (bootstrap_workspace / "goal.yaml").exists() or not (bootstrap_workspace / "plan.yaml").exists():
             errors.append("bootstrap should write goal.yaml and plan.yaml")
+        authored_source = _write_workspace(root / "supervisor-authored-source")
+        authored_draft = draft_from_files(
+            root / "supervisor-authored-target",
+            authored_source / "goal.yaml",
+            authored_source / "plan.yaml",
+        )
+        authored_workspace = write_workspace_draft(authored_draft)
+        try:
+            validate_workspace(authored_workspace)
+        except WorkspaceError as exc:
+            errors.append(f"supervisor-authored bootstrap artifacts should validate: {exc}")
 
         workspace = _write_workspace(root)
         try:
