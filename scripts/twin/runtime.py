@@ -8,7 +8,7 @@ from .worker import start_worker_turn
 from .workspace import (
     WorkspaceError,
     load_goal,
-    load_ledger,
+    load_plan,
     load_state,
     render_current,
     status_summary,
@@ -27,13 +27,13 @@ def record_human_response(workspace: Path | str, text: str) -> Path:
     validate_workspace(workspace_path)
     target = write_human_response(workspace_path, text)
     goal = load_goal(workspace_path)
-    ledger = load_ledger(workspace_path)
+    plan = load_plan(workspace_path)
     state = load_state(workspace_path)
     state["status"] = "continue"
     state["needs_human"] = None
     state["next_instruction"] = ""
     write_state(workspace_path, state)
-    render_current(workspace_path, goal, ledger, state)
+    render_current(workspace_path, goal, plan, state)
     return target
 
 

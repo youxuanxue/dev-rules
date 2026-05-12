@@ -10,15 +10,15 @@ def ac_ids(goal: dict[str, Any]) -> set[str]:
     return {str(item.get("id")) for item in goal.get("acceptance_criteria", []) if isinstance(item, dict) and item.get("id")}
 
 
-def validate_ledger_semantics(goal: dict[str, Any], ledger: dict[str, Any]) -> list[str]:
+def validate_plan_semantics(goal: dict[str, Any], plan: dict[str, Any]) -> list[str]:
     errors: list[str] = []
-    if ledger.get("goal_id") != goal.get("id"):
-        errors.append("ledger.goal_id must match goal.id")
+    if plan.get("goal_id") != goal.get("id"):
+        errors.append("plan.goal_id must match goal.id")
 
     known_ac = ac_ids(goal)
-    items = ledger.get("items", [])
+    items = plan.get("items", [])
     if not isinstance(items, list):
-        return errors + ["ledger.items must be a list"]
+        return errors + ["plan.items must be a list"]
 
     item_ids: set[str] = set()
     dependencies: dict[str, list[str]] = {}
@@ -32,7 +32,7 @@ def validate_ledger_semantics(goal: dict[str, Any], ledger: dict[str, Any]) -> l
             errors.append(f"items[{index}].id is required")
             continue
         if item_id in item_ids:
-            errors.append(f"duplicate ledger item id: {item_id}")
+            errors.append(f"duplicate plan item id: {item_id}")
         item_ids.add(item_id)
         status = item.get("status")
         if status not in ITEM_STATUSES:
@@ -49,7 +49,7 @@ def validate_ledger_semantics(goal: dict[str, Any], ledger: dict[str, Any]) -> l
         dependencies[item_id] = [str(dep) for dep in item.get("depends_on", [])]
 
     for ac_id in sorted(known_ac - covered_ac):
-        errors.append(f"acceptance criterion not covered by ledger: {ac_id}")
+        errors.append(f"acceptance criterion not covered by plan: {ac_id}")
 
     for item_id, deps in dependencies.items():
         for dep in deps:
@@ -76,16 +76,16 @@ def validate_ledger_semantics(goal: dict[str, Any], ledger: dict[str, Any]) -> l
     return errors
 
 
-def item_counts(ledger: dict[str, Any]) -> dict[str, int]:
+def item_counts(plan: dict[str, Any]) -> dict[str, int]:
     counts: dict[str, int] = defaultdict(int)
-    for item in ledger.get("items", []):
+    for item in plan.get("items", []):
         if isinstance(item, dict):
             counts[str(item.get("status") or "unknown")] += 1
     return dict(counts)
 
 
-def choose_next_item(ledger: dict[str, Any]) -> dict[str, Any] | None:
-    items = [item for item in ledger.get("items", []) if isinstance(item, dict)]
+def choose_next_item(plan: dict[str, Any]) -> dict[str, Any] | None:
+    items = [item for item in plan.get("items", []) if isinstance(item, dict)]
     item_by_id = {str(item.get("id")): item for item in items}
     for item in items:
         if item.get("status") == "in_progress":
@@ -102,15 +102,15 @@ def choose_next_item(ledger: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def apply_ledger_updates(ledger: dict[str, Any], updates: list[dict[str, Any]]) -> list[str]:
+def apply_plan_updates(plan: dict[str, Any], updates: list[dict[str, Any]]) -> list[str]:
     errors: list[str] = []
-    items = ledger.get("items", [])
+    items = plan.get("items", [])
     item_by_id = {str(item.get("id")): item for item in items if isinstance(item, dict)}
     for update in updates:
         item_id = str(update.get("item_id") or "")
         item = item_by_id.get(item_id)
         if item is None:
-            errors.append(f"unknown ledger update item_id: {item_id}")
+            errors.append(f"unknown plan update item_id: {item_id}")
             continue
         if "status" in update:
             item["status"] = update["status"]
@@ -129,9 +129,9 @@ def apply_ledger_updates(ledger: dict[str, Any], updates: list[dict[str, Any]]) 
     return errors
 
 
-def ac_evidence_map(ledger: dict[str, Any]) -> dict[str, list[str]]:
+def ac_evidence_map(plan: dict[str, Any]) -> dict[str, list[str]]:
     evidence: dict[str, list[str]] = defaultdict(list)
-    for item in ledger.get("items", []):
+    for item in plan.get("items", []):
         if not isinstance(item, dict):
             continue
         for ac_id in item.get("covers_ac", []):
@@ -141,9 +141,9 @@ def ac_evidence_map(ledger: dict[str, Any]) -> dict[str, list[str]]:
     return dict(evidence)
 
 
-def ledger_gaps(goal: dict[str, Any], ledger: dict[str, Any]) -> list[str]:
+def plan_gaps(goal: dict[str, Any], plan: dict[str, Any]) -> list[str]:
     gaps: list[str] = []
-    evidence = ac_evidence_map(ledger)
+    evidence = ac_evidence_map(plan)
     for ac in goal.get("acceptance_criteria", []):
         if not isinstance(ac, dict):
             continue
@@ -151,7 +151,7 @@ def ledger_gaps(goal: dict[str, Any], ledger: dict[str, Any]) -> list[str]:
         if ac_id and not evidence.get(ac_id):
             gaps.append(f"{ac_id}: missing accepted evidence")
 
-    items = [item for item in ledger.get("items", []) if isinstance(item, dict)]
+    items = [item for item in plan.get("items", []) if isinstance(item, dict)]
     item_by_id = {str(item.get("id")): item for item in items}
     for item in items:
         item_id = str(item.get("id") or "")
@@ -171,8 +171,8 @@ def ledger_gaps(goal: dict[str, Any], ledger: dict[str, Any]) -> list[str]:
     return gaps
 
 
-def acceptance_evidence(goal: dict[str, Any], ledger: dict[str, Any]) -> list[dict[str, Any]]:
-    evidence = ac_evidence_map(ledger)
+def acceptance_evidence(goal: dict[str, Any], plan: dict[str, Any]) -> list[dict[str, Any]]:
+    evidence = ac_evidence_map(plan)
     result: list[dict[str, Any]] = []
     for ac in goal.get("acceptance_criteria", []):
         if isinstance(ac, dict) and ac.get("id"):
@@ -180,9 +180,9 @@ def acceptance_evidence(goal: dict[str, Any], ledger: dict[str, Any]) -> list[di
     return result
 
 
-def acceptance_focus(goal: dict[str, Any], ledger: dict[str, Any]) -> dict[str, Any]:
-    next_item = choose_next_item(ledger)
-    evidence = ac_evidence_map(ledger)
+def acceptance_focus(goal: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
+    next_item = choose_next_item(plan)
+    evidence = ac_evidence_map(plan)
     criteria_by_id = {
         str(ac.get("id")): ac
         for ac in goal.get("acceptance_criteria", [])
@@ -210,7 +210,7 @@ def acceptance_focus(goal: dict[str, Any], ledger: dict[str, Any]) -> dict[str, 
     ]
     open_items = [
         item
-        for item in ledger.get("items", [])
+        for item in plan.get("items", [])
         if isinstance(item, dict) and item.get("status") != "completed"
     ]
     open_ac_ids = {str(ac["id"]) for ac in open_acceptance_criteria}
@@ -222,6 +222,6 @@ def acceptance_focus(goal: dict[str, Any], ledger: dict[str, Any]) -> dict[str, 
         "next_item": next_item,
         "open_acceptance_criteria": open_acceptance_criteria,
         "current_item_acceptance_criteria": current_item_acceptance_criteria,
-        "remaining_gaps": ledger_gaps(goal, ledger),
+        "remaining_gaps": plan_gaps(goal, plan),
         "last_mile": last_mile,
     }

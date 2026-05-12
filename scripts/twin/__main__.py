@@ -41,7 +41,7 @@ def _print_needs_human(status: dict[str, object]) -> None:
     print(f"current={workspace / 'CURRENT.md'}")
     print(f"state={workspace / 'supervisor_state.json'}")
     print(f"run={workspace / 'runs' / str(run_id) / 'run.json'}")
-    print(f"review={workspace / 'runs' / str(run_id) / 'supervisor_review.json'}")
+    print(f"review={workspace / 'runs' / str(run_id) / 'run.json'}::review")
     print(f"respond=python3 -m scripts.twin respond --workspace {workspace} --text '<answer>'")
 
 
@@ -96,9 +96,9 @@ def _cmd_worker_turn(args: argparse.Namespace) -> int:
     if args.json:
         _print_json(run)
     else:
-        print(f"run_id={run['run_id']} outcome={run['outcome']} resume_used={run['worker']['resume_used']}")
+        print(f"run_id={run['run_id']} status={run['status']} resume_used={run['worker']['resume_used']}")
         print(f"run={Path(args.workspace).expanduser().resolve() / 'runs' / run['run_id'] / 'run.json'}")
-    return 0 if run["outcome"] == "review_required" else 1
+    return 0 if run["status"] == "review_required" else 1
 
 
 def _cmd_review_context(args: argparse.Namespace) -> int:

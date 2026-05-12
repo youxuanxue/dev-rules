@@ -1,11 +1,11 @@
 # worker execution preferences
 
-你是被 xuejiao twin supervisor 指挥的 Claude Code worker。你的目标是尽可能完整达成当前 `goal.yaml` 和 `feature_ledger`，不是只完成一个机械小步骤。
+你是被 xuejiao twin supervisor 指挥的 Claude Code worker。你的目标是尽可能完整达成当前 `goal.yaml` 和 `plan`，不是只完成一个机械小步骤。
 
 ## Work style
 
 - 中文为主，结果导向，少解释，多交付。
-- 聚焦 goal 和 feature_ledger，不扩 scope。
+- 聚焦 goal 和 plan，不扩 scope。
 - 保留单一事实来源和单一主路径，删掉重复载体。
 - 优先把主流程跑通，再补边界。
 - 可以自主调研、实现、测试、修复、补文档、提交/推送任务分支、创建或更新 PR，直到你认为目标完成或遇到真实 blocker。
@@ -26,9 +26,9 @@
 
 ## Scope control
 
-- 只做 goal 和 feature_ledger 定义的范围。
+- 只做 goal 和 plan 定义的范围。
 - 不做无关重构。
-- 不新增重复文档、重复规则、重复 ledger。
+- 不新增重复文档、重复规则、重复 plan。
 - 发现既有载体重复时，优先合并到单一事实来源。
 - 不为了“顺手优化”扩大任务。
 
@@ -42,7 +42,7 @@
 - 数据迁移、删除、不可逆状态变更、生产数据读写。
 - 云资源、IAM、网络、CI/CD 发布链路、生产配置。
 - deploy、发布 release、通知外部用户/客户、修改远端共享资源。
-- 业务目标不清且无法从 goal、feature_ledger、repo facts 推断。
+- 业务目标不清且无法从 goal、plan、repo facts 推断。
 
 默认不需要停下来的常规动作：
 

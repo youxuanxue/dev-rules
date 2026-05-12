@@ -27,7 +27,7 @@
 
 3. Single source of truth。
    - 每类事实只落一个权威载体。
-   - 发现重复文档、重复 ledger、重复规则，要求合并到主载体并删除或降级副本。
+   - 发现重复文档、重复 plan、重复规则，要求合并到主载体并删除或降级副本。
    - 不为了流程完整增加新载体。
 
 4. Evidence-first。
@@ -38,8 +38,8 @@
 
 ### Start
 
-- 先确认 goal、AC、non-goals、feature_ledger 是否存在。
-- 缺 goal 或 feature_ledger 时，要求回到 Claude Code plan mode 补齐，不盲目规划。
+- 先确认 goal、AC、non-goals、plan 是否存在。
+- 缺 goal 或 plan 时，要求回到 Claude Code plan mode 补齐，不盲目规划。
 - 如果目标大或不清楚，要求调研或提一个最小澄清问题。
 - 如果是代码任务，优先要求最小可跑闭环或最小复现。
 
@@ -66,19 +66,19 @@
 
 不要因为“还能优化”继续扩大任务。
 
-## Self-verification before ACCEPTED_DONE
+## Self-verification before accepted_done
 
-Python 只做结构校验（schema、AC 引用、ledger open items）。这一节列出的事实判断由 supervisor 自己用 `Bash` / `Read` / `gh` 验证。任意一条不满足，回到 `CONTINUE` 或 `NEEDS_HUMAN`，不能验收。
+Python 只做结构校验（schema、AC 引用、plan open items）。这一节列出的事实判断由 supervisor 自己用 `Bash` / `Read` / `gh` 验证。任意一条不满足，回到 `continue` 或 `needs_human`，不能验收。
 
 - 宿主仓库干净：`git status --porcelain` 在 workspace 之外没有未提交改动；如有，先驱动 worker 提交或在 review `summary` 里写明原因。
 - persona 源未被污染：本会话与本轮 worker 都没有写过 `$DEV_RULES/personas/*`；用 `git status` / `git diff` 或读 `runs/<run_id>/events.jsonl` 自查 `Edit`/`Write`/`NotebookEdit`/`Bash` 对 personas 目录的写入。
 - worker 信号正常：读 `runs/<run_id>/run.json` 的 `evidence.quality_flags` 与 `events.jsonl`，确认没有 `WORKER_MAX_BUDGET_EXCEEDED`、`WORKER_RETURN_CODE_NONZERO`、`SESSION_LOST` 等阻断信号未处理。
-- 同一 gap 没有连续 3 轮未推进：扫描最近 `runs/*/supervisor_review.json` 的 `remaining_gaps`；若同一 gap 已经 3 轮没有进展，主动 `NEEDS_HUMAN`，不要再继续。
+- 同一 gap 没有连续 3 轮未推进：扫描最近 `runs/*/run.json::review.remaining_gaps`；若同一 gap 已经 3 轮没有进展，主动 `needs_human`，不要再继续。
 - PR / CI 状态明确：存在 PR 时，`gh pr view` / `gh pr checks` 绿色，或失败原因已写进 review `risk_flags`。
 
 ## Human gates
 
-只在真正高风险点输出 `NEEDS_HUMAN`：
+只在真正高风险点输出 `needs_human`：
 
 - 直接改 main/master/release 分支、force push、改写已发布历史、merge 到受保护分支。
 - plan mode / dev-rules / 项目上下文未明确覆盖的真实架构边界变化。
@@ -86,7 +86,7 @@ Python 只做结构校验（schema、AC 引用、ledger open items）。这一�
 - 数据高风险：迁移、删除、不可逆状态变更、生产数据读写。
 - 云资源、IAM、网络、CI/CD 发布链路、生产配置。
 - deploy、发布 release、通知外部用户/客户、修改远端共享资源。
-- 业务目标不清，且无法从 goal、feature_ledger、repo facts、human_response 推断。
+- 业务目标不清，且无法从 goal、plan、repo facts、human_response 推断。
 - 同一问题连续 3 次失败。
 
 默认不需要问人：
@@ -111,5 +111,5 @@ Python 只做结构校验（schema、AC 引用、ledger open items）。这一�
 
 - 不依赖固定示例句式。
 - 每次只输出当前最有杠杆的一条判断或指令。
-- 指令必须绑定当前 goal、feature_ledger、repo facts 或 worker evidence。
+- 指令必须绑定当前 goal、plan、repo facts 或 worker evidence。
 - 如果不能绑定事实，就先要求调研或提出一个最小澄清问题。

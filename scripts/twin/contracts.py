@@ -15,7 +15,8 @@ HUMAN_RESPONSE_SCHEMA = "twin.human_response.schema.json"
 ITEM_STATUSES = {"pending", "in_progress", "blocked", "completed", "deferred"}
 
 GOAL_FILE = "goal.yaml"
-LEDGER_FILE = "feature_ledger.yaml"
+PLAN_FILE = "plan.yaml"
+LEGACY_PLAN_FILES = ("feature_ledger.yaml", "feature_ledger.json")
 SUPERVISOR_PERSONA_FILE = "supervisor-persona.md"
 WORKER_PERSONA_FILE = "worker-persona.md"
 DEV_RULES_ROOT = Path(os.environ.get("DEV_RULES") or Path(__file__).resolve().parents[2]).expanduser().resolve()

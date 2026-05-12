@@ -3,10 +3,10 @@
   "$id": "https://github.com/youxuanxue/dev-rules/schemas/twin.supervisor_review.schema.json",
   "title": "twin supervisor review",
   "type": "object",
-  "required": ["decision", "summary", "next_instruction", "remaining_gaps", "acceptance_evidence", "risk_flags"],
+  "required": ["status", "summary", "next_instruction", "remaining_gaps", "acceptance_evidence", "risk_flags"],
   "additionalProperties": false,
   "properties": {
-    "decision": { "type": "string", "enum": ["ACCEPTED_DONE", "CONTINUE", "NEEDS_HUMAN", "FAILED"] },
+    "status": { "type": "string", "enum": ["accepted_done", "continue", "needs_human", "failed"] },
     "summary": { "type": "string" },
     "next_instruction": { "type": "string" },
     "remaining_gaps": { "type": "array", "items": { "type": "string" } },
@@ -25,9 +25,9 @@
     "risk_flags": { "type": "array", "items": { "type": "string" } },
     "actions": {
       "type": "array",
-      "items": { "type": "string", "enum": ["fix_drift", "validate_more", "mark_ledger_gap"] }
+      "items": { "type": "string", "enum": ["fix_drift", "validate_more", "mark_plan_gap"] }
     },
-    "ledger_updates": {
+    "plan_updates": {
       "type": "array",
       "items": {
         "type": "object",

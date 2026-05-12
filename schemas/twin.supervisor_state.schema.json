@@ -3,7 +3,7 @@
   "$id": "https://github.com/youxuanxue/dev-rules/schemas/twin.supervisor_state.schema.json",
   "title": "twin supervisor state",
   "type": "object",
-  "required": ["schema_version", "workspace_id", "status", "round_index", "current_run_id", "current_item_id", "worker_session_id", "next_instruction", "last_decision", "needs_human", "updated_at"],
+  "required": ["schema_version", "workspace_id", "status", "round_index", "current_run_id", "current_item_id", "worker_session_id", "next_instruction", "last_review_status", "needs_human", "updated_at"],
   "additionalProperties": false,
   "properties": {
     "schema_version": { "type": "integer", "enum": [1] },
@@ -14,7 +14,7 @@
     "current_item_id": { "type": ["string", "null"] },
     "worker_session_id": { "type": ["string", "null"] },
     "next_instruction": { "type": "string" },
-    "last_decision": { "type": ["string", "null"] },
+    "last_review_status": { "type": ["string", "null"] },
     "needs_human": {
       "type": ["object", "null"],
       "required": ["question", "context", "created_at"],
