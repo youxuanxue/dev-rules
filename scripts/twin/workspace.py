@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 from .contracts import (
+    ACTIVE_WORKSPACE_ENV,
     CURRENT_FILE,
     GOAL_FILE,
     GOAL_SCHEMA,
@@ -30,6 +32,31 @@ from .util import now_utc, read_json, read_yaml_like, write_json, write_yaml_lik
 
 class WorkspaceError(ValueError):
     pass
+
+
+def active_workspace_file() -> Path:
+    override = os.environ.get(ACTIVE_WORKSPACE_ENV)
+    if override:
+        return Path(override).expanduser().resolve()
+    return Path.home() / ".claude" / "twin-active-workspace"
+
+
+def remember_active_workspace(workspace: Path | str) -> Path:
+    resolved = resolve_workspace(workspace)
+    target = active_workspace_file()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(str(resolved) + "\n", encoding="utf-8")
+    return resolved
+
+
+def load_active_workspace() -> Path:
+    target = active_workspace_file()
+    if not target.exists():
+        raise WorkspaceError("workspace is required; run /twin <workspace> or /twin status <workspace> first")
+    text = target.read_text(encoding="utf-8").strip()
+    if not text:
+        raise WorkspaceError("active twin workspace is empty; run /twin <workspace> or /twin status <workspace> first")
+    return resolve_workspace(text)
 
 
 def resolve_workspace(path: Path | str) -> Path:

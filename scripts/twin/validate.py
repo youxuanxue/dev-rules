@@ -13,6 +13,7 @@ from . import contracts, util
 from .bootstrap import draft_from_files, draft_workspace, write_workspace_draft
 from .claude_runner import ClaudeRunResult
 from .contracts import (
+    ACTIVE_WORKSPACE_ENV,
     GOAL_SCHEMA,
     PLAN_SCHEMA,
     PERSONAS_DIR,
@@ -638,12 +639,14 @@ def run_fixture_validation() -> list[str]:
             errors.append("status display should make needs_human actionable for humans")
         if not isinstance(display.get("evidence_paths"), dict) or not display["evidence_paths"].get("workspace_events"):
             errors.append("status display should expose workspace event evidence path")
+        active_env = {**os.environ, ACTIVE_WORKSPACE_ENV: str(root / "active-workspace")}
         needs_cli = subprocess.run(
-            [sys.executable, "-m", "scripts.twin", "status", "--workspace", str(workspace)],
+            [sys.executable, "-m", "scripts.twin", "status", str(workspace)],
             cwd=Path(__file__).resolve().parents[2],
             capture_output=True,
             text=True,
             timeout=30,
+            env=active_env,
         )
         if "Status: waiting for you (needs_human)" not in needs_cli.stdout or "Next command: /twin respond <answer>" not in needs_cli.stdout:
             errors.append("needs_human CLI should lead with human-friendly status and next command")
@@ -672,10 +675,19 @@ def run_fixture_validation() -> list[str]:
             errors.append("worker should not start while needs_human pending")
         except WorkspaceError:
             pass
-        record_human_response(workspace, "继续")
+        user_respond_cli = subprocess.run(
+            [sys.executable, "-m", "scripts.twin", "respond", "继续"],
+            cwd=Path(__file__).resolve().parents[2],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=active_env,
+        )
+        if user_respond_cli.returncode != 0:
+            errors.append(f"/twin respond user path should use active workspace: {user_respond_cli.stderr.strip()}")
         state = load_state(workspace)
         if state.get("status") != "continue" or state.get("needs_human") is not None:
-            errors.append("respond did not clear needs_human state")
+            errors.append("respond CLI user path did not clear needs_human state")
         workspace_events = (workspace / "workspace_events.jsonl").read_text(encoding="utf-8")
         if "继续" in workspace_events:
             errors.append("respond workspace event should not record human response text")

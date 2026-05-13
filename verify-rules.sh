@@ -17,6 +17,7 @@ COMMANDS_DIR="$SCRIPT_DIR/commands"
 GLOBAL_DIR="$SCRIPT_DIR/global"
 PERSONAS_DIR="$SCRIPT_DIR/personas"
 README="$SCRIPT_DIR/README.md"
+SKILLS_LINK="$SCRIPT_DIR/.cursor/skills"
 
 QUIET=0
 [ "${1:-}" = "--quiet" ] && QUIET=1
@@ -99,6 +100,20 @@ else
             fail "$base exists but not referenced in README"
         fi
     done
+fi
+
+# ── Agent Skills source link ───────────────────────────────────────────
+# Skills live in the shared agent-skills repo; dev-rules only carries a
+# symlink so command/rule changes and skill changes do not fork sources.
+section "agent skills source link"
+if [ ! -L "$SKILLS_LINK" ]; then
+    fail ".cursor/skills must be a symlink to ../../agent-skills"
+elif [ "$(readlink "$SKILLS_LINK")" != "../../agent-skills" ]; then
+    fail ".cursor/skills points to $(readlink "$SKILLS_LINK"), expected ../../agent-skills"
+elif [ ! -d "$SKILLS_LINK" ]; then
+    fail ".cursor/skills target missing; expected $HOME/Codes/agent-skills"
+else
+    ok ".cursor/skills -> ../../agent-skills"
 fi
 
 # ── twin persona files present ─────────────────────────────────────────

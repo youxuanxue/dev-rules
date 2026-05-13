@@ -11,6 +11,7 @@ RUN_SCHEMA = "twin.run.schema.json"
 SUPERVISOR_STATE_SCHEMA = "twin.supervisor_state.schema.json"
 SUPERVISOR_REVIEW_SCHEMA = "twin.supervisor_review.schema.json"
 HUMAN_RESPONSE_SCHEMA = "twin.human_response.schema.json"
+ACTIVE_WORKSPACE_ENV = "TWIN_ACTIVE_WORKSPACE_FILE"
 
 ITEM_STATUSES = {"pending", "in_progress", "blocked", "completed", "deferred"}
 

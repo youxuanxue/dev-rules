@@ -16,18 +16,17 @@ from .runtime import (
     status_workspace,
 )
 from .validate import run_fixture_validation, validate_path
-from .workspace import WorkspaceError
+from .workspace import WorkspaceError, load_active_workspace, remember_active_workspace
 
 
 def _print_json(value: object) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True))
 
 
-def _workspace_arg(args: argparse.Namespace) -> Path:
+def _workspace_arg(args: argparse.Namespace, *, remember: bool = False) -> Path:
     value = getattr(args, "workspace", "") or ""
-    if not value:
-        raise WorkspaceError("workspace is required")
-    return Path(value)
+    workspace = Path(value) if value else load_active_workspace()
+    return remember_active_workspace(workspace) if remember else workspace
 
 
 def _print_needs_human(status: dict[str, object]) -> None:
@@ -50,7 +49,7 @@ def _print_needs_human(status: dict[str, object]) -> None:
 
 def _cmd_status(args: argparse.Namespace) -> int:
     try:
-        status = status_workspace(_workspace_arg(args))
+        status = status_workspace(_workspace_arg(args, remember=True))
     except WorkspaceError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -76,7 +75,7 @@ def _cmd_status(args: argparse.Namespace) -> int:
 
 def _cmd_respond(args: argparse.Namespace) -> int:
     try:
-        target = record_human_response(_workspace_arg(args), args.text)
+        target = record_human_response(_workspace_arg(args, remember=True), args.text)
     except WorkspaceError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -157,7 +156,7 @@ def _cmd_bootstrap(args: argparse.Namespace) -> int:
         if not args.workspace or not args.goal_file or not args.plan_file:
             raise WorkspaceError("bootstrap requires --workspace, --goal-file, and --plan-file")
         draft = draft_from_files(Path(args.workspace), Path(args.goal_file), Path(args.plan_file))
-        workspace = write_workspace_draft(draft, overwrite=args.overwrite)
+        workspace = remember_active_workspace(write_workspace_draft(draft, overwrite=args.overwrite))
     except WorkspaceError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -191,7 +190,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_respond = sub.add_parser("respond")
     p_respond.add_argument("text_pos", nargs="*")
-    p_respond.add_argument("--workspace", required=True)
+    p_respond.add_argument("--workspace")
     p_respond.add_argument("--text", default="")
     p_respond.set_defaults(func=lambda args: _cmd_respond(_merge_text(args)))
 
