@@ -13,4 +13,4 @@ $EDITOR .twin/<slug>/plan.yaml
 
 **别在 `dev-rules/templates/twin-workspace/` 原地跑或 validate**——它是模板，不是 workspace；`validate` 会在 workspace 里写出 `supervisor_state.json` 和 `runs/`，污染模板。复制走再改、再 validate、再 `/twin`。
 
-schema 字段定义见 `docs/twin-design.md`「workspace 契约」节；不要把 persona 文件复制进 workspace。
+schema 字段定义见 `docs/twin-design.md`「workspace 契约」节；不要把 persona 文件复制进 workspace。运行中生成的 `CURRENT.md` 是人类状态面，`workspace_events.jsonl` 记录不含回答正文的人类门禁审计。

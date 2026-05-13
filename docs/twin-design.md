@@ -91,6 +91,7 @@ while not terminal:
 | 当前轮次、next instruction、worker session id、terminal status | `supervisor_state.json` |
 | worker 过程、证据、内联 review | `runs/<run_id>/run.json` / `events.jsonl` |
 | 人类门禁回答 | `human_response.json` |
+| 人类门禁审计 | `workspace_events.jsonl` |
 | 人类可读状态 | `CURRENT.md` |
 | 规则 | dev-rules / project `CLAUDE.md` |
 
@@ -104,6 +105,12 @@ worker prompt 由四部分组成：
 4. supervisor 本轮生成的 `next_instruction`
 
 worker session memory 只是续跑辅助；事实源始终是 workspace artifacts 和 repo 状态。
+
+## status artifact
+
+`CURRENT.md` 和 `/twin status` 是人类状态面：从 `goal.yaml`、`plan.yaml`、`supervisor_state.json` 与 run artifact 派生，不驱动状态变化。它们展示可读状态、当前 item、轮次、下一条命令和必要证据路径；机器消费继续使用 `status --json` 的原始字段。
+
+`workspace_events.jsonl` 只记录 workspace 级人类 mutation 审计。当前仅记录成功的 `/twin respond`，不写入回答正文，只记录状态迁移、artifact 引用和回答长度。
 
 ## review artifact
 
