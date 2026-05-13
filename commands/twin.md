@@ -27,10 +27,14 @@ supervisor-context → 写 next_instruction → worker-turn → review-context �
 
 `<workspace>` 必须包含 `goal.yaml` 与 `plan.yaml`。workspace 内禁止出现 `supervisor-persona.md` / `worker-persona.md`；persona 直接读 `$DEV_RULES/personas/*.md`。字段定义见 `docs/twin-design.md`。
 
+## status 展示
+
+`/twin status [workspace]` 是人类状态面：展示目标、可读状态、当前 item、轮次、下一条命令和必要证据路径；`--json` 保留机器字段。status 只读，不重写 workspace artifact。
+
 ## needs_human 展示
 
-state 或 review 落到 `needs_human` 时，优先用 `AskUserQuestion` inline 问一个具体问题，给一段背景和推荐选项。证据路径只作为辅助：`CURRENT.md` / `supervisor_state.json` / `runs/<run_id>/run.json::review`。不要要求用户读 JSON 才能回答。
+state 或 review 落到 `needs_human` 时，优先用 `AskUserQuestion` inline 问一个具体问题，给一段背景和推荐选项。证据路径只作为辅助：`CURRENT.md` / `supervisor_state.json` / `runs/<run_id>/run.json::review`。不要要求用户读 JSON 才能回答。`/twin respond <text>` 是唯一解除该门禁的用户命令，成功后会写入 `human_response.json` 并在 `workspace_events.jsonl` 记录不含回答正文的审计事件。
 
 ## 输出风格
 
-一个状态、一条下一步、必要证据路径；不复述 runbook 或 design。supervisor 每轮内部子命令调用顺序见 `docs/twin-supervisor-runbook.md`。
+一个人类可读状态、一条下一步、必要证据路径；不复述 runbook 或 design。supervisor 每轮内部子命令调用顺序见 `docs/twin-supervisor-runbook.md`。

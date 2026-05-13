@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,7 @@ from .contracts import (
     HUMAN_RESPONSE_FILE,
     HUMAN_RESPONSE_SCHEMA,
     PLAN_SCHEMA,
+    WORKSPACE_EVENTS_FILE,
     LEGACY_PLAN_FILES,
     PLAN_FILE,
     RUNS_DIR,
@@ -197,21 +199,74 @@ def load_human_response(workspace: Path) -> dict[str, Any] | None:
     return value
 
 
+def status_display(workspace: Path, goal: dict[str, Any], plan: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+    workspace = resolve_workspace(workspace)
+    status = str(state.get("status") or "unknown")
+    next_item = choose_next_item(plan)
+    current_item_id = state.get("current_item_id") or (next_item.get("id") if next_item else None)
+    labels = {
+        "idle": "ready",
+        "worker_running": "working",
+        "review_required": "reviewing",
+        "continue": "ready for next turn",
+        "needs_human": "waiting for you",
+        "accepted_done": "done",
+        "failed": "failed",
+    }
+    summaries = {
+        "idle": "Workspace is ready for the supervisor loop.",
+        "worker_running": "Worker is running; wait for the run artifact before reviewing.",
+        "review_required": "Worker finished; supervisor review is required before another turn.",
+        "continue": "Supervisor has a next instruction ready for the next worker turn.",
+        "needs_human": "Supervisor needs a human answer before continuing.",
+        "accepted_done": "Supervisor accepted the workspace as done.",
+        "failed": "Supervisor marked the workspace as failed.",
+    }
+    next_commands = {
+        "idle": f"/twin {workspace}",
+        "worker_running": f"/twin status {workspace}",
+        "review_required": f"/twin {workspace}",
+        "continue": f"/twin {workspace}",
+        "needs_human": "/twin respond <answer>",
+        "accepted_done": "none",
+        "failed": "inspect CURRENT.md and latest run evidence",
+    }
+    current_run_id = state.get("current_run_id")
+    run_ref = str(workspace / RUNS_DIR / str(current_run_id) / "run.json") if current_run_id else None
+    return {
+        "label": labels.get(status, status),
+        "summary": summaries.get(status, "Workspace state is available in supervisor_state.json."),
+        "next_command": next_commands.get(status, f"/twin status {workspace}"),
+        "current_item_id": current_item_id,
+        "evidence_paths": {
+            "current": str(workspace / CURRENT_FILE),
+            "state": str(workspace / SUPERVISOR_STATE_FILE),
+            "workspace_events": str(workspace / WORKSPACE_EVENTS_FILE),
+            "run": run_ref,
+            "review": f"{run_ref}::review" if run_ref else None,
+        },
+    }
+
+
 def render_current(workspace: Path, goal: dict[str, Any], plan: dict[str, Any], state: dict[str, Any]) -> None:
     counts = item_counts(plan)
     gaps = plan_gaps(goal, plan)
-    next_item = choose_next_item(plan)
-    current_item_id = state.get("current_item_id") or (next_item.get("id") if next_item else None)
+    display = status_display(workspace, goal, plan, state)
     lines = [
         "# twin current",
         "",
-        f"- Status: {state.get('status')}",
         f"- Goal: {goal.get('one_liner')}",
-        f"- Current item: {current_item_id or 'none'}",
+        f"- Status: {display['label']} ({state.get('status')})",
+        f"- Summary: {display['summary']}",
+        f"- Current item: {display.get('current_item_id') or 'none'}",
         f"- Round: {state.get('round_index')}",
         f"- Plan: " + ", ".join(f"{key}={value}" for key, value in sorted(counts.items())),
         f"- Last review status: {state.get('last_review_status') or 'none'}",
+        f"- Next command: {display['next_command']}",
         f"- Next instruction: {state.get('next_instruction') or 'none'}",
+        "",
+        "## Evidence",
+        *(f"- {key}: {value or 'none'}" for key, value in display["evidence_paths"].items()),
         "",
         "## Plan gaps",
         *(f"- {gap}" for gap in (gaps or ["none"])),
@@ -228,20 +283,30 @@ def render_current(workspace: Path, goal: dict[str, Any], plan: dict[str, Any], 
     (workspace / CURRENT_FILE).write_text("\n".join(lines), encoding="utf-8")
 
 
+def append_workspace_event(workspace: Path, event: dict[str, Any]) -> Path:
+    workspace = resolve_workspace(workspace)
+    record = {"schema_version": SCHEMA_VERSION, "recorded_at": now_utc(), **event}
+    target = workspace / WORKSPACE_EVENTS_FILE
+    with target.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    return target
+
+
 def status_summary(workspace: Path) -> dict[str, Any]:
     goal, plan, state = validate_workspace_readonly(workspace)
     workspace = resolve_workspace(workspace)
-    next_item = choose_next_item(plan)
+    display = status_display(workspace, goal, plan, state)
     return {
         "workspace": str(workspace),
         "goal": goal.get("one_liner"),
         "status": state.get("status"),
         "current_run_id": state.get("current_run_id"),
-        "current_item_id": state.get("current_item_id") or (next_item.get("id") if next_item else None),
+        "current_item_id": display.get("current_item_id"),
         "round_index": state.get("round_index"),
         "next_instruction": state.get("next_instruction"),
         "needs_human": state.get("needs_human"),
         "plan_counts": item_counts(plan),
         "remaining_gaps": plan_gaps(goal, plan),
         "current": str(workspace / CURRENT_FILE),
+        "display": display,
     }

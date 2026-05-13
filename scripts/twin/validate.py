@@ -543,7 +543,7 @@ def run_fixture_validation() -> list[str]:
             errors.append("run artifact should not contain supervisor session fields")
         current_path = workspace / "CURRENT.md"
         current_text = current_path.read_text(encoding="utf-8")
-        if "Status: review_required" not in current_text or f"Current item: {run['run_id']}" in current_text:
+        if "Status: reviewing (review_required)" not in current_text or f"Current item: {run['run_id']}" in current_text:
             errors.append("worker turn should refresh CURRENT.md after completion")
         current_mtime = current_path.stat().st_mtime_ns
         state_path = workspace / "supervisor_state.json"
@@ -631,8 +631,13 @@ def run_fixture_validation() -> list[str]:
         if state.get("status") != "needs_human" or not state.get("needs_human"):
             errors.append("needs_human review did not update state")
         status = status_workspace(workspace)
+        display = status.get("display", {})
         if not status.get("needs_human") or status.get("current_run_id") != needs_run["run_id"]:
             errors.append("status should expose needs_human and the latest run")
+        if display.get("label") != "waiting for you" or display.get("next_command") != "/twin respond <answer>":
+            errors.append("status display should make needs_human actionable for humans")
+        if not isinstance(display.get("evidence_paths"), dict) or not display["evidence_paths"].get("workspace_events"):
+            errors.append("status display should expose workspace event evidence path")
         needs_cli = subprocess.run(
             [sys.executable, "-m", "scripts.twin", "status", "--workspace", str(workspace)],
             cwd=Path(__file__).resolve().parents[2],
@@ -640,8 +645,10 @@ def run_fixture_validation() -> list[str]:
             text=True,
             timeout=30,
         )
+        if "Status: waiting for you (needs_human)" not in needs_cli.stdout or "Next command: /twin respond <answer>" not in needs_cli.stdout:
+            errors.append("needs_human CLI should lead with human-friendly status and next command")
         if "respond=/twin respond <answer>" not in needs_cli.stdout or "evidence_review=" not in needs_cli.stdout:
-            errors.append("needs_human CLI should lead with the question and /twin respond path")
+            errors.append("needs_human CLI should still include the question and /twin respond path")
         for blocked_status in ("idle", "continue", "review_required", "accepted_done", "failed"):
             blocked_workspace = _write_workspace(root / f"respond-blocked-{blocked_status}", completed=blocked_status == "accepted_done")
             blocked_state = load_state(blocked_workspace)
@@ -656,6 +663,8 @@ def run_fixture_validation() -> list[str]:
                 pass
             if (blocked_workspace / "human_response.json").exists():
                 errors.append(f"respond should not write human_response.json for {blocked_status} state")
+            if (blocked_workspace / "workspace_events.jsonl").exists():
+                errors.append(f"respond should not write workspace events for {blocked_status} state")
             if load_state(blocked_workspace).get("status") != blocked_status:
                 errors.append(f"respond should not mutate {blocked_status} state")
         try:
@@ -667,6 +676,18 @@ def run_fixture_validation() -> list[str]:
         state = load_state(workspace)
         if state.get("status") != "continue" or state.get("needs_human") is not None:
             errors.append("respond did not clear needs_human state")
+        workspace_events = (workspace / "workspace_events.jsonl").read_text(encoding="utf-8")
+        if "继续" in workspace_events:
+            errors.append("respond workspace event should not record human response text")
+        event_records = [json.loads(line) for line in workspace_events.splitlines() if line.strip()]
+        if not event_records or event_records[-1].get("event") != "human_response_recorded":
+            errors.append("respond should append a human_response_recorded workspace event")
+        else:
+            event = event_records[-1]
+            if event.get("previous_status") != "needs_human" or event.get("new_status") != "continue":
+                errors.append("respond workspace event should record the state transition")
+            if event.get("artifact_ref") != "human_response.json" or event.get("response_chars") != len("继续"):
+                errors.append("respond workspace event should record artifact and response length only")
         resumed = start_worker_turn(workspace, "继续 fixture", runner=runner)
         consumed = read_json(workspace / "human_response.json")
         if consumed.get("consumed_by_run_id") != resumed["run_id"]:

@@ -26,7 +26,7 @@ PYTHONPATH=$DEV_RULES python3 -m scripts.twin bootstrap --workspace <ws> --goal-
 7. status=continue 自动进入下一轮；accepted_done / needs_human / failed 停止
 ```
 
-state 是 `needs_human` 且无新回答时不启动 worker；state 是 `continue` 且 `next_instruction` 已写入时直接进入第 3 步。`continue` 不是用户停点，supervisor 必须自循环。
+state 是 `needs_human` 且无新回答时不启动 worker；state 是 `continue` 且 `next_instruction` 已写入时直接进入第 3 步。`continue` 不是用户停点，supervisor 必须自循环。当前 `/twin` 不是后台 daemon；不调用 `/twin <workspace>` 就不会继续，因此不提供 pause/resume 命令。
 
 ## 子命令契约
 
@@ -66,7 +66,7 @@ Python 应用语义：
 
 - `accepted_done`：要求 `remaining_gaps` 空、所有 AC 在 plan 都有 `actual_evidence`、plan 没有 open items。
 - `continue`：必须给非空 `next_instruction`，写入 state，supervisor 继续下一轮。
-- `needs_human`：必须给非空 `human_question`，写入 `state.needs_human`；supervisor 用 `AskUserQuestion` 问一个问题。
+- `needs_human`：必须给非空 `human_question`，写入 `state.needs_human`；supervisor 用 `AskUserQuestion` 问一个问题。用户用 `/twin respond <answer>` 解除门禁，成功后写入 `human_response.json` 并向 `workspace_events.jsonl` 追加不含回答正文的审计事件。
 - `failed`：terminal。
 
 ## State machine

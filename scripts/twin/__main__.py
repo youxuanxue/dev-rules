@@ -57,14 +57,19 @@ def _cmd_status(args: argparse.Namespace) -> int:
     if args.json:
         _print_json(status)
     else:
-        print(f"workspace={status['workspace']}")
-        print(f"status={status['status']}")
-        print(f"goal={status['goal']}")
-        print(f"current_item_id={status['current_item_id'] or 'none'}")
-        print(f"round_index={status['round_index']}")
-        print(f"next_instruction={status['next_instruction'] or 'none'}")
-        print(f"current_run_id={status.get('current_run_id') or 'none'}")
-        print(f"current={status['current']}")
+        display = status.get("display") if isinstance(status.get("display"), dict) else {}
+        evidence_paths = display.get("evidence_paths") if isinstance(display.get("evidence_paths"), dict) else {}
+        print(f"Goal: {status['goal']}")
+        print(f"Status: {display.get('label') or status['status']} ({status['status']})")
+        print(f"Summary: {display.get('summary') or ''}")
+        print(f"Current item: {status['current_item_id'] or 'none'}")
+        print(f"Round: {status['round_index']}")
+        print(f"Next command: {display.get('next_command') or 'none'}")
+        print(f"Workspace: {status['workspace']}")
+        print(f"Current: {status['current']}")
+        for key, value in evidence_paths.items():
+            if value and key != "current":
+                print(f"Evidence {key}: {value}")
         _print_needs_human(status)
     return 0
 
