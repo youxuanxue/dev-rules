@@ -648,10 +648,28 @@ def run_fixture_validation() -> list[str]:
             timeout=30,
             env=active_env,
         )
+        if len(needs_cli.stdout.encode("utf-8")) > 4096:
+            errors.append("needs_human status CLI should stay compact and not expand workspace artifacts")
         if "Status: waiting for you (needs_human)" not in needs_cli.stdout or "Next command: /twin respond <answer>" not in needs_cli.stdout:
             errors.append("needs_human CLI should lead with human-friendly status and next command")
         if "respond=/twin respond <answer>" not in needs_cli.stdout or "evidence_review=" not in needs_cli.stdout:
             errors.append("needs_human CLI should still include the question and /twin respond path")
+        isolated_env = {key: value for key, value in os.environ.items() if key != ACTIVE_WORKSPACE_ENV}
+        isolated_env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+        isolated_project = root / "active-workspace-isolated-project"
+        isolated_project.mkdir()
+        isolated_cli = subprocess.run(
+            [sys.executable, "-m", "scripts.twin", "respond", "继续"],
+            cwd=isolated_project,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=isolated_env,
+        )
+        if isolated_cli.returncode == 0:
+            errors.append("active workspace should be scoped by current project cwd")
+        elif "workspace is required" not in isolated_cli.stderr:
+            errors.append(f"isolated active workspace failure should be actionable: {isolated_cli.stderr.strip()}")
         for blocked_status in ("idle", "continue", "review_required", "accepted_done", "failed"):
             blocked_workspace = _write_workspace(root / f"respond-blocked-{blocked_status}", completed=blocked_status == "accepted_done")
             blocked_state = load_state(blocked_workspace)

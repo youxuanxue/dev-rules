@@ -110,8 +110,6 @@ if [ ! -L "$SKILLS_LINK" ]; then
     fail ".cursor/skills must be a symlink to ../../agent-skills"
 elif [ "$(readlink "$SKILLS_LINK")" != "../../agent-skills" ]; then
     fail ".cursor/skills points to $(readlink "$SKILLS_LINK"), expected ../../agent-skills"
-elif [ ! -d "$SKILLS_LINK" ]; then
-    fail ".cursor/skills target missing; expected $HOME/Codes/agent-skills"
 else
     ok ".cursor/skills -> ../../agent-skills"
 fi

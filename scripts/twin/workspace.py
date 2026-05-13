@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -38,7 +39,8 @@ def active_workspace_file() -> Path:
     override = os.environ.get(ACTIVE_WORKSPACE_ENV)
     if override:
         return Path(override).expanduser().resolve()
-    return Path.home() / ".claude" / "twin-active-workspace"
+    project_id = hashlib.sha1(str(Path.cwd().resolve()).encode("utf-8")).hexdigest()[:16]
+    return Path.home() / ".claude" / "twin-active-workspaces" / project_id
 
 
 def remember_active_workspace(workspace: Path | str) -> Path:
