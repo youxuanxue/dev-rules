@@ -642,6 +642,22 @@ def run_fixture_validation() -> list[str]:
         )
         if "respond=/twin respond <answer>" not in needs_cli.stdout or "evidence_review=" not in needs_cli.stdout:
             errors.append("needs_human CLI should lead with the question and /twin respond path")
+        for blocked_status in ("idle", "continue", "review_required", "accepted_done", "failed"):
+            blocked_workspace = _write_workspace(root / f"respond-blocked-{blocked_status}", completed=blocked_status == "accepted_done")
+            blocked_state = load_state(blocked_workspace)
+            blocked_state["status"] = blocked_status
+            if blocked_status == "continue":
+                blocked_state["next_instruction"] = "继续 fixture"
+            write_state(blocked_workspace, blocked_state)
+            try:
+                record_human_response(blocked_workspace, "不应接受")
+                errors.append(f"respond should reject {blocked_status} state")
+            except WorkspaceError:
+                pass
+            if (blocked_workspace / "human_response.json").exists():
+                errors.append(f"respond should not write human_response.json for {blocked_status} state")
+            if load_state(blocked_workspace).get("status") != blocked_status:
+                errors.append(f"respond should not mutate {blocked_status} state")
         try:
             start_worker_turn(workspace, "不应启动", runner=runner)
             errors.append("worker should not start while needs_human pending")

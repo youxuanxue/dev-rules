@@ -7,8 +7,6 @@ from .supervisor_review import apply_supervisor_review, build_review_context, bu
 from .worker import start_worker_turn
 from .workspace import (
     WorkspaceError,
-    load_goal,
-    load_plan,
     load_state,
     render_current,
     status_summary,
@@ -24,11 +22,11 @@ def status_workspace(workspace: Path | str) -> dict[str, Any]:
 
 def record_human_response(workspace: Path | str, text: str) -> Path:
     workspace_path = Path(workspace).expanduser().resolve()
-    validate_workspace(workspace_path)
-    target = write_human_response(workspace_path, text)
-    goal = load_goal(workspace_path)
-    plan = load_plan(workspace_path)
+    goal, plan = validate_workspace(workspace_path)
     state = load_state(workspace_path)
+    if state.get("status") != "needs_human" or not isinstance(state.get("needs_human"), dict):
+        raise WorkspaceError(f"workspace is not waiting for human response: {state.get('status')}")
+    target = write_human_response(workspace_path, text)
     state["status"] = "continue"
     state["needs_human"] = None
     state["next_instruction"] = ""
