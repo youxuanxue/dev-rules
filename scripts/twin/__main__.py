@@ -247,7 +247,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _merge_workspace(args: argparse.Namespace) -> argparse.Namespace:
-    if not args.workspace:
+    if not args.workspace and args.workspace_pos:
         args.workspace = args.workspace_pos
     return args
 

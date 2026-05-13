@@ -154,6 +154,15 @@ else
     ok "twin uses DEV_RULES/personas directly"
 fi
 
+section "twin status is short-circuited"
+if grep -q 'terminal short-circuit' "$COMMANDS_DIR/twin.md" && \
+   grep -q 'python3 -m scripts.twin status' "$COMMANDS_DIR/twin.md" && \
+   grep -q '禁止读取 `goal.yaml` / `plan.yaml` / `CURRENT.md` / `runs/\*` / `reviews/\*`' "$COMMANDS_DIR/twin.md"; then
+    ok "twin status command cannot expand workspace artifacts"
+else
+    fail "twin status/respond must stay a Python-only terminal short-circuit"
+fi
+
 section "twin persona source is read-only"
 if grep -q 'disallowed_tools=worker_disallowed_tools()' "$SCRIPT_DIR/scripts/twin/worker.py" && \
    grep -q 'Self-verification before accepted_done' "$PERSONAS_DIR/supervisor-persona.md"; then

@@ -11,6 +11,26 @@ $ARGUMENTS
 /twin respond <text>
 ```
 
+## 用户命令短路
+
+`status` / `respond` 是 terminal short-circuit：不进入主路径、不进入 plan mode、不调用 Agent / Read / Grep / Glob，不读取 workspace artifact。最多执行一次 Python 子命令；最终回答只能逐字转发 Python stdout，失败时只转发 stderr 摘要和退出码。
+
+如果参数以 `status` 开头，只执行：
+
+```bash
+PYTHONPATH="$DEV_RULES" python3 -m scripts.twin status [--workspace <workspace>] [--json]
+```
+
+其中 `/twin status <workspace>` 映射为 `status --workspace <workspace>`。禁止读取 `goal.yaml` / `plan.yaml` / `CURRENT.md` / `runs/*` / `reviews/*`，禁止展开证据文件内容，禁止生成额外总结。status 是固定短输出，超过 Python stdout 的内容一律不是 status 命令职责。
+
+如果参数以 `respond` 开头，只执行：
+
+```bash
+PYTHONPATH="$DEV_RULES" python3 -m scripts.twin respond <text>
+```
+
+可传 `--workspace <workspace>`，但默认依赖最近一次 `/twin <workspace>` / `/twin status <workspace>` 记录的 active workspace。禁止读取或复述 `human_response.json` 正文。
+
 ## 主路径
 
 `/twin "<one-line goal>"` 是 bootstrap：当参数不是 `status` / `respond` / 已存在 workspace 路径时，当前 Claude Code supervisor 先按 plan mode 的方式调研 repo facts，并亲自草拟 `goal.yaml + plan.yaml`；然后用 `AskUserQuestion` 请求确认。确认后调用 `python3 -m scripts.twin bootstrap --workspace <ws> --goal-file <goal.yaml> --plan-file <plan.yaml>` 写入并校验 workspace，再进入执行闭环。`python3 -m scripts.twin scaffold "<goal>" --json` 只作为最小 scaffold fallback，不代表真实 planning。
