@@ -38,12 +38,13 @@ def parse_ini_sections(
     defaults: dict[str, Sequence[str]],
     *,
     transform: Callable[[str], str] | None = None,
+    replace_defaults: bool = True,
 ) -> dict[str, list[str]]:
     """Parse the lightweight INI dialect used by .preflight/*.conf files.
 
     - `[section]` headers switch the active section.
-    - Values inside known sections REPLACE the defaults (first config line
-      in a section clears defaults), so projects can override or extend.
+    - By default, values inside known sections REPLACE defaults; pass
+      `replace_defaults=False` for legacy append-on-top-of-defaults sections.
     - Unknown sections are ignored, comments (`#`) and blank lines skipped.
 
     Defaults are copied so callers can mutate the result safely.
@@ -63,7 +64,7 @@ def parse_ini_sections(
             continue
         if section is None:
             continue
-        if section not in cleared:
+        if replace_defaults and section not in cleared:
             out[section] = []
             cleared.add(section)
         out[section].append(transform(s) if transform else s)

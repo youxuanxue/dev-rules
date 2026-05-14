@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import argparse
 import ast
+import fnmatch
 import pathlib
+import subprocess
 import sys
 
 from preflight_common import cli_fail
@@ -31,6 +33,22 @@ DEFAULT_GLOBS = [
 
 EXISTENCE_ATTRS = {"exists", "is_file", "is_dir", "is_symlink"}
 EXISTENCE_FUNCS = {"exists", "isfile", "isdir", "getsize", "islink", "lexists"}
+IGNORED_PARTS = {
+    ".git",
+    ".mypy_cache",
+    ".nox",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".tox",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dev-rules",
+    "dist",
+    "node_modules",
+    "site-packages",
+    "venv",
+}
 
 
 def _is_existence_call(node: ast.AST) -> bool:
@@ -121,7 +139,38 @@ def scan_file(path: pathlib.Path) -> list[str]:
     return findings
 
 
+def _git_tracked_files() -> list[pathlib.Path] | None:
+    try:
+        res = subprocess.run(["git", "ls-files", "-z"], check=True, capture_output=True)
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return [pathlib.Path(p.decode()) for p in res.stdout.split(b"\0") if p]
+
+
+def _glob_matches(path: str, pattern: str) -> bool:
+    if fnmatch.fnmatchcase(path, pattern):
+        return True
+    if "/**/" in pattern:
+        return fnmatch.fnmatchcase(path, pattern.replace("/**/", "/"))
+    return False
+
+
+def _is_ignored(path: pathlib.Path) -> bool:
+    return any(part in IGNORED_PARTS for part in path.parts)
+
+
+def _matches_any(path: pathlib.Path, patterns: list[str]) -> bool:
+    if _is_ignored(path):
+        return False
+    posix = path.as_posix()
+    return any(_glob_matches(posix, pattern) for pattern in patterns)
+
+
 def discover(globs: list[str]) -> list[pathlib.Path]:
+    tracked = _git_tracked_files()
+    if tracked is not None:
+        return sorted({p.resolve() for p in tracked if p.is_file() and _matches_any(p, globs)})
+
     found: list[pathlib.Path] = []
     cwd = pathlib.Path(".")
     for pattern in globs:

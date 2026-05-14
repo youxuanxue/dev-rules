@@ -56,7 +56,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    cfg = parse_ini_sections(pathlib.Path(args.rules), DEFAULTS)
+    cfg = parse_ini_sections(pathlib.Path(args.rules), DEFAULTS, replace_defaults=False)
     contract_re = compile_patterns(cfg["contract_paths"])
     notice_re = compile_patterns(cfg["notice_tokens"], ignore_case=True)
 

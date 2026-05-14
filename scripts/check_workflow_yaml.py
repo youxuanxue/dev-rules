@@ -31,7 +31,7 @@ ENV_REF_RE = re.compile(r"\benv\.[A-Za-z_][\w]*")
 
 CLAUDE_INVOKE_RE = re.compile(r"\bclaude\s+-p\b")
 ALLOWED_TOOLS_RE = re.compile(r"--allowedTools\b")
-OUTPUT_FLAG_RE = re.compile(r"--output\b")
+OUTPUT_FLAG_RE = re.compile(r"(?:^|\s)--output(?:=|\s|$)")
 
 
 def find_workflows(root: pathlib.Path) -> list[pathlib.Path]:
