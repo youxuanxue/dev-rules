@@ -29,7 +29,7 @@ PYTHONPATH="$DEV_RULES" python3 -m scripts.twin status [--workspace <workspace>]
 PYTHONPATH="$DEV_RULES" python3 -m scripts.twin respond <text>
 ```
 
-可传 `--workspace <workspace>`，但默认依赖最近一次 `/twin <workspace>` / `/twin status <workspace>` 记录的 active workspace。禁止读取或复述 `human_response.json` 正文。
+可传 `--workspace <workspace>`，但默认依赖最近一次 `/twin <workspace>` / `/twin status <workspace>` 记录的 active workspace。active workspace 按当前项目 cwd 隔离（指针文件位于 `~/.claude/twin-active-workspaces/<sha256(cwd)[:16]>`），切换项目目录不会读到上一个项目的工作区；指向的 workspace 已被删除时会立即报「no longer exists」错误，不会向下游静默漂移。禁止读取或复述 `human_response.json` 正文。
 
 ## 主路径
 

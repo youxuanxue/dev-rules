@@ -14,6 +14,7 @@ from .bootstrap import draft_from_files, draft_workspace, write_workspace_draft
 from .claude_runner import ClaudeRunResult
 from .contracts import (
     ACTIVE_WORKSPACE_ENV,
+    GOAL_FILE,
     GOAL_SCHEMA,
     PLAN_SCHEMA,
     PERSONAS_DIR,
@@ -37,14 +38,7 @@ from .schema_contract import validate_artifact, validate_schema
 from .util import read_json
 from .claude_runner import DEFAULT_WORKER_TIMEOUT_SECONDS, WORKER_TIMEOUT_ENV, default_worker_timeout_seconds
 from .worker import DEFAULT_WORKER_MAX_BUDGET_USD, assess_run_quality, changed_files_from_status, default_worker_max_budget_usd
-from .workspace import (
-    WorkspaceError,
-    load_plan,
-    load_state,
-    validate_workspace,
-    write_plan,
-    write_state,
-)
+from .workspace import WorkspaceError, load_plan, load_state, write_plan, write_state
 
 
 class FakeRunner:
@@ -695,14 +689,18 @@ def run_fixture_validation() -> list[str]:
         multi_env = {key: value for key, value in os.environ.items() if key != ACTIVE_WORKSPACE_ENV}
         multi_env["HOME"] = str(multi_home)
         multi_env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
-        subprocess.run(
+        seed_a = subprocess.run(
             [sys.executable, "-m", "scripts.twin", "status", str(workspace_a), "--json"],
-            cwd=project_a, capture_output=True, text=True, timeout=30, env=multi_env, check=True,
+            cwd=project_a, capture_output=True, text=True, timeout=30, env=multi_env,
         )
-        subprocess.run(
+        if seed_a.returncode != 0:
+            errors.append(f"multi-project A seed status failed: {seed_a.stderr.strip()}")
+        seed_b = subprocess.run(
             [sys.executable, "-m", "scripts.twin", "status", str(workspace_b), "--json"],
-            cwd=project_b, capture_output=True, text=True, timeout=30, env=multi_env, check=True,
+            cwd=project_b, capture_output=True, text=True, timeout=30, env=multi_env,
         )
+        if seed_b.returncode != 0:
+            errors.append(f"multi-project B seed status failed: {seed_b.stderr.strip()}")
         multi_a = subprocess.run(
             [sys.executable, "-m", "scripts.twin", "status", "--json"],
             cwd=project_a, capture_output=True, text=True, timeout=30, env=multi_env,
@@ -713,6 +711,19 @@ def run_fixture_validation() -> list[str]:
             errors.append("multi-project A active workspace did not resolve to workspace_a")
         elif str(workspace_b) in multi_a.stdout:
             errors.append("multi-project A leaked workspace_b — cwd-scoping is not isolating projects")
+        # Stale pointer: workspace_a's pointer still resolves, but the
+        # workspace itself is gone. The user-visible error must name the
+        # path AND the recovery action, not bubble up a schema failure
+        # from a downstream load_goal.
+        (workspace_a / GOAL_FILE).unlink()
+        stale_a = subprocess.run(
+            [sys.executable, "-m", "scripts.twin", "respond", "继续"],
+            cwd=project_a, capture_output=True, text=True, timeout=30, env=multi_env,
+        )
+        if stale_a.returncode == 0:
+            errors.append("stale active workspace should not succeed silently")
+        elif "no longer exists" not in stale_a.stderr:
+            errors.append(f"stale active workspace error should be directed: {stale_a.stderr.strip()}")
         for blocked_status in ("idle", "continue", "review_required", "accepted_done", "failed"):
             blocked_workspace = _write_workspace(root / f"respond-blocked-{blocked_status}", completed=blocked_status == "accepted_done")
             blocked_state = load_state(blocked_workspace)
