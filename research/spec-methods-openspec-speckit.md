@@ -1,5 +1,7 @@
 # Spec 方法调研：OpenSpec 与 Spec Kit
 
+> **载体定位**：研究稿，存放于 `research/`。落地结论已沉淀到 `rules/product-dev.mdc` 的「常规风险意图载体」一节（spec delta 为 PR summary 说不清时的可选载体）。本文保留以备后查，不作为权威规则。
+>
 > 目的：为 `dev-rules` 判断是否吸收 spec-driven development（SDD）做法提供依据。结论不是引入某个工具，而是筛出能降低 agent 失控、需求漂移与 review 成本的机制。
 
 ## 资料来源

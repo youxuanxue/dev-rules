@@ -95,6 +95,10 @@ while not terminal:
 | 人类可读状态 | `CURRENT.md` |
 | 规则 | dev-rules / project `CLAUDE.md` |
 
+## 审批权威分层
+
+supervisor review 是 twin 内部的轮次裁决（`continue` / `needs_human` / `accepted_done` / `failed`），**不是**高风险变更的最终审批。高风险变更的最终审批以 `rules/product-dev.mdc` 为准——人类在 PR 中编辑/确认 `docs/approved/` 下文件并 merge 才是终态。supervisor 命中高风险信号时必须落到 `needs_human`，把决策让回 PR 通道，绝不在 twin 闭环内自行 `accepted_done`。
+
 ## worker prompt
 
 worker prompt 由四部分组成：
