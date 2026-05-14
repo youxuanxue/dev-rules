@@ -331,7 +331,62 @@ else
     skip "dev-rules/scripts/check_release_skip_ci_safety.py not present"
 fi
 
-# ---- 检查 15: 本地 linter 与 CI 同源 ----
+# ---- 检查 15: GitHub Actions workflow 硬失败 pattern ----
+# job-level `if: env.*`、claude -p 缺 --allowedTools、claude -p --output（不存在）。
+# 三类都是 YAML lint 通不过但执行时静默失败的形态。
+section "workflow yaml hard-failure patterns"
+if [ -f dev-rules/scripts/check_workflow_yaml.py ]; then
+    if "$PYTHON_BIN" dev-rules/scripts/check_workflow_yaml.py > /tmp/preflight-workflow-yaml.log 2>&1; then
+        head -1 /tmp/preflight-workflow-yaml.log | sed 's/^/    /'
+    else
+        cat /tmp/preflight-workflow-yaml.log | sed 's/^/    /'
+        fail "workflow YAML has hard failure patterns (see above)"
+    fi
+else
+    skip "dev-rules/scripts/check_workflow_yaml.py not present"
+fi
+
+# ---- 检查 16: review.schema.json 校验（.reviews/*.json 存在时） ----
+section "review record schema"
+if [ -f dev-rules/scripts/check_review_record.py ]; then
+    if "$PYTHON_BIN" dev-rules/scripts/check_review_record.py > /tmp/preflight-review-record.log 2>&1; then
+        head -1 /tmp/preflight-review-record.log | sed 's/^/    /'
+    else
+        cat /tmp/preflight-review-record.log | sed 's/^/    /'
+        fail "review record(s) violate schemas/review.schema.json"
+    fi
+else
+    skip "dev-rules/scripts/check_review_record.py not present"
+fi
+
+# ---- 检查 17: skill.schema.json 校验（.cursor/skills/**/skill.json 存在时） ----
+section "skill manifest schema"
+if [ -f dev-rules/scripts/check_skill_manifest.py ]; then
+    if "$PYTHON_BIN" dev-rules/scripts/check_skill_manifest.py > /tmp/preflight-skill-manifest.log 2>&1; then
+        head -1 /tmp/preflight-skill-manifest.log | sed 's/^/    /'
+    else
+        cat /tmp/preflight-skill-manifest.log | sed 's/^/    /'
+        fail "skill manifest(s) violate schemas/skill.schema.json"
+    fi
+else
+    skip "dev-rules/scripts/check_skill_manifest.py not present"
+fi
+
+# ---- 检查 18: 存在性测试 AST 扫描 ----
+# 仅断言文件存在/非空/行数的测试不是行为验证；test-philosophy.mdc 强约束。
+section "no existence-only tests"
+if [ -f dev-rules/scripts/check_existence_only_tests.py ]; then
+    if "$PYTHON_BIN" dev-rules/scripts/check_existence_only_tests.py > /tmp/preflight-existence-tests.log 2>&1; then
+        head -1 /tmp/preflight-existence-tests.log | sed 's/^/    /'
+    else
+        cat /tmp/preflight-existence-tests.log | sed 's/^/    /'
+        fail "test(s) only assert file existence — replace with behavior assertions"
+    fi
+else
+    skip "dev-rules/scripts/check_existence_only_tests.py not present"
+fi
+
+# ---- 检查 19: 本地 linter 与 CI 同源 ----
 # 自动探测项目根的 linter 工具；工具不存在或缺少配置就 skip。
 # 项目可通过 .preflight/local-lint.conf 覆写命令（每行一条 shell 命令，#注释）。
 section "local linters in sync with CI"
