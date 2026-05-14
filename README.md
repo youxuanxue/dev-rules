@@ -10,7 +10,6 @@
 | `rules/product-dev.mdc` | 默认单 PR、高风险升级路径、PR / commit 形状、自检纪律 |
 | `rules/agent-contract-enforcement.mdc` | WebUI / API / CLI / MCP 契约同步、安全基线、跨端对齐 |
 | `rules/test-philosophy.mdc` | 按风险匹配 Story 强度、测试设计、Story ↔ Test 对齐 |
-| `rules/safe-shell-commands.mdc` | 破坏性命令确认规则 |
 
 ## Claude Code 命令
 
@@ -18,7 +17,6 @@
 | --- | --- | --- |
 | `commands/decompose.md` | `/user:decompose [需求描述]` | 先做风险分级，再拆解任务与 PR 形状 |
 | `commands/review.md` | `/user:review [范围]` | 默认对话内精简审查；按需写 PR comment / 严格记录 |
-| `commands/calibrate.md` | `/user:calibrate [日期范围]` | 从历史 PR review 证据校准审查噪音与漏报 |
 | `commands/twin.md` | `/twin "<goal>"\|<workspace>\|status [workspace]\|respond <text>` | 运行 xuejiao persona supervisor，驱动 Claude Code worker 完成目标 |
 
 ## 关键入口
@@ -46,4 +44,4 @@
 
 新项目接入、本机安装、同步顺序、hook fallback、项目注册表与禁止事项统一见 `rules/dev-rules-convention.mdc`。<!-- rule-carrier-partition-pointer -->
 
-完整哲学论证见 `digital-clone-research.md`；Harness、记忆分层与 spec delta 取舍见 `docs/dev-rules-agent-context-improvement.md`。
+完整哲学论证见 `digital-clone-research.md`。Harness / 记忆分层 / spec 方法对比等进阶研究稿存放在 `research/`（仅作设计参考，与规则冲突时一律以 `rules/` 为准）。

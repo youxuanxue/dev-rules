@@ -80,17 +80,11 @@ findings:
 - `review_mode=full_conformance` 且需要保留完整证据链。
 - 用户要求写入 PR，或用户接受某条 finding 后要求记录到 PR。
 
-### PR comment 是默认校准载体
+### PR comment 是默认持久化载体
 
 需要持久化且存在 GitHub PR 时，优先把 finding 写成 PR comment / review note，而不是本地孤儿文件。写 PR comment 属于共享状态：除非用户已经明确要求，否则先确认。
 
-每条可被校准的 finding 在评论正文末尾带一个隐藏 marker：
-
-```markdown
-<!-- dev-rules-review: {"schema_version":1,"id":"R-001","severity":"high","category":"validation","file":"src/foo.py","line":42,"risk_level":"normal","review_mode":"concise","tool":"claude"} -->
-```
-
-正文给人读，marker 给 `/user:calibrate` 读。marker 只放事实字段，不塞长描述；长描述留在正文，避免 PR comment 变成 JSON 仓库。
+PR comment 正文给人读，不再注入隐藏 JSON marker——marker 的唯一消费者（历史校准命令）已删除，没有 consumer 还主动注入是 OPC 禁止的"过早工具化"。后续如确实需要重启校准，再统一讨论 marker 形式。
 
 ### 本地 JSON 只是严格/离线备选
 

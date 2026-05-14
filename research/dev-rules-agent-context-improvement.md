@@ -1,5 +1,7 @@
 # dev-rules 进阶改进方案：Harness、记忆结构与 OPC 专家团
 
+> **载体定位**：研究稿，存放于 `research/`。不是规则，不参与 sync，不被规则交叉引用。落地决策以 `rules/`、`commands/`、`global/CLAUDE.md` 为准；本文与现行规则冲突时一律以规则为准。
+>
 > 状态：Phase 1 已获批准并部分落地；本文仍作为进阶设计依据，不替代执行规则。  
 > 核心依据：`digital-clone-research.md` 的 Jobs + OPC 哲学、PR #6 的 OpenSpec / Spec Kit 调研、`qoder_shared_by_alibaba_from_images.md` 的 Qoder OCR 输入，以及 Anthropic / Claude Code / Spec Kit 官方公开材料。  
 > 一句话结论：`dev-rules` 不应演化为大而全 Agent 平台，而应成为 **OPC Agent Operating System** 的规则内核：用最少制度资产约束 Agent 的上下文、动作、记忆、专家协作与验证闭环。
@@ -837,7 +839,7 @@ Qoder OCR 多次提到安全合规、隐私模式、密钥管理、最小权限�
 
 - Qoder OCR 输入：`qoder_shared_by_alibaba_from_images.md`
 - `digital-clone-research.md`
-- `docs/spec-methods-openspec-speckit.md`
+- `research/spec-methods-openspec-speckit.md`
 - Anthropic: [How we built our multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system)
 - Anthropic: [Effective context engineering for AI agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)
 - Claude Code Docs: [Create custom subagents](https://code.claude.com/docs/en/sub-agents)
