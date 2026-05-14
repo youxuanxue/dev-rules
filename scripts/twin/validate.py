@@ -37,7 +37,14 @@ from .schema_contract import validate_artifact, validate_schema
 from .util import read_json
 from .claude_runner import DEFAULT_WORKER_TIMEOUT_SECONDS, WORKER_TIMEOUT_ENV, default_worker_timeout_seconds
 from .worker import DEFAULT_WORKER_MAX_BUDGET_USD, assess_run_quality, changed_files_from_status, default_worker_max_budget_usd
-from .workspace import WorkspaceError, load_plan, load_state, write_plan, write_state
+from .workspace import (
+    WorkspaceError,
+    load_plan,
+    load_state,
+    validate_workspace,
+    write_plan,
+    write_state,
+)
 
 
 class FakeRunner:
@@ -670,6 +677,42 @@ def run_fixture_validation() -> list[str]:
             errors.append("active workspace should be scoped by current project cwd")
         elif "workspace is required" not in isolated_cli.stderr:
             errors.append(f"isolated active workspace failure should be actionable: {isolated_cli.stderr.strip()}")
+        # Multi-project happy path: cwd-hash scoping must let two projects
+        # keep independent active workspaces. Override HOME so the cwd-hash
+        # path resolves under a tmp dir and the test runner's real
+        # ~/.claude is left alone; ACTIVE_WORKSPACE_ENV is NOT set so the
+        # cwd-hash branch in active_workspace_file() is exercised.
+        multi_home = root / "multi-home"
+        multi_home.mkdir()
+        project_a = root / "multi-project-a"
+        project_a.mkdir()
+        project_b = root / "multi-project-b"
+        project_b.mkdir()
+        workspace_a = _write_workspace(root / "multi-workspace-a")
+        workspace_b = _write_workspace(root / "multi-workspace-b")
+        validate_workspace(workspace_a)
+        validate_workspace(workspace_b)
+        multi_env = {key: value for key, value in os.environ.items() if key != ACTIVE_WORKSPACE_ENV}
+        multi_env["HOME"] = str(multi_home)
+        multi_env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+        subprocess.run(
+            [sys.executable, "-m", "scripts.twin", "status", str(workspace_a), "--json"],
+            cwd=project_a, capture_output=True, text=True, timeout=30, env=multi_env, check=True,
+        )
+        subprocess.run(
+            [sys.executable, "-m", "scripts.twin", "status", str(workspace_b), "--json"],
+            cwd=project_b, capture_output=True, text=True, timeout=30, env=multi_env, check=True,
+        )
+        multi_a = subprocess.run(
+            [sys.executable, "-m", "scripts.twin", "status", "--json"],
+            cwd=project_a, capture_output=True, text=True, timeout=30, env=multi_env,
+        )
+        if multi_a.returncode != 0:
+            errors.append(f"multi-project A should resolve workspace_a via cwd hash: {multi_a.stderr.strip()}")
+        elif str(workspace_a) not in multi_a.stdout:
+            errors.append("multi-project A active workspace did not resolve to workspace_a")
+        elif str(workspace_b) in multi_a.stdout:
+            errors.append("multi-project A leaked workspace_b — cwd-scoping is not isolating projects")
         for blocked_status in ("idle", "continue", "review_required", "accepted_done", "failed"):
             blocked_workspace = _write_workspace(root / f"respond-blocked-{blocked_status}", completed=blocked_status == "accepted_done")
             blocked_state = load_state(blocked_workspace)
