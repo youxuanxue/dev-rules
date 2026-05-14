@@ -17,6 +17,7 @@ COMMANDS_DIR="$SCRIPT_DIR/commands"
 GLOBAL_DIR="$SCRIPT_DIR/global"
 PERSONAS_DIR="$SCRIPT_DIR/personas"
 README="$SCRIPT_DIR/README.md"
+SKILLS_LINK="$SCRIPT_DIR/.cursor/skills"
 
 QUIET=0
 [ "${1:-}" = "--quiet" ] && QUIET=1
@@ -101,6 +102,18 @@ else
     done
 fi
 
+# ── Agent Skills source link ───────────────────────────────────────────
+# Skills live in the shared agent-skills repo; dev-rules only carries a
+# symlink so command/rule changes and skill changes do not fork sources.
+section "agent skills source link"
+if [ ! -L "$SKILLS_LINK" ]; then
+    fail ".cursor/skills must be a symlink to ../../agent-skills"
+elif [ "$(readlink "$SKILLS_LINK")" != "../../agent-skills" ]; then
+    fail ".cursor/skills points to $(readlink "$SKILLS_LINK"), expected ../../agent-skills"
+else
+    ok ".cursor/skills -> ../../agent-skills"
+fi
+
 # ── twin persona files present ─────────────────────────────────────────
 # personas/ is the single source of truth for supervisor + worker persona.
 # Missing files break the twin harness silently, so assert them here.
@@ -137,6 +150,19 @@ if [ "$old_persona_path_found" -eq 1 ]; then
     fail "twin must not use ~/.xuejiao-twin or secure persona snapshots; use DEV_RULES/personas directly"
 else
     ok "twin uses DEV_RULES/personas directly"
+fi
+
+section "twin status is short-circuited"
+# Doc must declare the short-circuit and point at the Python entrypoint; the
+# stricter "what is forbidden inside status" is enforced by the validate.py
+# fixture (stdout size cap + behavioral asserts), so this check only fences
+# the section anchor — rewording the prose body must not break CI.
+if grep -q '^## 用户命令短路' "$COMMANDS_DIR/twin.md" && \
+   grep -q 'terminal short-circuit' "$COMMANDS_DIR/twin.md" && \
+   grep -q 'python3 -m scripts.twin status' "$COMMANDS_DIR/twin.md"; then
+    ok "twin status command cannot expand workspace artifacts"
+else
+    fail "twin status/respond must stay a Python-only terminal short-circuit"
 fi
 
 section "twin persona source is read-only"

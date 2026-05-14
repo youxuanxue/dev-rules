@@ -13,6 +13,8 @@ from . import contracts, util
 from .bootstrap import draft_from_files, draft_workspace, write_workspace_draft
 from .claude_runner import ClaudeRunResult
 from .contracts import (
+    ACTIVE_WORKSPACE_ENV,
+    GOAL_FILE,
     GOAL_SCHEMA,
     PLAN_SCHEMA,
     PERSONAS_DIR,
@@ -638,17 +640,90 @@ def run_fixture_validation() -> list[str]:
             errors.append("status display should make needs_human actionable for humans")
         if not isinstance(display.get("evidence_paths"), dict) or not display["evidence_paths"].get("workspace_events"):
             errors.append("status display should expose workspace event evidence path")
+        active_env = {**os.environ, ACTIVE_WORKSPACE_ENV: str(root / "active-workspace")}
         needs_cli = subprocess.run(
-            [sys.executable, "-m", "scripts.twin", "status", "--workspace", str(workspace)],
+            [sys.executable, "-m", "scripts.twin", "status", str(workspace)],
             cwd=Path(__file__).resolve().parents[2],
             capture_output=True,
             text=True,
             timeout=30,
+            env=active_env,
         )
+        if len(needs_cli.stdout.encode("utf-8")) > 4096:
+            errors.append("needs_human status CLI should stay compact and not expand workspace artifacts")
         if "Status: waiting for you (needs_human)" not in needs_cli.stdout or "Next command: /twin respond <answer>" not in needs_cli.stdout:
             errors.append("needs_human CLI should lead with human-friendly status and next command")
         if "respond=/twin respond <answer>" not in needs_cli.stdout or "evidence_review=" not in needs_cli.stdout:
             errors.append("needs_human CLI should still include the question and /twin respond path")
+        isolated_env = {key: value for key, value in os.environ.items() if key != ACTIVE_WORKSPACE_ENV}
+        isolated_env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+        isolated_project = root / "active-workspace-isolated-project"
+        isolated_project.mkdir()
+        isolated_cli = subprocess.run(
+            [sys.executable, "-m", "scripts.twin", "respond", "继续"],
+            cwd=isolated_project,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=isolated_env,
+        )
+        if isolated_cli.returncode == 0:
+            errors.append("active workspace should be scoped by current project cwd")
+        elif "workspace is required" not in isolated_cli.stderr:
+            errors.append(f"isolated active workspace failure should be actionable: {isolated_cli.stderr.strip()}")
+        # Multi-project happy path: cwd-hash scoping must let two projects
+        # keep independent active workspaces. Override HOME so the cwd-hash
+        # path resolves under a tmp dir and the test runner's real
+        # ~/.claude is left alone; ACTIVE_WORKSPACE_ENV is NOT set so the
+        # cwd-hash branch in active_workspace_file() is exercised.
+        multi_home = root / "multi-home"
+        multi_home.mkdir()
+        project_a = root / "multi-project-a"
+        project_a.mkdir()
+        project_b = root / "multi-project-b"
+        project_b.mkdir()
+        workspace_a = _write_workspace(root / "multi-workspace-a")
+        workspace_b = _write_workspace(root / "multi-workspace-b")
+        validate_workspace(workspace_a)
+        validate_workspace(workspace_b)
+        multi_env = {key: value for key, value in os.environ.items() if key != ACTIVE_WORKSPACE_ENV}
+        multi_env["HOME"] = str(multi_home)
+        multi_env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+        seed_a = subprocess.run(
+            [sys.executable, "-m", "scripts.twin", "status", str(workspace_a), "--json"],
+            cwd=project_a, capture_output=True, text=True, timeout=30, env=multi_env,
+        )
+        if seed_a.returncode != 0:
+            errors.append(f"multi-project A seed status failed: {seed_a.stderr.strip()}")
+        seed_b = subprocess.run(
+            [sys.executable, "-m", "scripts.twin", "status", str(workspace_b), "--json"],
+            cwd=project_b, capture_output=True, text=True, timeout=30, env=multi_env,
+        )
+        if seed_b.returncode != 0:
+            errors.append(f"multi-project B seed status failed: {seed_b.stderr.strip()}")
+        multi_a = subprocess.run(
+            [sys.executable, "-m", "scripts.twin", "status", "--json"],
+            cwd=project_a, capture_output=True, text=True, timeout=30, env=multi_env,
+        )
+        if multi_a.returncode != 0:
+            errors.append(f"multi-project A should resolve workspace_a via cwd hash: {multi_a.stderr.strip()}")
+        elif str(workspace_a) not in multi_a.stdout:
+            errors.append("multi-project A active workspace did not resolve to workspace_a")
+        elif str(workspace_b) in multi_a.stdout:
+            errors.append("multi-project A leaked workspace_b — cwd-scoping is not isolating projects")
+        # Stale pointer: workspace_a's pointer still resolves, but the
+        # workspace itself is gone. The user-visible error must name the
+        # path AND the recovery action, not bubble up a schema failure
+        # from a downstream load_goal.
+        (workspace_a / GOAL_FILE).unlink()
+        stale_a = subprocess.run(
+            [sys.executable, "-m", "scripts.twin", "respond", "继续"],
+            cwd=project_a, capture_output=True, text=True, timeout=30, env=multi_env,
+        )
+        if stale_a.returncode == 0:
+            errors.append("stale active workspace should not succeed silently")
+        elif "no longer exists" not in stale_a.stderr:
+            errors.append(f"stale active workspace error should be directed: {stale_a.stderr.strip()}")
         for blocked_status in ("idle", "continue", "review_required", "accepted_done", "failed"):
             blocked_workspace = _write_workspace(root / f"respond-blocked-{blocked_status}", completed=blocked_status == "accepted_done")
             blocked_state = load_state(blocked_workspace)
@@ -672,10 +747,19 @@ def run_fixture_validation() -> list[str]:
             errors.append("worker should not start while needs_human pending")
         except WorkspaceError:
             pass
-        record_human_response(workspace, "继续")
+        user_respond_cli = subprocess.run(
+            [sys.executable, "-m", "scripts.twin", "respond", "继续"],
+            cwd=Path(__file__).resolve().parents[2],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=active_env,
+        )
+        if user_respond_cli.returncode != 0:
+            errors.append(f"/twin respond user path should use active workspace: {user_respond_cli.stderr.strip()}")
         state = load_state(workspace)
         if state.get("status") != "continue" or state.get("needs_human") is not None:
-            errors.append("respond did not clear needs_human state")
+            errors.append("respond CLI user path did not clear needs_human state")
         workspace_events = (workspace / "workspace_events.jsonl").read_text(encoding="utf-8")
         if "继续" in workspace_events:
             errors.append("respond workspace event should not record human response text")

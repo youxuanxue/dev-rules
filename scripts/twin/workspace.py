@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 from .contracts import (
+    ACTIVE_WORKSPACE_ENV,
     CURRENT_FILE,
     GOAL_FILE,
     GOAL_SCHEMA,
@@ -30,6 +33,48 @@ from .util import now_utc, read_json, read_yaml_like, write_json, write_yaml_lik
 
 class WorkspaceError(ValueError):
     pass
+
+
+def active_workspace_file() -> Path:
+    """Path to the active-twin-workspace pointer for the current project.
+
+    Layout: ``~/.claude/twin-active-workspaces/<id>`` where ``<id>`` is the
+    first 16 hex chars of ``sha256(resolved cwd)``. File content is a single
+    line — the absolute path of the workspace last touched by ``/twin``,
+    ``/twin status <ws>`` or ``/twin bootstrap``. ``TWIN_ACTIVE_WORKSPACE_FILE``
+    overrides this resolution for tests and isolated runs.
+    """
+    override = os.environ.get(ACTIVE_WORKSPACE_ENV)
+    if override:
+        return Path(override).expanduser().resolve()
+    project_id = hashlib.sha256(str(Path.cwd().resolve()).encode("utf-8")).hexdigest()[:16]
+    return Path.home() / ".claude" / "twin-active-workspaces" / project_id
+
+
+def remember_active_workspace(workspace: Path | str) -> Path:
+    resolved = resolve_workspace(workspace)
+    target = active_workspace_file()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + ".tmp")
+    tmp.write_text(str(resolved) + "\n", encoding="utf-8")
+    os.replace(tmp, target)
+    return resolved
+
+
+def load_active_workspace() -> Path:
+    target = active_workspace_file()
+    if not target.exists():
+        raise WorkspaceError("workspace is required; run /twin <workspace> or /twin status <workspace> first")
+    text = target.read_text(encoding="utf-8").strip()
+    if not text:
+        raise WorkspaceError("active twin workspace is empty; run /twin <workspace> or /twin status <workspace> first")
+    resolved = resolve_workspace(text)
+    if not (resolved / GOAL_FILE).exists():
+        raise WorkspaceError(
+            f"active twin workspace no longer exists at {resolved}; "
+            "run /twin <workspace> or /twin status <workspace> to set a new one"
+        )
+    return resolved
 
 
 def resolve_workspace(path: Path | str) -> Path:

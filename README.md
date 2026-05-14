@@ -19,6 +19,10 @@
 | `commands/review.md` | `/user:review [范围]` | 默认对话内精简审查；按需写 PR comment / 严格记录 |
 | `commands/twin.md` | `/twin "<goal>"\|<workspace>\|status [workspace]\|respond <text>` | 运行 xuejiao persona supervisor，驱动 Claude Code worker 完成目标 |
 
+## Agent Skills
+
+`.cursor/skills` 是指向 `$HOME/Codes/agent-skills` 的 symlink，作为 Skills 的编辑与提交入口；不要在 `.claude/skills` 创建真实副本。
+
 ## 关键入口
 
 | 入口 | 作用 |
