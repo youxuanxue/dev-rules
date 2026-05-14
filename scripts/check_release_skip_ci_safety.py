@@ -7,52 +7,13 @@ import re
 import subprocess
 import sys
 
-from preflight_common import commit_text, run_git
+from preflight_common import cli_fail, commit_text, parse_ini_sections, run_git
 
-DEFAULT_SKIP_MARKERS = ("[skip ci]", "[ci skip]")
-DEFAULT_RELEASE_BRANCH_PATTERNS = (
-    r"^main$",
-    r"^master$",
-    r"^release/",
-    r"^hotfix/",
-)
-DEFAULT_RELEASE_TAG_PATTERNS = (
-    r"^v\d+\.\d+\.\d+",
-)
-
-
-def parse_config(path: pathlib.Path | None) -> tuple[list[str], list[str], list[str]]:
-    markers = list(DEFAULT_SKIP_MARKERS)
-    branches = list(DEFAULT_RELEASE_BRANCH_PATTERNS)
-    tags = list(DEFAULT_RELEASE_TAG_PATTERNS)
-
-    if path and path.is_file():
-        text = path.read_text(encoding="utf-8")
-        mode = None
-        for line in text.splitlines():
-            s = line.strip()
-            if not s or s.startswith("#"):
-                continue
-            if s == "[skip_markers]":
-                mode = "markers"
-                markers = []
-                continue
-            if s == "[release_branch_patterns]":
-                mode = "branches"
-                branches = []
-                continue
-            if s == "[release_tag_patterns]":
-                mode = "tags"
-                tags = []
-                continue
-            if mode == "markers":
-                markers.append(s.lower())
-            elif mode == "branches":
-                branches.append(s)
-            elif mode == "tags":
-                tags.append(s)
-
-    return markers, branches, tags
+DEFAULTS = {
+    "skip_markers": ["[skip ci]", "[ci skip]"],
+    "release_branch_patterns": [r"^main$", r"^master$", r"^release/", r"^hotfix/"],
+    "release_tag_patterns": [r"^v\d+\.\d+\.\d+"],
+}
 
 
 def is_release_context(branch: str, tags: list[str], force: bool, branch_patterns: list[str], tag_patterns: list[str]) -> bool:
@@ -60,10 +21,7 @@ def is_release_context(branch: str, tags: list[str], force: bool, branch_pattern
         return True
     if any(re.search(p, branch) for p in branch_patterns):
         return True
-    for t in tags:
-        if any(re.search(p, t) for p in tag_patterns):
-            return True
-    return False
+    return any(any(re.search(p, t) for p in tag_patterns) for t in tags)
 
 
 def main() -> int:
@@ -85,14 +43,16 @@ def main() -> int:
         sys.stderr.write(e.stderr)
         return 2
 
-    cfg = pathlib.Path(args.rules)
-    markers, branch_patterns, tag_patterns = parse_config(cfg if cfg.exists() else None)
+    cfg_path = pathlib.Path(args.rules)
+    cfg = parse_ini_sections(cfg_path, DEFAULTS)
+    # markers compare against lowercased commit text; patterns stay verbatim
+    markers = [m.lower() for m in cfg["skip_markers"]]
 
-    if cfg.exists() and not markers:
+    if cfg_path.is_file() and not markers:
         sys.stderr.write("[check_release_skip_ci_safety] config error: [skip_markers] is empty\n")
         return 2
 
-    if not is_release_context(branch, tags, args.force, branch_patterns, tag_patterns):
+    if not is_release_context(branch, tags, args.force, cfg["release_branch_patterns"], cfg["release_tag_patterns"]):
         print("[check_release_skip_ci_safety] skip: non-release context")
         return 0
 
@@ -104,11 +64,11 @@ def main() -> int:
 
     hit = [m for m in markers if m in msg]
     if hit:
-        sys.stderr.write("[check_release_skip_ci_safety] skip-ci marker forbidden in release context\n")
-        sys.stderr.write(f"branch={branch}, tags={','.join(tags) if tags else '(none)'}\n")
-        for marker in hit:
-            sys.stderr.write(f"  - found marker: {marker}\n")
-        return 1
+        return cli_fail(
+            "check_release_skip_ci_safety",
+            f"skip-ci marker forbidden in release context (branch={branch}, tags={','.join(tags) or '(none)'})",
+            *(f"found marker: {m}" for m in hit),
+        )
 
     print("[check_release_skip_ci_safety] pass")
     return 0

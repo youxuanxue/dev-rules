@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import pathlib
 import re
 import subprocess
-from collections.abc import Sequence
+import sys
+from collections.abc import Callable, Sequence
 
 
 def run_git(args: Sequence[str], *, strip: bool = False) -> str:
@@ -29,3 +31,49 @@ def compile_patterns(patterns: Sequence[str], *, ignore_case: bool = False) -> l
 
 def matches_any(value: str, patterns: Sequence[re.Pattern[str]]) -> bool:
     return any(rx.search(value) for rx in patterns)
+
+
+def parse_ini_sections(
+    path: pathlib.Path | None,
+    defaults: dict[str, Sequence[str]],
+    *,
+    transform: Callable[[str], str] | None = None,
+    replace_defaults: bool = True,
+) -> dict[str, list[str]]:
+    """Parse the lightweight INI dialect used by .preflight/*.conf files.
+
+    - `[section]` headers switch the active section.
+    - By default, values inside known sections REPLACE defaults; pass
+      `replace_defaults=False` for legacy append-on-top-of-defaults sections.
+    - Unknown sections are ignored, comments (`#`) and blank lines skipped.
+
+    Defaults are copied so callers can mutate the result safely.
+    """
+    out: dict[str, list[str]] = {k: list(v) for k, v in defaults.items()}
+    if path is None or not path.is_file():
+        return out
+    section: str | None = None
+    cleared: set[str] = set()
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        s = raw.strip()
+        if not s or s.startswith("#"):
+            continue
+        if s.startswith("[") and s.endswith("]"):
+            key = s[1:-1]
+            section = key if key in defaults else None
+            continue
+        if section is None:
+            continue
+        if replace_defaults and section not in cleared:
+            out[section] = []
+            cleared.add(section)
+        out[section].append(transform(s) if transform else s)
+    return out
+
+
+def cli_fail(prefix: str, message: str, *details: str) -> int:
+    """Standard one-line stderr failure used by every check_*.py script."""
+    sys.stderr.write(f"[{prefix}] {message}\n")
+    for d in details:
+        sys.stderr.write(f"  - {d}\n")
+    return 1

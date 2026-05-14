@@ -48,4 +48,4 @@
 
 新项目接入、本机安装、同步顺序、hook fallback、项目注册表与禁止事项统一见 `rules/dev-rules-convention.mdc`。<!-- rule-carrier-partition-pointer -->
 
-完整哲学论证见 `digital-clone-research.md`。Harness / 记忆分层 / spec 方法对比等进阶研究稿存放在 `research/`（仅作设计参考，与规则冲突时一律以 `rules/` 为准）。
+完整哲学论证见 `digital-clone-research.md`。
