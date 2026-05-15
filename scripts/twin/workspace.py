@@ -265,6 +265,7 @@ def worker_running_diagnostics(workspace: Path, state: dict[str, Any]) -> dict[s
     if not run_id:
         return {
             "state": "stale_no_artifacts",
+            "recommended_action": "recover_worker_turn",
             "run_id": None,
             "pending": False,
             "events_bytes": 0,

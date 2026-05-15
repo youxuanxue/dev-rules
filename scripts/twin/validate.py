@@ -267,6 +267,15 @@ def _runtime_reentry_errors(root: Path) -> list[str]:
     if action.get("action") != "watch_worker" or action.get("worker", {}).get("state") != "active":
         errors.append(f"active worker_running continuation should enter watchdog: {action!r}")
 
+    stale_no_run = _write_workspace(root / "worker-stale-no-run")
+    stale_no_run_state = load_state(stale_no_run)
+    stale_no_run_state["status"] = "worker_running"
+    stale_no_run_state["current_run_id"] = None
+    write_state(stale_no_run, stale_no_run_state)
+    stale_no_run_action = continuation_action(stale_no_run)
+    if stale_no_run_action.get("action") != "recover_worker_turn":
+        errors.append(f"worker_running without current_run_id should recover: {stale_no_run_action!r}")
+
     stale = _write_workspace(root / "worker-stale")
     stale_state = load_state(stale)
     stale_state["status"] = "worker_running"
