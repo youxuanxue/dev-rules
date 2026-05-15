@@ -110,11 +110,11 @@ worker prompt 由四部分组成：
 3. `plan.yaml`
 4. supervisor 本轮生成的 `next_instruction`
 
-worker session memory 只是续跑辅助；事实源始终是 workspace artifacts 和 repo 状态。
+worker session memory 只是续跑辅助；事实源始终是 workspace artifacts 和 repo 状态。跨会话重入先由 `next --json` 读取 artifact state 决定下一步，不能依赖上一段交互记忆。
 
 ## status artifact
 
-`CURRENT.md` 和 `/twin status` 是人类状态面：从 `goal.yaml`、`plan.yaml`、`supervisor_state.json` 与 run artifact 派生，不驱动状态变化。它们展示可读状态、当前 item、轮次、下一条命令和必要证据路径；机器消费继续使用 `status --json` 的原始字段。
+`CURRENT.md` 和 `/twin status` 是人类状态面：从 `goal.yaml`、`plan.yaml`、`supervisor_state.json` 与 run artifact 派生，不驱动状态变化。它们展示可读状态、当前 item、轮次、下一条命令和必要证据路径；`worker_running` 时只用 artifact metadata 派生 compact worker 诊断，不展开日志。机器消费继续使用 `status --json` 的原始字段。
 
 `workspace_events.jsonl` 只记录 workspace 级人类 mutation 审计。当前仅记录成功的 `/twin respond`，不写入回答正文，只记录状态迁移、artifact 引用和回答长度。
 

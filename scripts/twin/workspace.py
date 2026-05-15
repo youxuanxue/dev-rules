@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -244,6 +245,69 @@ def load_human_response(workspace: Path) -> dict[str, Any] | None:
     return value
 
 
+def _file_mtime_seconds(path: Path) -> float | None:
+    if not path.exists():
+        return None
+    return max(0.0, datetime.now(UTC).timestamp() - path.stat().st_mtime)
+
+
+def _compact_seconds(value: float | None) -> int | None:
+    if value is None:
+        return None
+    return int(value)
+
+
+def worker_running_diagnostics(workspace: Path, state: dict[str, Any]) -> dict[str, Any] | None:
+    if state.get("status") != "worker_running":
+        return None
+    workspace = resolve_workspace(workspace)
+    run_id = str(state.get("current_run_id") or "")
+    if not run_id:
+        return {
+            "state": "stale_no_artifacts",
+            "recommended_action": "recover_worker_turn",
+            "run_id": None,
+            "pending": False,
+            "events_bytes": 0,
+            "run_artifact": False,
+            "last_activity_seconds": None,
+            "note": "worker_running has no current_run_id; rerun /twin <workspace> to recover",
+        }
+    run_dir = workspace / RUNS_DIR / run_id
+    pending = run_dir / "pending.json"
+    events = run_dir / "events.jsonl"
+    run_artifact = run_dir / "run.json"
+    existing = [path for path in (pending, events, run_artifact) if path.exists()]
+    last_activity = min((_file_mtime_seconds(path) for path in existing), default=None)
+    events_bytes = events.stat().st_size if events.exists() else 0
+    if run_artifact.exists():
+        state_name = "completed_artifact_present"
+        recommended_action = "review_run"
+        note = "run artifact exists while state is worker_running; rerun /twin <workspace> to review or recover"
+    elif not existing:
+        state_name = "stale_no_artifacts"
+        recommended_action = "recover_worker_turn"
+        note = "no worker artifacts found; next /twin <workspace> will recover with a fresh worker turn"
+    elif events.exists():
+        state_name = "active" if last_activity is not None and last_activity <= 600 else "quiet"
+        recommended_action = "watch_worker"
+        note = "worker output is updating" if state_name == "active" else "worker artifacts exist but have been quiet"
+    else:
+        state_name = "starting" if last_activity is not None and last_activity <= 600 else "quiet"
+        recommended_action = "watch_worker"
+        note = "worker has pending artifact but no event stream yet" if state_name == "starting" else "worker pending artifact exists but has been quiet"
+    return {
+        "state": state_name,
+        "recommended_action": recommended_action,
+        "run_id": run_id,
+        "pending": pending.exists(),
+        "events_bytes": events_bytes,
+        "run_artifact": run_artifact.exists(),
+        "last_activity_seconds": _compact_seconds(last_activity),
+        "note": note,
+    }
+
+
 def status_display(workspace: Path, goal: dict[str, Any], plan: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
     workspace = resolve_workspace(workspace)
     status = str(state.get("status") or "unknown")
@@ -278,9 +342,13 @@ def status_display(workspace: Path, goal: dict[str, Any], plan: dict[str, Any], 
     }
     current_run_id = state.get("current_run_id")
     run_ref = str(workspace / RUNS_DIR / str(current_run_id) / "run.json") if current_run_id else None
-    return {
+    worker = worker_running_diagnostics(workspace, state)
+    summary = summaries.get(status, "Workspace state is available in supervisor_state.json.")
+    if worker:
+        summary = f"{summary} {worker['note']}"
+    display = {
         "label": labels.get(status, status),
-        "summary": summaries.get(status, "Workspace state is available in supervisor_state.json."),
+        "summary": summary,
         "next_command": next_commands.get(status, f"/twin status {workspace}"),
         "current_item_id": current_item_id,
         "evidence_paths": {
@@ -291,6 +359,9 @@ def status_display(workspace: Path, goal: dict[str, Any], plan: dict[str, Any], 
             "review": f"{run_ref}::review" if run_ref else None,
         },
     }
+    if worker:
+        display["worker"] = worker
+    return display
 
 
 def render_current(workspace: Path, goal: dict[str, Any], plan: dict[str, Any], state: dict[str, Any]) -> None:
@@ -316,6 +387,17 @@ def render_current(workspace: Path, goal: dict[str, Any], plan: dict[str, Any], 
         "## Plan gaps",
         *(f"- {gap}" for gap in (gaps or ["none"])),
     ]
+    worker = display.get("worker")
+    if isinstance(worker, dict):
+        lines.extend([
+            "",
+            "## Worker",
+            f"- State: {worker.get('state')}",
+            f"- Run: {worker.get('run_id') or 'none'}",
+            f"- Last activity seconds: {worker.get('last_activity_seconds') if worker.get('last_activity_seconds') is not None else 'unknown'}",
+            f"- Events bytes: {worker.get('events_bytes')}",
+            f"- Note: {worker.get('note')}",
+        ])
     needs_human = state.get("needs_human")
     if isinstance(needs_human, dict):
         lines.extend([

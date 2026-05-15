@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 from .bootstrap import draft_from_files, draft_workspace, write_workspace_draft
@@ -11,6 +12,7 @@ from .runtime import (
     apply_supervisor_review,
     build_review_context,
     build_supervisor_context,
+    continuation_action,
     record_human_response,
     start_worker_turn,
     status_workspace,
@@ -64,6 +66,16 @@ def _cmd_status(args: argparse.Namespace) -> int:
         print(f"Current item: {status['current_item_id'] or 'none'}")
         print(f"Round: {status['round_index']}")
         print(f"Next command: {display.get('next_command') or 'none'}")
+        worker = display.get("worker") if isinstance(display.get("worker"), dict) else None
+        if worker:
+            last_activity = worker.get("last_activity_seconds")
+            last_activity_text = f"{last_activity}s" if last_activity is not None else "unknown"
+            print(
+                "Worker: "
+                f"{worker.get('state')}; run={worker.get('run_id') or 'none'}; "
+                f"last_activity={last_activity_text}; events={worker.get('events_bytes', 0)}B"
+            )
+            print(f"Worker note: {worker.get('note')}")
         print(f"Workspace: {status['workspace']}")
         print(f"Current: {status['current']}")
         for key, value in evidence_paths.items():
@@ -71,6 +83,56 @@ def _cmd_status(args: argparse.Namespace) -> int:
                 print(f"Evidence {key}: {value}")
         _print_needs_human(status)
     return 0
+
+
+def _cmd_next(args: argparse.Namespace) -> int:
+    try:
+        action = continuation_action(_workspace_arg(args, remember=True))
+    except WorkspaceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if args.json:
+        _print_json(action)
+    else:
+        print(f"action={action['action']}")
+        print(f"status={action['status']}")
+        if action.get("current_run_id"):
+            print(f"run_id={action['current_run_id']}")
+        if action.get("command"):
+            print(f"command={action['command']}")
+        print(f"next={action.get('next') or 'none'}")
+    return 0
+
+
+def _cmd_watch(args: argparse.Namespace) -> int:
+    workspace = _workspace_arg(args, remember=True)
+    deadline = time.monotonic() + max(0.0, float(args.max_wait_seconds))
+    latest: dict[str, object] | None = None
+    while True:
+        try:
+            latest = continuation_action(workspace)
+        except WorkspaceError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        if latest.get("action") != "watch_worker":
+            if args.json:
+                _print_json(latest)
+            else:
+                print(f"action={latest.get('action')}")
+                print(f"status={latest.get('status')}")
+                print(f"next={latest.get('next') or 'none'}")
+            return 0
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            timeout = {**latest, "action": "worker_quiet_timeout", "next": f"/twin status {Path(workspace).expanduser().resolve()}"}
+            if args.json:
+                _print_json(timeout)
+            else:
+                print("action=worker_quiet_timeout")
+                print(f"status={timeout.get('status')}")
+                print(f"next={timeout.get('next')}")
+            return 1
+        time.sleep(min(max(0.0, float(args.poll_interval_seconds)), remaining))
 
 
 def _cmd_respond(args: argparse.Namespace) -> int:
@@ -103,8 +165,11 @@ def _cmd_worker_turn(args: argparse.Namespace) -> int:
     if args.json:
         _print_json(run)
     else:
+        workspace = Path(args.workspace).expanduser().resolve()
         print(f"run_id={run['run_id']} status={run['status']} resume_used={run['worker']['resume_used']}")
-        print(f"run={Path(args.workspace).expanduser().resolve() / 'runs' / run['run_id'] / 'run.json'}")
+        print(f"run={workspace / 'runs' / run['run_id'] / 'run.json'}")
+        if run["status"] == "review_required":
+            print(f"next=/twin {workspace}")
     return 0 if run["status"] == "review_required" else 1
 
 
@@ -187,6 +252,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_status.add_argument("--workspace", dest="workspace")
     p_status.add_argument("--json", action="store_true")
     p_status.set_defaults(func=lambda args: _cmd_status(_merge_workspace(args)))
+
+    p_next = sub.add_parser("next")
+    p_next.add_argument("--workspace", required=True)
+    p_next.add_argument("--json", action="store_true")
+    p_next.set_defaults(func=_cmd_next)
+
+    p_watch = sub.add_parser("watch")
+    p_watch.add_argument("--workspace", required=True)
+    p_watch.add_argument("--max-wait-seconds", type=float, default=900.0)
+    p_watch.add_argument("--poll-interval-seconds", type=float, default=10.0)
+    p_watch.add_argument("--json", action="store_true")
+    p_watch.set_defaults(func=_cmd_watch)
 
     p_respond = sub.add_parser("respond")
     p_respond.add_argument("text_pos", nargs="*")

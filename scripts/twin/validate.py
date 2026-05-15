@@ -29,16 +29,17 @@ from .runtime import (
     apply_supervisor_review,
     build_review_context,
     build_supervisor_context,
+    continuation_action,
     record_human_response,
     start_worker_turn,
     status_workspace,
     validate_workspace,
 )
 from .schema_contract import validate_artifact, validate_schema
-from .util import read_json
+from .util import read_json, write_json
 from .claude_runner import DEFAULT_WORKER_TIMEOUT_SECONDS, WORKER_TIMEOUT_ENV, default_worker_timeout_seconds
 from .worker import DEFAULT_WORKER_MAX_BUDGET_USD, assess_run_quality, changed_files_from_status, default_worker_max_budget_usd
-from .workspace import WorkspaceError, load_plan, load_state, write_plan, write_state
+from .workspace import WorkspaceError, load_plan, load_state, status_summary, write_plan, write_state
 
 
 class FakeRunner:
@@ -244,6 +245,160 @@ def _schema_errors() -> list[str]:
     return errors
 
 
+def _runtime_reentry_errors(root: Path) -> list[str]:
+    errors: list[str] = []
+    workspace = _write_workspace(root / "worker-diagnostics")
+    state = load_state(workspace)
+    state["status"] = "worker_running"
+    state["current_run_id"] = "run-active"
+    write_state(workspace, state)
+    run_dir = workspace / "runs" / "run-active"
+    run_dir.mkdir(parents=True)
+    write_json(run_dir / "pending.json", {"schema_version": 1, "run_id": "run-active"})
+    (run_dir / "events.jsonl").write_text('{"type":"assistant"}\n', encoding="utf-8")
+    before_state = load_state(workspace)
+    status = status_summary(workspace)
+    worker = status.get("display", {}).get("worker", {})
+    if worker.get("state") != "active" or worker.get("events_bytes", 0) <= 0:
+        errors.append(f"worker_running status should expose active diagnostics: {worker!r}")
+    if load_state(workspace) != before_state:
+        errors.append("worker_running diagnostics must not mutate state")
+    action = continuation_action(workspace)
+    if action.get("action") != "watch_worker" or action.get("worker", {}).get("state") != "active":
+        errors.append(f"active worker_running continuation should enter watchdog: {action!r}")
+
+    stale_no_run = _write_workspace(root / "worker-stale-no-run")
+    stale_no_run_state = load_state(stale_no_run)
+    stale_no_run_state["status"] = "worker_running"
+    stale_no_run_state["current_run_id"] = None
+    write_state(stale_no_run, stale_no_run_state)
+    stale_no_run_action = continuation_action(stale_no_run)
+    if stale_no_run_action.get("action") != "recover_worker_turn":
+        errors.append(f"worker_running without current_run_id should recover: {stale_no_run_action!r}")
+
+    stale = _write_workspace(root / "worker-stale")
+    stale_state = load_state(stale)
+    stale_state["status"] = "worker_running"
+    stale_state["current_run_id"] = "run-missing"
+    write_state(stale, stale_state)
+    stale_status = status_summary(stale)
+    stale_worker = stale_status.get("display", {}).get("worker", {})
+    if stale_worker.get("state") != "stale_no_artifacts":
+        errors.append(f"stale worker_running should be diagnosed without repair: {stale_worker!r}")
+    if load_state(stale).get("status") != "worker_running":
+        errors.append("stale status diagnostics should not repair worker_running")
+    stale_action = continuation_action(stale)
+    if stale_action.get("action") != "recover_worker_turn":
+        errors.append(f"stale worker_running continuation should recover: {stale_action!r}")
+
+    completed_artifact = _write_workspace(root / "worker-completed-artifact")
+    completed_state = load_state(completed_artifact)
+    completed_state["status"] = "worker_running"
+    completed_state["current_run_id"] = "run-done"
+    write_state(completed_artifact, completed_state)
+    completed_dir = completed_artifact / "runs" / "run-done"
+    completed_dir.mkdir(parents=True)
+    write_json(completed_dir / "run.json", {"schema_version": 1, "run_id": "run-done", "status": "review_required"})
+    completed_worker = status_summary(completed_artifact).get("display", {}).get("worker", {})
+    if completed_worker.get("state") != "completed_artifact_present":
+        errors.append(f"completed artifact should be surfaced for reentry: {completed_worker!r}")
+    completed_action = continuation_action(completed_artifact)
+    if completed_action.get("action") != "review_run":
+        errors.append(f"completed worker artifact should route to review: {completed_action!r}")
+
+    quiet = _write_workspace(root / "worker-quiet")
+    quiet_state = load_state(quiet)
+    quiet_state["status"] = "worker_running"
+    quiet_state["current_run_id"] = "run-quiet"
+    write_state(quiet, quiet_state)
+    quiet_dir = quiet / "runs" / "run-quiet"
+    quiet_dir.mkdir(parents=True)
+    write_json(quiet_dir / "pending.json", {"schema_version": 1, "run_id": "run-quiet"})
+    old_time = 1
+    os.utime(quiet_dir / "pending.json", (old_time, old_time))
+    quiet_action = continuation_action(quiet)
+    if quiet_action.get("action") != "watch_worker" or quiet_action.get("worker", {}).get("state") != "quiet":
+        errors.append(f"quiet worker should route to bounded watchdog: {quiet_action!r}")
+
+    for expected_status, expected_action in [
+        ("idle", "supervisor_instruction"),
+        ("continue", "worker_turn"),
+        ("review_required", "review_run"),
+        ("needs_human", "ask_human"),
+        ("accepted_done", "done"),
+        ("failed", "failed"),
+    ]:
+        action_ws = _write_workspace(root / f"next-{expected_status}")
+        action_state = load_state(action_ws)
+        action_state["status"] = expected_status
+        if expected_status in {"continue", "review_required"}:
+            action_state["next_instruction"] = "继续 fixture"
+            action_state["current_run_id"] = "run-action"
+        if expected_status == "needs_human":
+            action_state["needs_human"] = {"question": "继续吗？", "context": "fixture", "created_at": "2026-01-01T00:00:00Z"}
+        write_state(action_ws, action_state)
+        action = continuation_action(action_ws)
+        if action.get("action") != expected_action:
+            errors.append(f"{expected_status} continuation action should be {expected_action}: {action!r}")
+
+    review_ws = _write_workspace(root / "loop-review-required")
+    review_run = start_worker_turn(review_ws, "生成待 review run", runner=FakeRunner())
+    if load_state(review_ws).get("status") != "review_required":
+        errors.append("fixture worker should leave review_required before loop resume")
+    resumed = run_supervisor_loop_harness(
+        review_ws,
+        instruction="",
+        runner=FakeRunner(),
+        max_rounds=2,
+        review_fn=lambda _context: _review("accepted_done"),
+    )
+    if resumed.get("status") != "accepted_done" or resumed.get("runs"):
+        errors.append(f"loop harness should resume review_required without starting another run: {resumed!r}, first={review_run['run_id']}")
+
+    running_done_ws = _write_workspace(root / "loop-worker-running-done")
+    done_run = start_worker_turn(running_done_ws, "生成 worker_running run artifact", runner=FakeRunner())
+    done_state = load_state(running_done_ws)
+    done_state["status"] = "worker_running"
+    write_state(running_done_ws, done_state)
+    running_done = run_supervisor_loop_harness(
+        running_done_ws,
+        instruction="",
+        runner=FakeRunner(),
+        max_rounds=2,
+        review_fn=lambda _context: _review("accepted_done"),
+    )
+    if running_done.get("status") != "accepted_done" or running_done.get("runs"):
+        errors.append(f"loop harness should review completed worker_running artifact: {running_done!r}, run={done_run['run_id']}")
+
+    stale_loop = _write_workspace(root / "loop-worker-stale")
+    stale_loop_state = load_state(stale_loop)
+    stale_loop_state["status"] = "worker_running"
+    stale_loop_state["current_run_id"] = "run-stale-loop"
+    stale_loop_state["next_instruction"] = "恢复 stale worker fixture"
+    write_state(stale_loop, stale_loop_state)
+    stale_result = run_supervisor_loop_harness(
+        stale_loop,
+        instruction="",
+        runner=FakeRunner(),
+        max_rounds=2,
+        review_fn=lambda _context: _review("accepted_done"),
+    )
+    if stale_result.get("status") != "accepted_done" or len(stale_result.get("runs") or []) != 1:
+        errors.append(f"loop harness should recover stale worker_running with one fresh run: {stale_result!r}")
+
+    quiet_result = run_supervisor_loop_harness(
+        quiet,
+        instruction="",
+        runner=FakeRunner(),
+        max_rounds=1,
+        max_wait_seconds=0,
+        review_fn=lambda _context: _review("accepted_done"),
+    )
+    if quiet_result.get("status") != "worker_quiet_timeout":
+        errors.append(f"loop harness should return explicit worker_quiet_timeout: {quiet_result!r}")
+    return errors
+
+
 def _behavior_helper_errors() -> list[str]:
     errors: list[str] = []
     changed = changed_files_from_status(
@@ -402,6 +557,7 @@ def run_fixture_validation() -> list[str]:
             errors.append(f"bootstrap workspace failed validation: {exc}")
         if not (bootstrap_workspace / "goal.yaml").exists() or not (bootstrap_workspace / "plan.yaml").exists():
             errors.append("bootstrap should write goal.yaml and plan.yaml")
+        errors.extend(_runtime_reentry_errors(root))
         authored_source = _write_workspace(root / "supervisor-authored-source")
         authored_draft = draft_from_files(
             root / "supervisor-authored-target",
