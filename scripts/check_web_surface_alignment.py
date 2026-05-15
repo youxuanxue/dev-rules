@@ -91,6 +91,11 @@ def repo_paths() -> list[str]:
     return sorted(set(paths) | roots)
 
 
+def staged_paths() -> list[str]:
+    out = run_git(["diff", "--cached", "--name-only"])
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Require Web/config/contract alignment evidence for backend or business-logic changes."
@@ -142,6 +147,15 @@ def main() -> int:
     alignment_re = compile_patterns(cfg["alignment_paths"])
     if any(matches_any(p, alignment_re) for p in paths):
         print("[check_web_surface_alignment] Web/config/contract alignment evidence present")
+        return 0
+
+    try:
+        staged_alignment_paths = [p for p in staged_paths() if matches_any(p, alignment_re)]
+    except subprocess.CalledProcessError as e:
+        sys.stderr.write(e.stderr)
+        return 2
+    if staged_alignment_paths:
+        print("[check_web_surface_alignment] staged Web/config/contract alignment evidence present")
         return 0
 
     try:
