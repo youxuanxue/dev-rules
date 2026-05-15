@@ -264,8 +264,8 @@ def _runtime_reentry_errors(root: Path) -> list[str]:
     if load_state(workspace) != before_state:
         errors.append("worker_running diagnostics must not mutate state")
     action = continuation_action(workspace)
-    if action.get("action") != "wait_worker" or action.get("worker", {}).get("state") != "active":
-        errors.append(f"worker_running continuation should wait with diagnostics: {action!r}")
+    if action.get("action") != "watch_worker" or action.get("worker", {}).get("state") != "active":
+        errors.append(f"active worker_running continuation should enter watchdog: {action!r}")
 
     stale = _write_workspace(root / "worker-stale")
     stale_state = load_state(stale)
@@ -278,6 +278,9 @@ def _runtime_reentry_errors(root: Path) -> list[str]:
         errors.append(f"stale worker_running should be diagnosed without repair: {stale_worker!r}")
     if load_state(stale).get("status") != "worker_running":
         errors.append("stale status diagnostics should not repair worker_running")
+    stale_action = continuation_action(stale)
+    if stale_action.get("action") != "recover_worker_turn":
+        errors.append(f"stale worker_running continuation should recover: {stale_action!r}")
 
     completed_artifact = _write_workspace(root / "worker-completed-artifact")
     completed_state = load_state(completed_artifact)
@@ -290,6 +293,23 @@ def _runtime_reentry_errors(root: Path) -> list[str]:
     completed_worker = status_summary(completed_artifact).get("display", {}).get("worker", {})
     if completed_worker.get("state") != "completed_artifact_present":
         errors.append(f"completed artifact should be surfaced for reentry: {completed_worker!r}")
+    completed_action = continuation_action(completed_artifact)
+    if completed_action.get("action") != "review_run":
+        errors.append(f"completed worker artifact should route to review: {completed_action!r}")
+
+    quiet = _write_workspace(root / "worker-quiet")
+    quiet_state = load_state(quiet)
+    quiet_state["status"] = "worker_running"
+    quiet_state["current_run_id"] = "run-quiet"
+    write_state(quiet, quiet_state)
+    quiet_dir = quiet / "runs" / "run-quiet"
+    quiet_dir.mkdir(parents=True)
+    write_json(quiet_dir / "pending.json", {"schema_version": 1, "run_id": "run-quiet"})
+    old_time = 1
+    os.utime(quiet_dir / "pending.json", (old_time, old_time))
+    quiet_action = continuation_action(quiet)
+    if quiet_action.get("action") != "watch_worker" or quiet_action.get("worker", {}).get("state") != "quiet":
+        errors.append(f"quiet worker should route to bounded watchdog: {quiet_action!r}")
 
     for expected_status, expected_action in [
         ("idle", "supervisor_instruction"),
@@ -325,6 +345,48 @@ def _runtime_reentry_errors(root: Path) -> list[str]:
     )
     if resumed.get("status") != "accepted_done" or resumed.get("runs"):
         errors.append(f"loop harness should resume review_required without starting another run: {resumed!r}, first={review_run['run_id']}")
+
+    running_done_ws = _write_workspace(root / "loop-worker-running-done")
+    done_run = start_worker_turn(running_done_ws, "生成 worker_running run artifact", runner=FakeRunner())
+    done_state = load_state(running_done_ws)
+    done_state["status"] = "worker_running"
+    write_state(running_done_ws, done_state)
+    running_done = run_supervisor_loop_harness(
+        running_done_ws,
+        instruction="",
+        runner=FakeRunner(),
+        max_rounds=2,
+        review_fn=lambda _context: _review("accepted_done"),
+    )
+    if running_done.get("status") != "accepted_done" or running_done.get("runs"):
+        errors.append(f"loop harness should review completed worker_running artifact: {running_done!r}, run={done_run['run_id']}")
+
+    stale_loop = _write_workspace(root / "loop-worker-stale")
+    stale_loop_state = load_state(stale_loop)
+    stale_loop_state["status"] = "worker_running"
+    stale_loop_state["current_run_id"] = "run-stale-loop"
+    stale_loop_state["next_instruction"] = "恢复 stale worker fixture"
+    write_state(stale_loop, stale_loop_state)
+    stale_result = run_supervisor_loop_harness(
+        stale_loop,
+        instruction="",
+        runner=FakeRunner(),
+        max_rounds=2,
+        review_fn=lambda _context: _review("accepted_done"),
+    )
+    if stale_result.get("status") != "accepted_done" or len(stale_result.get("runs") or []) != 1:
+        errors.append(f"loop harness should recover stale worker_running with one fresh run: {stale_result!r}")
+
+    quiet_result = run_supervisor_loop_harness(
+        quiet,
+        instruction="",
+        runner=FakeRunner(),
+        max_rounds=1,
+        max_wait_seconds=0,
+        review_fn=lambda _context: _review("accepted_done"),
+    )
+    if quiet_result.get("status") != "worker_quiet_timeout":
+        errors.append(f"loop harness should return explicit worker_quiet_timeout: {quiet_result!r}")
     return errors
 
 

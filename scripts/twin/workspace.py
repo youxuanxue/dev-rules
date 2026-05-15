@@ -281,18 +281,23 @@ def worker_running_diagnostics(workspace: Path, state: dict[str, Any]) -> dict[s
     events_bytes = events.stat().st_size if events.exists() else 0
     if run_artifact.exists():
         state_name = "completed_artifact_present"
+        recommended_action = "review_run"
         note = "run artifact exists while state is worker_running; rerun /twin <workspace> to review or recover"
     elif not existing:
         state_name = "stale_no_artifacts"
+        recommended_action = "recover_worker_turn"
         note = "no worker artifacts found; next /twin <workspace> will recover with a fresh worker turn"
     elif events.exists():
         state_name = "active" if last_activity is not None and last_activity <= 600 else "quiet"
+        recommended_action = "watch_worker"
         note = "worker output is updating" if state_name == "active" else "worker artifacts exist but have been quiet"
     else:
         state_name = "starting" if last_activity is not None and last_activity <= 600 else "quiet"
+        recommended_action = "watch_worker"
         note = "worker has pending artifact but no event stream yet" if state_name == "starting" else "worker pending artifact exists but has been quiet"
     return {
         "state": state_name,
+        "recommended_action": recommended_action,
         "run_id": run_id,
         "pending": pending.exists(),
         "events_bytes": events_bytes,

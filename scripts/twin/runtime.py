@@ -49,10 +49,30 @@ def continuation_action(workspace: Path | str) -> dict[str, Any]:
             "next": f"/twin {workspace_path}",
         }
     if status == "worker_running":
+        worker = worker_running_diagnostics(workspace_path, state) or {}
+        worker_action = str(worker.get("recommended_action") or "watch_worker")
+        if worker_action == "review_run":
+            run_id = str(state.get("current_run_id") or "")
+            return {
+                **base,
+                "action": "review_run",
+                "worker": worker,
+                "command": f"python3 -m scripts.twin review-context --workspace {workspace_path} --run-id {run_id} --json",
+                "next": f"/twin {workspace_path}",
+            }
+        if worker_action == "recover_worker_turn":
+            return {
+                **base,
+                "action": "recover_worker_turn",
+                "worker": worker,
+                "command": f"python3 -m scripts.twin worker-turn --workspace {workspace_path} --instruction <next_instruction>",
+                "next": f"/twin {workspace_path}",
+            }
         return {
             **base,
-            "action": "wait_worker",
-            "worker": worker_running_diagnostics(workspace_path, state),
+            "action": "watch_worker",
+            "worker": worker,
+            "command": f"python3 -m scripts.twin watch --workspace {workspace_path} --json",
             "next": f"/twin status {workspace_path}",
         }
     if status == "review_required":

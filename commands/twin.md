@@ -41,7 +41,7 @@ PYTHONPATH="$DEV_RULES" python3 -m scripts.twin respond <text>
 supervisor-context → 写 next_instruction → worker-turn → review-context → 写 review JSON → review → continue 自动下一轮
 ```
 
-只在 `accepted_done` / `needs_human` / `failed` 停下；`review_required` / `continue` 不是用户停点，`/twin <workspace>` 必须从 artifact 自动恢复 review 或下一轮，不能让用户反复说“继续”。worker stop 不是完成；后台 worker 完成通知后的确定性重入口也是 `/twin <workspace>`。
+只在 `accepted_done` / `needs_human` / `failed` / bounded `worker_quiet_timeout` 停下；`review_required` / `continue` 不是用户停点，`/twin <workspace>` 必须从 artifact 自动恢复 review 或下一轮，不能让用户反复说“继续”。`worker_running` 若已出现 run artifact 则进入 review，若无 artifact 则恢复 fresh worker turn，若仍 active/quiet 则调用 bounded `watch` 后再回到 `next`。worker stop 不是完成；后台 worker 完成通知后的确定性重入口也是 `/twin <workspace>`。
 
 ## workspace 契约
 

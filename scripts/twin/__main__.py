@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 from .bootstrap import draft_from_files, draft_workspace, write_workspace_draft
@@ -101,6 +102,37 @@ def _cmd_next(args: argparse.Namespace) -> int:
             print(f"command={action['command']}")
         print(f"next={action.get('next') or 'none'}")
     return 0
+
+
+def _cmd_watch(args: argparse.Namespace) -> int:
+    workspace = _workspace_arg(args, remember=True)
+    deadline = time.monotonic() + max(0.0, float(args.max_wait_seconds))
+    latest: dict[str, object] | None = None
+    while True:
+        try:
+            latest = continuation_action(workspace)
+        except WorkspaceError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        if latest.get("action") != "watch_worker":
+            if args.json:
+                _print_json(latest)
+            else:
+                print(f"action={latest.get('action')}")
+                print(f"status={latest.get('status')}")
+                print(f"next={latest.get('next') or 'none'}")
+            return 0
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            timeout = {**latest, "action": "worker_quiet_timeout", "next": f"/twin status {Path(workspace).expanduser().resolve()}"}
+            if args.json:
+                _print_json(timeout)
+            else:
+                print("action=worker_quiet_timeout")
+                print(f"status={timeout.get('status')}")
+                print(f"next={timeout.get('next')}")
+            return 1
+        time.sleep(min(max(0.0, float(args.poll_interval_seconds)), remaining))
 
 
 def _cmd_respond(args: argparse.Namespace) -> int:
@@ -225,6 +257,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_next.add_argument("--workspace", required=True)
     p_next.add_argument("--json", action="store_true")
     p_next.set_defaults(func=_cmd_next)
+
+    p_watch = sub.add_parser("watch")
+    p_watch.add_argument("--workspace", required=True)
+    p_watch.add_argument("--max-wait-seconds", type=float, default=900.0)
+    p_watch.add_argument("--poll-interval-seconds", type=float, default=10.0)
+    p_watch.add_argument("--json", action="store_true")
+    p_watch.set_defaults(func=_cmd_watch)
 
     p_respond = sub.add_parser("respond")
     p_respond.add_argument("text_pos", nargs="*")
