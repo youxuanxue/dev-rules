@@ -6,7 +6,9 @@
 
 `/twin "<one-line goal>"` 不是 workspace 路径时，当前 Claude Code supervisor 先按 plan mode 的方式调研 repo facts，并亲自草拟 `goal.yaml + plan.yaml`。Python 不替 supervisor 做规划。
 
-supervisor 用 `AskUserQuestion` 展示 goal、AC、non-goals、plan items，并请求确认。确认后把草稿写到临时文件，再调用：
+bootstrap 是防止长跑的主约束面：supervisor 必须先把多 AC 目标拆成多个短交付；每个 item 写清 scope 边界、证据预算、停止/转 review 条件；已知 gate gap 写成 `blocked` / `deferred` + `blocked_reason`；最终验收、summary、preflight 类 item 必须依赖前置交付项。不要把“实现 + 全量迁移 + 浏览器 + preflight + summary”塞给同一个 worker item。
+
+supervisor 用 `AskUserQuestion` 展示 goal、AC、non-goals、plan items，并请求确认；若无法给出上述约束，先问人，不启动 worker。确认后把草稿写到临时文件，再调用：
 
 ```bash
 PYTHONPATH=$DEV_RULES python3 -m scripts.twin bootstrap --workspace <ws> --goal-file <goal.yaml> --plan-file <plan.yaml>
@@ -44,7 +46,7 @@ PYTHONPATH=$DEV_RULES python3 -m scripts.twin supervisor-context --workspace <ws
 PYTHONPATH=$DEV_RULES python3 -m scripts.twin worker-turn --workspace <ws> --instruction "<supervisor-authored>" [--max-budget-usd N] --json
 ```
 
-默认预算 50 USD，可用 `TWIN_WORKER_MAX_BUDGET_USD` 覆盖；超时由 `TWIN_WORKER_TIMEOUT_SECONDS`（默认 10800，3 小时）控制。返回 `run` 对象，与 `schemas/twin.run.schema.json` 对齐；`status` 一定是 `review_required` 或 `failed`，绝不是 `accepted_done`。
+默认预算 50 USD，可用 `TWIN_WORKER_MAX_BUDGET_USD` 覆盖；超时由 `TWIN_WORKER_TIMEOUT_SECONDS`（默认 10800，3 小时）控制。预算和超时只是安全兜底，不是防止长跑的主设计；主设计是 bootstrap plan item 的边界、证据预算和停止条件。返回 `run` 对象，与 `schemas/twin.run.schema.json` 对齐；`status` 一定是 `review_required` 或 `failed`，绝不是 `accepted_done`。
 
 ### `review-context`
 
@@ -87,7 +89,7 @@ Python 应用语义：
 
 ## accepted_done 收尾自验清单
 
-Python 已校验：schema、AC 覆盖、plan 无 open items、`remaining_gaps` 为空。
+Python 已校验：schema、AC 覆盖、plan 无 open items、`remaining_gaps` 为空。bootstrap 阶段还会校验 plan 约束是否足够短、硬、可 review；最终收尾只接受这些 item 的实际证据，不接受 worker 用口头总结替代 plan evidence。
 
 supervisor 必须自验：
 

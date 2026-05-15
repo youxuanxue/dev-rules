@@ -3,12 +3,14 @@ goal_id: example-slug
 items:
   - id: F1
     deliverable: 一个可验收的交付物，不写泛泛任务
-    scope: 本项的边界；不要超出 AC 覆盖范围
+    scope: 只写本项边界；明确不做相邻需求或最终验收大包
     covers_ac:
       - AC1
     evidence_plan:
-      - 预计产生的证据，如测试命令、preflight、diff、PR 链接
+      - 证据预算：只收集本项需要的一组证据，如一个 targeted test 或一份 report
+      - 停止条件：证据产出后转 review；范围不清或门禁失败时 needs_human
     actual_evidence: []
     depends_on: []
     status: pending
-    next_action: 给 worker 的下一步最短动作；要具体到命令或文件
+    next_action: 给 worker 的下一步最短动作；要具体到命令或文件，完成后转 review
+    blocked_reason: null

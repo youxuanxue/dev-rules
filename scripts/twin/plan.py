@@ -6,8 +6,64 @@ from typing import Any
 from .contracts import ITEM_STATUSES
 
 
+_BOUNDARY_MARKERS = ("只", "仅", "不", "不得", "边界", "范围", "non-goal", "non-goals", "scope")
+_BUDGET_MARKERS = ("证据预算", "evidence budget", "最多", "只跑", "仅跑", "不跑全量")
+_STOP_MARKERS = ("停止条件", "stop condition", "转 review", "进入 review", "needs_human", "暂停", "停下")
+_FINAL_MARKERS = ("final", "最终", "验收", "preflight", "summary", "acceptance")
+
+
 def ac_ids(goal: dict[str, Any]) -> set[str]:
     return {str(item.get("id")) for item in goal.get("acceptance_criteria", []) if isinstance(item, dict) and item.get("id")}
+
+
+def _contains_any(text: str, markers: tuple[str, ...]) -> bool:
+    lowered = text.lower()
+    return any(marker.lower() in lowered for marker in markers)
+
+
+def _normalized(text: Any) -> str:
+    return str(text or "").strip()
+
+
+def validate_bootstrap_plan_constraints(goal: dict[str, Any], plan: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    items = plan.get("items", [])
+    if not isinstance(items, list):
+        return ["bootstrap plan.items must be a list"]
+
+    acceptance_count = len([item for item in goal.get("acceptance_criteria", []) if isinstance(item, dict)])
+    if acceptance_count > 1 and len(items) == 1:
+        errors.append("bootstrap plan must split multi-AC goals into multiple bounded items")
+
+    raw_goal_texts = {
+        _normalized(goal.get("one_liner")),
+        _normalized(goal.get("core_goal")),
+    } - {""}
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            errors.append(f"bootstrap items[{index}] must be object")
+            continue
+        item_id = _normalized(item.get("id")) or f"items[{index}]"
+        deliverable = _normalized(item.get("deliverable"))
+        scope = _normalized(item.get("scope"))
+        evidence_text = "\n".join(str(entry or "") for entry in item.get("evidence_plan", []))
+        next_action = _normalized(item.get("next_action"))
+        status = _normalized(item.get("status"))
+
+        if deliverable in raw_goal_texts:
+            errors.append(f"{item_id}: bootstrap deliverable must not copy the raw goal")
+        if not _contains_any(scope, _BOUNDARY_MARKERS):
+            errors.append(f"{item_id}: bootstrap scope must state a boundary or non-goal")
+        if not _contains_any(evidence_text, _BUDGET_MARKERS):
+            errors.append(f"{item_id}: evidence_plan must include an explicit evidence budget")
+        if not _contains_any(evidence_text + "\n" + next_action, _STOP_MARKERS):
+            errors.append(f"{item_id}: evidence_plan or next_action must include a stop/review condition")
+        if status in {"blocked", "deferred"} and not _normalized(item.get("blocked_reason")):
+            errors.append(f"{item_id}: blocked/deferred bootstrap item must include blocked_reason")
+        if len(items) > 1 and _contains_any(deliverable + "\n" + scope, _FINAL_MARKERS) and not item.get("depends_on"):
+            errors.append(f"{item_id}: final acceptance/check item must depend on earlier deliverables")
+
+    return errors
 
 
 def validate_plan_semantics(goal: dict[str, Any], plan: dict[str, Any]) -> list[str]:
