@@ -28,9 +28,17 @@ PYTHONPATH=$DEV_RULES python3 -m scripts.twin bootstrap --workspace <ws> --goal-
 7. status=continue 自动进入下一轮；accepted_done / needs_human / failed 停止
 ```
 
-state 是 `needs_human` 且无新回答时不启动 worker；state 是 `continue` 且 `next_instruction` 已写入时直接进入第 3 步。`continue` 不是用户停点，supervisor 必须自循环。当前 `/twin` 不是后台 daemon；不调用 `/twin <workspace>` 就不会继续，因此不提供 pause/resume 命令。
+state 是 `needs_human` 且无新回答时不启动 worker；state 是 `continue` 且 `next_instruction` 已写入时直接进入第 3 步。`review_required` / `continue` 不是用户停点，supervisor 必须自循环。当前 `/twin` 不是后台 daemon；workspace artifact 是重入口事实源，后台 worker 完成或会话中断后重新运行 `/twin <workspace>`，必须从 `review_required` / `continue` / `worker_running` 的当前 artifact state 恢复，不要求用户再说“继续”。
 
 ## 子命令契约
+
+### `next`
+
+```bash
+PYTHONPATH=$DEV_RULES python3 -m scripts.twin next --workspace <ws> --json
+```
+
+输出当前 artifact state 的下一步动作：`supervisor_instruction` / `worker_turn` / `wait_worker` / `review_run` / `ask_human` / `done` / `failed`。`/twin <workspace>` 主路径先调用它，保证跨会话重入不依赖上一次交互上下文。
 
 ### `supervisor-context`
 

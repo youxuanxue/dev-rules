@@ -21,7 +21,7 @@ $ARGUMENTS
 PYTHONPATH="$DEV_RULES" python3 -m scripts.twin status [--workspace <workspace>] [--json]
 ```
 
-其中 `/twin status <workspace>` 映射为 `status --workspace <workspace>`。禁止读取 `goal.yaml` / `plan.yaml` / `CURRENT.md` / `runs/*` / `reviews/*`，禁止展开证据文件内容，禁止生成额外总结。status 是固定短输出，超过 Python stdout 的内容一律不是 status 命令职责。
+其中 `/twin status <workspace>` 映射为 `status --workspace <workspace>`。禁止读取 `goal.yaml` / `plan.yaml` / `CURRENT.md` / `runs/*` / `reviews/*` 正文，禁止展开证据文件内容，禁止生成额外总结。status 可用 run artifact 的存在性、mtime、大小派生一行 worker 活性/停滞诊断，但必须保持只读且不修复状态。status 是固定短输出，超过 Python stdout 的内容一律不是 status 命令职责。
 
 如果参数以 `respond` 开头，只执行：
 
@@ -35,13 +35,13 @@ PYTHONPATH="$DEV_RULES" python3 -m scripts.twin respond <text>
 
 `/twin "<one-line goal>"` 是 bootstrap：当参数不是 `status` / `respond` / 已存在 workspace 路径时，当前 Claude Code supervisor 先按 plan mode 的方式调研 repo facts，并亲自草拟 `goal.yaml + plan.yaml`；然后用 `AskUserQuestion` 请求确认。bootstrap 的 plan 必须在 worker 启动前拆成短交付：多 AC 不得塞进单个 item；每个 item 要写清边界、证据预算、停止/转 review 条件；已知门禁缺口用 `blocked` / `deferred` + `blocked_reason` 表达；最终验收/summary/preflight 项必须依赖前置交付项。确认后调用 `python3 -m scripts.twin bootstrap --workspace <ws> --goal-file <goal.yaml> --plan-file <plan.yaml>` 写入并校验 workspace，再进入执行闭环。`python3 -m scripts.twin scaffold "<goal>" --json` 只作为最小 scaffold fallback，不代表真实 planning。
 
-`/twin <workspace>` 启动或 resume 已准备好的 workspace。每轮 supervisor 必须自循环：
+`/twin <workspace>` 启动或 resume 已准备好的 workspace。进入主路径先调用 `python3 -m scripts.twin next --workspace <ws> --json`，按 artifact state 决定是生成 supervisor instruction、等待 worker、review 当前 run、启动下一轮 worker、询问真人还是结束；不得依赖上一次交互会话的记忆。每轮 supervisor 必须自循环：
 
 ```text
 supervisor-context → 写 next_instruction → worker-turn → review-context → 写 review JSON → review → continue 自动下一轮
 ```
 
-只在 `accepted_done` / `needs_human` / `failed` 停下；`continue` 必须自动进入下一轮，不能让用户反复说“继续”。worker stop 不是完成。
+只在 `accepted_done` / `needs_human` / `failed` 停下；`review_required` / `continue` 不是用户停点，`/twin <workspace>` 必须从 artifact 自动恢复 review 或下一轮，不能让用户反复说“继续”。worker stop 不是完成；后台 worker 完成通知后的确定性重入口也是 `/twin <workspace>`。
 
 ## workspace 契约
 
@@ -49,7 +49,7 @@ supervisor-context → 写 next_instruction → worker-turn → review-context �
 
 ## status 展示
 
-`/twin status [workspace]` 是人类状态面：展示目标、可读状态、当前 item、轮次、下一条命令和必要证据路径；`--json` 保留机器字段。status 只读，不重写 workspace artifact。
+`/twin status [workspace]` 是人类状态面：展示目标、可读状态、当前 item、轮次、下一条命令和必要证据路径；`worker_running` 时额外展示一行 compact worker 诊断（starting/active/quiet/stale/completed artifact）。`--json` 保留机器字段。status 只读，不重写 workspace artifact。
 
 ## needs_human 展示
 
