@@ -24,7 +24,7 @@ plan.yaml    # deliverables、AC 覆盖、状态、证据、下一步
 
 `goal.yaml` 只放目标和验收；授权和门禁由 Claude Code permissions / settings / hooks / dev-rules / 项目 `CLAUDE.md` 承担。
 
-`plan.yaml` 只引用 AC ID，不重复 AC statement。
+`plan.yaml` 只引用 AC ID，不重复 AC statement。bootstrap 阶段必须把复杂目标拆成短交付：多 AC 不得只生成单个 item；每个 item 要写清 scope 边界、证据预算、停止/转 review 条件；已知 gate gap 用 `blocked` / `deferred` + `blocked_reason` 表达；最终验收、summary、preflight 类 item 依赖前置交付项。防止长跑优先靠入口 plan 质量，不靠运行期限制 worker 自主性。
 
 目标工作区禁止复制 persona 文件；发现 `supervisor-persona.md` 或 `worker-persona.md` 直接拒绝。
 
@@ -57,15 +57,17 @@ goal_id: short-slug
 items:
   - id: F1
     deliverable: 一个可验收交付物，不写泛泛任务
-    scope: 只写本项边界
+    scope: 只写本项边界；明确不做相邻需求或最终验收大包
     covers_ac:
       - AC1
     evidence_plan:
-      - 本 deliverable 预计产生的证据
+      - 证据预算：只收集本项需要的一组证据
+      - 停止条件：证据产出后转 review；范围不清时 needs_human
     actual_evidence: []
     depends_on: []
     status: pending
-    next_action: 给 worker 的下一步最短动作
+    next_action: 给 worker 的下一步最短动作；完成后转 review
+    blocked_reason: null
 ```
 
 ## 运行闭环
@@ -78,7 +80,7 @@ while not terminal:
   4. 判：accepted_done / continue / needs_human / failed
 ```
 
-`continue` 必须自动进入下一轮；只有 `accepted_done` / `needs_human` / `failed` 停下。`needs_human` 用 `AskUserQuestion` 问一个具体问题。
+`continue` 必须自动进入下一轮；只有 `accepted_done` / `needs_human` / `failed` 停下。`needs_human` 用 `AskUserQuestion` 问一个具体问题。每轮 `next_instruction` 只能绑定当前 plan item 的证据预算和停止条件；如果发现 plan item 过宽，supervisor 应回到 plan 约束修正或 `needs_human`，不要把过宽目标交给 worker 长跑。
 
 ## 单一事实来源
 

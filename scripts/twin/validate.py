@@ -24,7 +24,7 @@ from .contracts import (
     WORKER_PERSONA_PATH,
 )
 from .loop_harness import run_supervisor_loop_harness
-from .plan import acceptance_evidence, plan_gaps, validate_plan_semantics
+from .plan import acceptance_evidence, plan_gaps, validate_bootstrap_plan_constraints, validate_plan_semantics
 from .runtime import (
     apply_supervisor_review,
     build_review_context,
@@ -105,15 +105,32 @@ def _plan(*, completed: bool = False) -> dict[str, Any]:
         "items": [
             {
                 "id": "F1",
-                "deliverable": "完成 fixture 主流程",
-                "scope": "只覆盖 greenfield worker turn",
-                "covers_ac": ["AC1", "AC2"],
-                "evidence_plan": ["tests pass", "diff summary"],
-                "actual_evidence": evidence,
+                "deliverable": "完成 fixture 主流程测试证据",
+                "scope": "只覆盖 greenfield worker turn，不扩展旧命令兼容路径",
+                "covers_ac": ["AC1"],
+                "evidence_plan": [
+                    "证据预算：只跑 fixture worker turn 测试，不跑全量 preflight",
+                    "停止条件：产出测试证据后转 review",
+                ],
+                "actual_evidence": [entry for entry in evidence if entry.startswith("tests:")],
                 "depends_on": [],
                 "status": "completed" if completed else "pending",
-                "next_action": "" if completed else "运行 worker fixture",
-            }
+                "next_action": "" if completed else "运行 worker fixture 并在测试证据产出后转 review",
+            },
+            {
+                "id": "F2",
+                "deliverable": "完成 fixture diff 证据",
+                "scope": "仅记录 fixture diff 摘要，不处理相邻代码质量问题",
+                "covers_ac": ["AC2"],
+                "evidence_plan": [
+                    "证据预算：只收集一条 diff summary，不跑额外测试",
+                    "停止条件：diff 证据写入后转 review",
+                ],
+                "actual_evidence": [entry for entry in evidence if entry.startswith("diff:")],
+                "depends_on": ["F1"],
+                "status": "completed" if completed else "pending",
+                "next_action": "" if completed else "在 F1 完成后记录 diff 证据并转 review",
+            },
         ],
     }
 
@@ -131,7 +148,8 @@ def _review(status: str, *, gaps: list[str] | None = None, question: str | None 
         "risk_flags": [],
         "actions": actions or [],
         "plan_updates": [
-            {"item_id": "F1", "status": "completed", "actual_evidence": ["tests: fixture pass", "diff: fixture stat"], "next_action": ""}
+            {"item_id": "F1", "status": "completed", "actual_evidence": ["tests: fixture pass"], "next_action": ""},
+            {"item_id": "F2", "status": "completed", "actual_evidence": ["diff: fixture stat"], "next_action": ""},
         ],
         "human_question": question,
     }
@@ -161,25 +179,39 @@ non_goals:
     )
     status = "completed" if completed else "pending"
     has_evidence = completed if plan_evidence is None else plan_evidence
-    evidence = '\n      - "tests: fixture pass"\n      - "diff: fixture stat"' if has_evidence else " []"
-    next_action = '""' if completed else "运行 worker fixture"
+    evidence_f1 = '\n      - "tests: fixture pass"' if has_evidence else " []"
+    evidence_f2 = '\n      - "diff: fixture stat"' if has_evidence else " []"
+    next_action_f1 = '""' if completed else "运行 worker fixture 并在测试证据产出后转 review"
+    next_action_f2 = '""' if completed else "在 F1 完成后记录 diff 证据并转 review"
     (workspace / "plan.yaml").write_text(
         f"""schema_version: 1
 goal_id: fixture-goal
 items:
   - id: F1
-    deliverable: 完成 fixture 主流程
-    scope: 只覆盖 greenfield worker turn
+    deliverable: 完成 fixture 主流程测试证据
+    scope: 只覆盖 greenfield worker turn，不扩展旧命令兼容路径
     covers_ac:
       - AC1
-      - AC2
     evidence_plan:
-      - tests pass
-      - diff summary
-    actual_evidence:{evidence}
+      - 证据预算：只跑 fixture worker turn 测试，不跑全量 preflight
+      - 停止条件：产出测试证据后转 review
+    actual_evidence:{evidence_f1}
     depends_on: []
     status: {status}
-    next_action: {next_action}
+    next_action: {next_action_f1}
+  - id: F2
+    deliverable: 完成 fixture diff 证据
+    scope: 仅记录 fixture diff 摘要，不处理相邻代码质量问题
+    covers_ac:
+      - AC2
+    evidence_plan:
+      - 证据预算：只收集一条 diff summary，不跑额外测试
+      - 停止条件：diff 证据写入后转 review
+    actual_evidence:{evidence_f2}
+    depends_on:
+      - F1
+    status: {status}
+    next_action: {next_action_f2}
 """,
         encoding="utf-8",
     )
@@ -315,7 +347,7 @@ def _semantic_errors() -> list[str]:
     if not validate_plan_semantics(_goal(), bad_plan):
         errors.append("unknown AC reference should fail")
     uncovered = _plan()
-    uncovered["items"][0]["covers_ac"] = ["AC1"]
+    uncovered["items"][1]["covers_ac"] = ["AC1"]
     if not validate_plan_semantics(_goal(), uncovered):
         errors.append("uncovered AC should fail")
     repeated = _plan()
@@ -323,10 +355,38 @@ def _semantic_errors() -> list[str]:
     if not validate_plan_semantics(_goal(), repeated):
         errors.append("plan repeating AC statement should fail")
     cyclic = _plan()
-    cyclic["items"].append({**cyclic["items"][0], "id": "F2", "depends_on": ["F1"]})
+    cyclic["items"][1]["depends_on"] = ["F1"]
     cyclic["items"][0]["depends_on"] = ["F2"]
     if not validate_plan_semantics(_goal(), cyclic):
         errors.append("dependency cycle should fail")
+
+    if validate_bootstrap_plan_constraints(_goal(), _plan()):
+        errors.append("valid bootstrap plan constraints should pass")
+    single_item = _plan()
+    single_item["items"] = single_item["items"][:1]
+    if not validate_bootstrap_plan_constraints(_goal(), single_item):
+        errors.append("multi-AC bootstrap plan should reject single-item plans")
+    copied_goal = _plan()
+    copied_goal["items"][0]["deliverable"] = _goal()["one_liner"]
+    if not validate_bootstrap_plan_constraints(_goal(), copied_goal):
+        errors.append("bootstrap plan should reject raw goal as deliverable")
+    missing_budget = _plan()
+    missing_budget["items"][0]["evidence_plan"] = ["tests pass", "停止条件：产出测试证据后转 review"]
+    if not validate_bootstrap_plan_constraints(_goal(), missing_budget):
+        errors.append("bootstrap plan should reject missing evidence budget")
+    missing_stop = _plan()
+    missing_stop["items"][0]["evidence_plan"] = ["证据预算：只跑 fixture worker turn 测试"]
+    missing_stop["items"][0]["next_action"] = "运行 worker fixture"
+    if not validate_bootstrap_plan_constraints(_goal(), missing_stop):
+        errors.append("bootstrap plan should reject missing stop/review condition")
+    blocked = _plan()
+    blocked["items"][0]["status"] = "blocked"
+    blocked["items"][0].pop("blocked_reason", None)
+    if not validate_bootstrap_plan_constraints(_goal(), blocked):
+        errors.append("bootstrap plan should reject blocked item without blocked_reason")
+    blocked["items"][0]["blocked_reason"] = "等待人工确认测试边界"
+    if validate_bootstrap_plan_constraints(_goal(), blocked):
+        errors.append("bootstrap plan should accept blocked item with blocked_reason")
     return errors
 
 
@@ -378,8 +438,8 @@ def run_fixture_validation() -> list[str]:
         if supervisor_context.get("next_item", {}).get("id") != "F1" or not supervisor_context.get("remaining_gaps"):
             errors.append("supervisor context should expose next item and gaps without generating instruction")
         focus = supervisor_context.get("acceptance_focus", {})
-        if not focus.get("last_mile") or not focus.get("current_item_acceptance_criteria"):
-            errors.append("supervisor context should expose acceptance focus for the current item")
+        if focus.get("last_mile") or not focus.get("current_item_acceptance_criteria"):
+            errors.append("supervisor context should expose non-last-mile acceptance focus for the first bounded item")
         skeleton = supervisor_context.get("review_skeleton", {})
         if skeleton.get("status") != "<accepted_done|continue|needs_human|failed>":
             errors.append("supervisor context should expose an undecided review skeleton")
@@ -399,7 +459,7 @@ def run_fixture_validation() -> list[str]:
             fallback_context = build_supervisor_context(workspace)
             if str(fallback_context.get("goal", {}).get("core_goal") or "").strip() != _goal()["core_goal"].strip():
                 errors.append("fallback yaml parser should preserve block-scalar goal text")
-            if fallback_context.get("plan", {}).get("items", [{}])[0].get("scope") != "只覆盖 greenfield worker turn":
+            if fallback_context.get("plan", {}).get("items", [{}])[0].get("scope") != "只覆盖 greenfield worker turn，不扩展旧命令兼容路径":
                 errors.append("fallback yaml parser should preserve plan item mapping fields")
             plan_roundtrip = load_plan(workspace)
             plan_roundtrip["items"][0]["actual_evidence"] = ["第一行\n第二行"]

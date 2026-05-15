@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .contracts import GOAL_FILE, PLAN_FILE, SCHEMA_VERSION
-from .plan import validate_plan_semantics
+from .plan import validate_bootstrap_plan_constraints, validate_plan_semantics
 from .schema_contract import validate_schema
 from .util import read_yaml_like, write_yaml_like
 from .workspace import WorkspaceError, load_state, render_current, validate_workspace
@@ -45,20 +45,24 @@ def draft_workspace(goal: str, workspace: Path | None = None) -> dict[str, Any]:
         "items": [
             {
                 "id": "F1",
-                "deliverable": text,
-                "scope": "只交付该目标的最小可验收闭环",
+                "deliverable": "最小可验收目标切片",
+                "scope": "只确认该目标的第一条可交付边界；不扩展相邻需求或最终验收大包",
                 "covers_ac": ["AC1"],
-                "evidence_plan": ["diff summary", "tests/preflight or equivalent validation"],
+                "evidence_plan": [
+                    "证据预算：只收集一组最小 diff 摘要和一项针对性验证，不跑全量验收",
+                    "停止条件：完成最小验证证据后转 review；范围不清时 needs_human",
+                ],
                 "actual_evidence": [],
                 "depends_on": [],
                 "status": "pending",
-                "next_action": "调研当前实现，完成最小可验收闭环并记录验证证据",
+                "next_action": "定位最小可交付边界，产出一项验证证据后转 review",
             }
         ],
     }
     errors = validate_schema(goal_doc, "twin.goal.schema.json")
     errors.extend(validate_schema(plan_doc, "twin.plan.schema.json"))
     errors.extend(validate_plan_semantics(goal_doc, plan_doc))
+    errors.extend(validate_bootstrap_plan_constraints(goal_doc, plan_doc))
     if errors:
         raise WorkspaceError("bootstrap draft schema errors: " + "; ".join(errors))
     return {
@@ -74,6 +78,7 @@ def draft_from_files(workspace: Path, goal_file: Path, plan_file: Path) -> dict[
     errors = validate_schema(goal_doc, "twin.goal.schema.json")
     errors.extend(validate_schema(plan_doc, "twin.plan.schema.json"))
     errors.extend(validate_plan_semantics(goal_doc, plan_doc))
+    errors.extend(validate_bootstrap_plan_constraints(goal_doc, plan_doc))
     if errors:
         raise WorkspaceError("supervisor-authored bootstrap artifacts are invalid: " + "; ".join(errors))
     return {
