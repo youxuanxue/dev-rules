@@ -248,30 +248,107 @@ for t in $CLOUD_AGENT_TOOLS; do
     fi
 done
 
-log "required secrets:"
+# ---------------------------------------------------------------------------
+# Secret-existence probe via `gh` against the current git repo's GitHub
+# Actions secrets + variables. We do NOT read local shell env: the previous
+# `${!s:-}` lookup produced false negatives on dev machines where the operator
+# deliberately keeps the token out of their shell rc, even though the secret
+# is correctly configured for the project on GitHub (and therefore reachable
+# by the workflows + cloud-agent VMs that actually need it).
+#
+# templates/preflight.sh already skips this entire section on generic CI
+# runners (GITHUB_ACTIONS / GITLAB_CI / …), so the gh probe runs only on
+# local dev shells and Cursor cloud-agent VMs — both authenticate gh via
+# `gh auth login` or an injected GH_TOKEN.
+# ---------------------------------------------------------------------------
+
+_CLOUD_AGENT_GH_NAMES_LOADED=""
+_CLOUD_AGENT_GH_AVAILABLE=0
+_CLOUD_AGENT_GH_NAMES=""
+_CLOUD_AGENT_GH_REASON=""
+_CLOUD_AGENT_GH_REPO=""
+
+load_gh_repo_secret_names() {
+    if [ -n "$_CLOUD_AGENT_GH_NAMES_LOADED" ]; then
+        return 0
+    fi
+    _CLOUD_AGENT_GH_NAMES_LOADED=1
+
+    if ! command -v gh >/dev/null 2>&1; then
+        _CLOUD_AGENT_GH_REASON="gh CLI not on PATH (add 'gh' to CLOUD_AGENT_TOOLS so bootstrap auto-installs it)"
+        return 1
+    fi
+    if ! ( cd "$REPO_ROOT" && gh auth status >/dev/null 2>&1 ); then
+        _CLOUD_AGENT_GH_REASON="gh not authenticated (run 'gh auth login' or set GH_TOKEN)"
+        return 1
+    fi
+    # Resolve the repo from the working tree once. `gh repo view` honors
+    # `git config remote.<name>.gh-resolved` so it disambiguates correctly
+    # in repos with multiple GitHub remotes (e.g. fork-style upstream + origin),
+    # whereas `gh secret list` / `gh variable list` bail out with
+    # "multiple remotes detected. please specify which repo to use" unless we
+    # pass -R explicitly. Pin the resolved value and reuse it for every
+    # subsequent gh subcommand.
+    _CLOUD_AGENT_GH_REPO="$(cd "$REPO_ROOT" && gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)" || _CLOUD_AGENT_GH_REPO=""
+    if [ -z "$_CLOUD_AGENT_GH_REPO" ]; then
+        _CLOUD_AGENT_GH_REASON="gh cannot resolve current git remote to a GitHub repo (try: gh repo set-default OWNER/REPO)"
+        return 1
+    fi
+
+    local repo_secrets repo_vars
+    repo_secrets=$(cd "$REPO_ROOT" && gh secret list -R "$_CLOUD_AGENT_GH_REPO" --json name -q '.[].name' 2>/dev/null) || repo_secrets=""
+    repo_vars=$(cd "$REPO_ROOT" && gh variable list -R "$_CLOUD_AGENT_GH_REPO" --json name -q '.[].name' 2>/dev/null) || repo_vars=""
+
+    _CLOUD_AGENT_GH_AVAILABLE=1
+    _CLOUD_AGENT_GH_NAMES="$(printf '%s\n%s\n' "$repo_secrets" "$repo_vars" | awk 'NF' | sort -u)"
+    return 0
+}
+
+# Returns 0 when $1 is configured on the GitHub repo (Actions secret or
+# variable), 1 when it is not, 2 when the gh probe itself is unavailable.
+gh_repo_has_secret_name() {
+    load_gh_repo_secret_names || return 2
+    if [ "$_CLOUD_AGENT_GH_AVAILABLE" != "1" ]; then
+        return 2
+    fi
+    printf '%s\n' "$_CLOUD_AGENT_GH_NAMES" | grep -Fxq "$1"
+}
+
+if load_gh_repo_secret_names; then
+    log "required secrets (probed via gh against $_CLOUD_AGENT_GH_REPO Actions secrets + variables; local shell env is not consulted):"
+else
+    log "required secrets (gh probe unavailable: $_CLOUD_AGENT_GH_REASON):"
+fi
 if [ -z "$CLOUD_AGENT_REQUIRED_SECRETS" ]; then
     log "  (none declared)"
 fi
 for s in $CLOUD_AGENT_REQUIRED_SECRETS; do
-    if [ -n "${!s:-}" ]; then
-        # Show only a 4-char prefix for confirmation; never echo the secret.
-        prefix="${!s:0:4}"
-        ok "$s set (prefix='${prefix}…')"
+    if gh_repo_has_secret_name "$s"; then
+        ok "$s configured on GitHub repo (Actions secret or variable)"
     else
-        fail "$s not set — cloud: Cursor Dashboard → Cloud Agents → Secrets; local: export in shell rc"
+        rc=$?
+        if [ "$rc" = "2" ]; then
+            fail "$s — cannot probe GitHub: $_CLOUD_AGENT_GH_REASON. Required secrets are now checked via gh; fix the probe or drop $s from CLOUD_AGENT_REQUIRED_SECRETS."
+        else
+            fail "$s NOT configured on $_CLOUD_AGENT_GH_REPO — add via Settings → Secrets and variables → Actions, or run: gh secret set $s -R $_CLOUD_AGENT_GH_REPO"
+        fi
     fi
 done
 
-log "optional secrets:"
+log "optional secrets (same gh probe; missing is a warning, not a failure):"
 if [ -z "$CLOUD_AGENT_OPTIONAL_SECRETS" ]; then
     log "  (none declared)"
 fi
 for s in $CLOUD_AGENT_OPTIONAL_SECRETS; do
-    if [ -n "${!s:-}" ]; then
-        prefix="${!s:0:4}"
-        ok "$s set (prefix='${prefix}…')"
+    if gh_repo_has_secret_name "$s"; then
+        ok "$s configured on GitHub repo (Actions secret or variable)"
     else
-        warn "$s not set (optional capability disabled)"
+        rc=$?
+        if [ "$rc" = "2" ]; then
+            warn "$s — cannot probe GitHub ($_CLOUD_AGENT_GH_REASON); optional capability status unknown"
+        else
+            warn "$s not configured on ${_CLOUD_AGENT_GH_REPO:-GitHub repo} (optional capability disabled)"
+        fi
     fi
 done
 
