@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# dev-rules/templates/install-hooks.sh — 安装 git pre-commit hook
+# dev-rules/templates/install-hooks.sh — 安装 git hooks
 #
 # 把 preflight 脚本接到 git pre-commit，让硬约束在 commit 时自动触发。
 # 这是 OPC「自动化优先」原则的最后一公里：从「记得跑脚本」→「不可能忘记跑」。
@@ -9,10 +9,13 @@
 #   1. $REPO_ROOT/scripts/preflight.sh        ← 项目级 wrapper（有项目特定检查时使用）
 #   2. $REPO_ROOT/dev-rules/templates/preflight.sh  ← dev-rules 模板（通用检查段，见模板文件头）
 #
+# 可选 hook：
+#   pre-push — 当 $REPO_ROOT/scripts/pre-push-web-surface.sh 存在时自动安装
+#
 # 用法（在项目根目录）：
 #   bash dev-rules/templates/install-hooks.sh
 #
-# 卸载：rm .git/hooks/pre-commit
+# 卸载：rm .git/hooks/pre-commit .git/hooks/pre-push
 
 set -e
 
@@ -66,6 +69,22 @@ chmod +x "$HOOK"
 
 echo "Installed pre-commit hook → $HOOK"
 echo "  active target: $PREFLIGHT_TARGET preflight (resolved at runtime)"
+
+# --- pre-push hook (optional) ---
+PRE_PUSH_SCRIPT="$REPO_ROOT/scripts/pre-push-web-surface.sh"
+PRE_PUSH_HOOK="$REPO_ROOT/.git/hooks/pre-push"
+
+if [ -f "$PRE_PUSH_SCRIPT" ]; then
+    if [ -f "$PRE_PUSH_HOOK" ] && ! grep -q "pre-push-web-surface" "$PRE_PUSH_HOOK"; then
+        echo ""
+        echo "WARN: $PRE_PUSH_HOOK already exists and is not the web-surface hook."
+        echo "      Skipping pre-push installation — inspect it manually."
+    else
+        ln -sf "$PRE_PUSH_SCRIPT" "$PRE_PUSH_HOOK"
+        echo "Installed pre-push hook → $PRE_PUSH_HOOK (symlink to scripts/pre-push-web-surface.sh)"
+    fi
+fi
+
 echo ""
 echo "Test with:"
 echo "  git commit --allow-empty -m 'test'   # should run preflight"
