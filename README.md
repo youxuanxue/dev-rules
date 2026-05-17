@@ -15,8 +15,8 @@
 
 | 命令 | 用法 | 作用 |
 | --- | --- | --- |
-| `commands/decompose.md` | `/user:decompose [需求描述]` | 先做风险分级，再拆解任务与 PR 形状 |
-| `commands/review.md` | `/user:review [范围]` | 默认对话内精简审查；按需写 PR comment / 严格记录 |
+| `commands/xj-decompose.md` | `/user:xj-decompose [需求描述]` | 先做风险分级，再拆解任务与 PR 形状 |
+| `commands/xj-review.md` | `/user:xj-review [范围]` | 默认对话内精简审查；按需写 PR comment / 严格记录 |
 | `commands/twin.md` | `/twin "<goal>"\|<workspace>\|status [workspace]\|respond <text>` | 运行 xuejiao persona supervisor，驱动 Claude Code worker 完成目标 |
 
 ## Agent Skills
@@ -35,7 +35,7 @@
 | `templates/install-hooks.sh` | 安装 pre-commit hook |
 | `templates/preflight.sh` | 消费项目默认门禁模板 |
 | `scripts/preflight.sh` | dev-rules 源仓库自己的提交门禁 |
-| `schemas/review.schema.json` | `/user:review` 输出契约 |
+| `schemas/review.schema.json` | `/user:xj-review` 输出契约 |
 | `schemas/skill.schema.json` | 跨项目共享的 Skill manifest 规范 |
 | `schemas/twin.*.schema.json` | twin goal、plan、state、review、run 与 human response 契约 |
 | `scripts/twin/` | twin supervisor support runtime 与 fixtures |
