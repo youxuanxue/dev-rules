@@ -185,6 +185,27 @@ else
     fail "rule carrier partition marker missing from dev-rules-convention.mdc or README"
 fi
 
+# ── check_*.py self-tests ─────────────────────────────────────────────
+# Mechanical assurance: check scripts that ship a --self-test mode must
+# pass their own assertions. Prevents the "check 自己没被检查" anti-pattern.
+section "check_*.py self-tests"
+SECTION_TESTED=0
+for script in "$SCRIPT_DIR"/scripts/check_*.py; do
+    [ -f "$script" ] || continue
+    if "$script" --help 2>/dev/null | grep -q -- "--self-test"; then
+        SECTION_TESTED=1
+        if "$script" --self-test > /tmp/dev-rules-self-test.log 2>&1; then
+            ok "$(basename "$script") --self-test"
+        else
+            cat /tmp/dev-rules-self-test.log | sed 's/^/    /'
+            fail "$(basename "$script") --self-test failed"
+        fi
+    fi
+done
+if [ "$SECTION_TESTED" = "0" ]; then
+    ok "no check_*.py exposes --self-test mode"
+fi
+
 # ── LaunchAgent reality matches doc promise (macOS dev only) ───────────
 # §三 anti-drift: a doc claim ("agent runs every 30 min") has to be
 # observable in launchctl, otherwise the cross-machine sync is fiction.
