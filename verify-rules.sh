@@ -189,22 +189,21 @@ fi
 # Mechanical assurance: check scripts that ship a --self-test mode must
 # pass their own assertions. Prevents the "check 自己没被检查" anti-pattern.
 section "check_*.py self-tests"
-SELF_TEST_FAILED=0
+SECTION_TESTED=0
 for script in "$SCRIPT_DIR"/scripts/check_*.py; do
     [ -f "$script" ] || continue
-    # Probe for --self-test support without executing the full check.
     if "$script" --help 2>/dev/null | grep -q -- "--self-test"; then
+        SECTION_TESTED=1
         if "$script" --self-test > /tmp/dev-rules-self-test.log 2>&1; then
             ok "$(basename "$script") --self-test"
         else
             cat /tmp/dev-rules-self-test.log | sed 's/^/    /'
             fail "$(basename "$script") --self-test failed"
-            SELF_TEST_FAILED=1
         fi
     fi
 done
-if [ "$SELF_TEST_FAILED" = "0" ] && ! ls "$SCRIPT_DIR"/scripts/check_*.py >/dev/null 2>&1; then
-    ok "no check_*.py scripts to test"
+if [ "$SECTION_TESTED" = "0" ]; then
+    ok "no check_*.py exposes --self-test mode"
 fi
 
 # ── LaunchAgent reality matches doc promise (macOS dev only) ───────────
