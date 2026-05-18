@@ -37,16 +37,31 @@ CONFIG_GLOBS: list[str] = [
 ]
 
 
-def deleted_paths(base: str) -> list[str]:
-    out = run_git(["diff", "--name-status", f"{base}...HEAD"])
+def _parse_diff_status(diff_output: str) -> list[str]:
+    """Pure parser: extract paths gone from their pre-diff location.
+
+    Covers two `git diff --name-status` statuses:
+      - D (deletion): parts[1] is gone
+      - R (rename): parts[1] is the OLD path (gone), parts[2] is the new path
+    Both leave config references to the old path broken at build time.
+    """
     paths: list[str] = []
-    for line in out.splitlines():
+    for line in diff_output.splitlines():
         if not line.strip():
             continue
         parts = line.split("\t")
-        if parts and parts[0].startswith("D") and len(parts) >= 2:
+        if not parts:
+            continue
+        status = parts[0]
+        if status.startswith("D") and len(parts) >= 2:
+            paths.append(parts[1])
+        elif status.startswith("R") and len(parts) >= 3:
             paths.append(parts[1])
     return paths
+
+
+def deleted_paths(base: str) -> list[str]:
+    return _parse_diff_status(run_git(["diff", "--name-status", f"{base}...HEAD"]))
 
 
 def find_config_files(repo_root: pathlib.Path) -> list[pathlib.Path]:
@@ -101,6 +116,57 @@ def scan_file_for_refs(
     return hits
 
 
+def _self_test() -> int:
+    """Exercise pure functions so verify-rules.sh can mechanically validate this check.
+
+    Covers:
+      - D / R / A / M status parsing (R-001 rename gap)
+      - scan_file_for_refs hit + boundary false-positive (prototype/ vs prototype/*)
+    """
+    import tempfile
+
+    failures: list[str] = []
+
+    # _parse_diff_status: D and R both yield old path; A and M are ignored.
+    diff_sample = (
+        "D\told/deleted.md\n"
+        "R100\told/renamed.md\tnew/renamed.md\n"
+        "A\tnew/added.md\n"
+        "M\texisting.md\n"
+    )
+    got = _parse_diff_status(diff_sample)
+    expected = ["old/deleted.md", "old/renamed.md"]
+    if got != expected:
+        failures.append(f"_parse_diff_status: expected {expected}, got {got}")
+
+    # scan_file_for_refs: should hit on `readme = "prototype/README.md"`
+    # but NOT on `prototype/*` (a glob/branch pattern, not a path).
+    with tempfile.TemporaryDirectory() as td:
+        root = pathlib.Path(td)
+        cfg = root / "pyproject.toml"
+        cfg.write_text(
+            'readme = "prototype/README.md"\n'
+            'branches = ["prototype/*", "feature/*"]\n',
+            encoding="utf-8",
+        )
+        hits = scan_file_for_refs(cfg, ["prototype/README.md"], root)
+        if len(hits) != 1 or hits[0][0] != "prototype/README.md" or hits[0][1] != 1:
+            failures.append(f"scan_file_for_refs hit: expected 1 hit at line 1, got {hits}")
+
+        # `prototype/` alone should NOT match the `prototype/*` glob pattern
+        # because `*` is not in the path-token boundary class.
+        no_hits = scan_file_for_refs(cfg, ["prototype/"], root)
+        if no_hits:
+            failures.append(f"scan_file_for_refs boundary FP: expected no hit, got {no_hits}")
+
+    if failures:
+        for f in failures:
+            sys.stderr.write(f"  FAIL: {f}\n")
+        return 1
+    print("[check_deleted_file_refs] self-test OK (4 assertions)")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -115,7 +181,15 @@ def main() -> int:
         default=".",
         help="repo root, default cwd",
     )
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="run built-in assertions on pure functions and exit",
+    )
     args = parser.parse_args()
+
+    if args.self_test:
+        return _self_test()
 
     repo_root = pathlib.Path(args.repo_root).resolve()
 
