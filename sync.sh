@@ -685,6 +685,26 @@ case "${1:-}" in
     --check)
         check_drift
         ;;
+    --check-preflight-drift)
+        # Per-consumer: list dev-rules check_*.py scripts not wired into the
+        # consumer's preflight. Informational (consumer may curate a subset);
+        # use as a sweep tool when adding new check scripts to dev-rules.
+        drift_script="$SCRIPT_DIR/scripts/check_preflight_stage_drift.py"
+        if [ ! -f "$drift_script" ]; then
+            echo "ERROR: $drift_script not found"
+            exit 1
+        fi
+        total_consumers=0
+        while IFS=$'\t' read -r name url project; do
+            echo "=== Preflight drift: $name ==="
+            python3 "$drift_script" --project "$project" --dev-rules-root "$SCRIPT_DIR"
+            echo ""
+            total_consumers=$((total_consumers + 1))
+        done < <(iter_local_projects)
+        if [ "$total_consumers" -eq 0 ]; then
+            echo "=== Preflight drift: no materialized consumers ==="
+        fi
+        ;;
     --project)
         [ -z "${2:-}" ] && { echo "Usage: $0 --project /path/to/project"; exit 1; }
         sync_to_project "$2" "$HOME_RULES_DIR"

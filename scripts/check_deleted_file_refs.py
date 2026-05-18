@@ -163,7 +163,7 @@ def _self_test() -> int:
         for f in failures:
             sys.stderr.write(f"  FAIL: {f}\n")
         return 1
-    print("[check_deleted_file_refs] self-test OK (3 assertions)")
+    print("[check_deleted_file_refs] self-test OK")
     return 0
 
 
