@@ -53,13 +53,16 @@ def referenced_scripts(file_text: str) -> set[str]:
 
 def detect_drift(
     dev_rules_root: pathlib.Path, project_dir: pathlib.Path
-) -> tuple[list[str], list[str]]:
-    """Return (not_wired, dangling) for one consumer.
+) -> tuple[list[str], list[str], int]:
+    """Return (not_wired, dangling, available_count) for one consumer.
 
-    not_wired:  scripts in dev-rules/scripts/check_*.py but not referenced
-                in consumer's preflight files.
-    dangling:   scripts referenced in consumer's preflight files but not
-                present in dev-rules/scripts/.
+    not_wired:        scripts in dev-rules/scripts/check_*.py but not referenced
+                      in consumer's preflight files.
+    dangling:         scripts referenced in consumer's preflight files but not
+                      present in dev-rules/scripts/.
+    available_count:  total dev-rules check_*.py available (denominator for
+                      reporting; saved as third tuple element to spare callers
+                      re-globbing).
     """
     available = set(list_check_scripts(dev_rules_root / "scripts"))
     referenced: set[str] = set()
@@ -67,7 +70,7 @@ def detect_drift(
         referenced |= referenced_scripts(pf.read_text(encoding="utf-8", errors="replace"))
     not_wired = sorted(available - referenced)
     dangling = sorted(referenced - available)
-    return not_wired, dangling
+    return not_wired, dangling, len(available)
 
 
 def _self_test() -> int:
@@ -103,20 +106,24 @@ def _self_test() -> int:
             'python3 scripts/check_local_only.py  # project-local, ignore\n'
         )
 
-        not_wired, dangling = detect_drift(root, consumer)
+        not_wired, dangling, available_count = detect_drift(root, consumer)
         if not_wired != ["check_bar.py"]:
             failures.append(f"not_wired: expected ['check_bar.py'], got {not_wired}")
         if dangling != ["check_ghost.py"]:
             failures.append(f"dangling: expected ['check_ghost.py'], got {dangling}")
+        if available_count != 2:
+            failures.append(f"available_count: expected 2, got {available_count}")
 
         # Consumer with no preflight files at all
         empty_consumer = root / "empty"
         empty_consumer.mkdir()
-        not_wired, dangling = detect_drift(root, empty_consumer)
+        not_wired, dangling, available_count = detect_drift(root, empty_consumer)
         if not_wired != ["check_bar.py", "check_foo.py"]:
             failures.append(f"empty consumer not_wired: got {not_wired}")
         if dangling != []:
             failures.append(f"empty consumer dangling: got {dangling}")
+        if available_count != 2:
+            failures.append(f"empty consumer available_count: got {available_count}")
 
     if failures:
         for f in failures:
@@ -158,13 +165,13 @@ def main() -> int:
     dev_rules_root = pathlib.Path(args.dev_rules_root).resolve()
     project_dir = pathlib.Path(args.project).resolve()
 
-    not_wired, dangling = detect_drift(dev_rules_root, project_dir)
+    not_wired, dangling, available_count = detect_drift(dev_rules_root, project_dir)
 
     if not not_wired and not dangling:
         print(
             f"[check_preflight_stage_drift] OK: {project_dir.name} preflight "
-            f"references all {len(list_check_scripts(dev_rules_root / 'scripts'))} "
-            f"dev-rules check scripts (or none with deliberate omission)"
+            f"references all {available_count} dev-rules check scripts "
+            f"(or none with deliberate omission)"
         )
         return 0
 
