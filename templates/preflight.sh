@@ -372,6 +372,20 @@ else
     skip "dev-rules/scripts/check_skill_manifest.py not present"
 fi
 
+# ---- 检查 18a: 删除文件不得留下打包元数据 / frontmatter 悬空引用 ----
+# preflight 不构建 wheel，hatchling 等打包后端会在 CI 才报错；硬化这条软约束。
+section "deleted files not still referenced (config/frontmatter)"
+if [ -f dev-rules/scripts/check_deleted_file_refs.py ]; then
+    if "$PYTHON_BIN" dev-rules/scripts/check_deleted_file_refs.py > /tmp/preflight-deleted-refs.log 2>&1; then
+        head -1 /tmp/preflight-deleted-refs.log | sed 's/^/    /'
+    else
+        cat /tmp/preflight-deleted-refs.log | sed 's/^/    /'
+        fail "deleted file(s) still referenced in build config or doc frontmatter — fix reference or restore file"
+    fi
+else
+    skip "dev-rules/scripts/check_deleted_file_refs.py not present"
+fi
+
 # ---- 检查 18: 存在性测试 AST 扫描 ----
 # 仅断言文件存在/非空/行数的测试不是行为验证；test-philosophy.mdc 强约束。
 section "no existence-only tests"

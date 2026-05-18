@@ -72,6 +72,21 @@ findings:
 
 没有发现阻塞问题时，直接给 `merge-ready`，不要生成空报告文件。
 
+### 严格 merge-ready 准则（PR 审查上下文必须遵循）
+
+当审查的是一个进行中的 PR（即 `--base origin/main`，目标是判断是否可合并），`merge-ready` 必须**收敛与严格**：
+
+- **零 `medium+` finding**：`critical` / `high` / `medium` 中任一非零都不得发 `merge-ready`，必须 `needs-fix` 并 loop。
+- **顺手发现的 out-of-scope 问题必须列入 finding**：审查过程中如果路过看到与本 PR 无关但确实存在的问题（命名混乱、注释陈旧、复制粘贴遗留、零调用函数、未使用的 import / 配置 / 路由），必须列出。理由：reviewer 已经在文件里了，让作者顺手修的成本远低于以后单独开 PR。**不允许"留待后续"作为搪塞**——除非该问题本身够大、值得独立 PR 评审，此时仍需在 finding 中明示"建议开独立 PR"并继续保持 `needs-fix`。
+- **Jobs 哲学违背必须列入 finding**：过度抽象（为想象中的未来需求建抽象层）、重复维护（同一信息存两处需手同步）、多此一举的开关 / 配置项 / feature flag、复制粘贴未消除、命名复杂度高于实际语义、UI 入口过多、文档与代码各讲一遍。
+- **OPC 哲学违背必须列入 finding**：流程依赖人记忆（"以后注意"、"下次记得"）、`|| true` 类静默吞错、本可机械化检查但写成 prose 规则、preflight / hook / 自动化缺位、提交一次发现的问题不固化为 check。
+- **循环直到收敛**：发 `needs-fix` 后用户/作者应循环 fix → re-review 直到达到上述零 finding 状态，才发 `merge-ready`。
+
+### merge-ready 之后必须做什么 / 必须不做什么
+
+- 必须做：在对话中告知用户"已 merge-ready，等待你的合并指令"。
+- 必须不做：**直接调用 `gh pr merge`**。合并属于用户授权动作，不在 `/xj-review` 范围内。即使过去用户给过类似 PR 的合并授权，本次也必须等本次的明确指令。这一条由 `~/.claude/settings.json` PreToolUse hook 机械兜底；规则层这里只做语义对齐。
+
 ## 5. 持久化：PR comment 优先，本地文件按需
 
 持久化只在以下情况发生：
