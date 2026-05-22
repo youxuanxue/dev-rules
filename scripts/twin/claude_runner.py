@@ -65,23 +65,45 @@ def parse_stream_json(text: str) -> tuple[str, str, list[dict[str, Any]]]:
     return session_id, "\n".join(part for part in parts if part).strip(), events
 
 
-def detect_session_lost(*, requested_session: str, parsed_session: str, assistant_output: str) -> bool:
+def _has_model_turn(events: list[dict[str, Any]]) -> bool:
+    """Whether the stream contains a real model turn rather than just an error.
+
+    A genuine turn is a message carrying non-empty text content, or a ``result``
+    event reporting success. A rejected resume (body-guard / oversized request)
+    yields neither — at most an error ``result`` whose text must not be mistaken
+    for a continuation. Text extraction mirrors ``parse_stream_json`` so the two
+    stay consistent.
+    """
+    for event in events:
+        message = event.get("message")
+        if isinstance(message, dict):
+            content = message.get("content")
+            if isinstance(content, list):
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "text" and str(item.get("text", "")).strip():
+                        return True
+        if event.get("type") == "result" and not event.get("is_error") and str(event.get("result") or "").strip():
+            return True
+    return False
+
+
+def detect_session_lost(*, requested_session: str, parsed_session: str, events: list[dict[str, Any]]) -> bool:
     """Whether a ``--resume`` attempt failed to continue the saved session.
 
     A resume is "lost" when it either forks into a different session id or
-    produces no assistant turn at all. The no-turn case covers both the old
+    produces no model turn at all. The no-turn case covers both the old
     silent-success heuristic and a *hard* rejection: once a worker session's
     transcript grows large enough (e.g. ~10MB), the server body-guard rejects
-    every resumed request, which exits non-zero with only an error on stderr.
+    every resumed request, which exits non-zero with only an error event.
     Replaying the same session id just repeats the doomed request forever, so
-    the caller must fall back to a fresh session. ``assistant_output`` must be
-    the parsed assistant/result text only (no stderr folded in), otherwise a
-    rejection's error text would mask the empty turn.
+    the caller must fall back to a fresh session. Detection reads the event
+    stream directly so an error ``result`` string can never masquerade as a
+    real turn.
     """
     if not requested_session:
         return False
     forked = bool(parsed_session) and parsed_session != requested_session
-    produced_no_turn = not assistant_output.strip()
+    produced_no_turn = not _has_model_turn(events)
     return forked or produced_no_turn
 
 
@@ -212,14 +234,13 @@ def run_claude_headless(
         stdout_text = "".join(stdout_parts)
         stderr_text = "".join(stderr_parts)
     parsed_session, output, events = parse_stream_json(stdout_text)
-    # Decide session_lost from the parsed assistant turn *before* folding in
-    # stderr: a body-guard / oversized-request rejection exits non-zero with
-    # only an error on stderr and no assistant turn, and that error text must
-    # not be mistaken for real worker output.
+    # Read session liveness from the event stream: a body-guard / oversized-
+    # request rejection emits no model turn (at most an error result), so it
+    # can never be mistaken for real worker output folded in from stderr.
     session_lost = detect_session_lost(
         requested_session=session_id,
         parsed_session=parsed_session,
-        assistant_output=output,
+        events=events,
     )
     if stderr_text.strip():
         output = (output + "\n" + stderr_text.strip()).strip()
