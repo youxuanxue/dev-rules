@@ -310,54 +310,35 @@ def start_worker_turn(
     pre_git_status = git_status(workspace)
     pre_git_diff_stat = git_diff_stat(workspace)
 
-    result = runner(
-        prompt,
-        cwd=_repo_root(workspace),
-        allowed_tools=WORKER_ALLOWED_TOOLS,
-        disallowed_tools=worker_disallowed_tools(),
-        max_budget_usd=max_budget_usd,
-        session_id=previous_session_id,
-        permission_mode="bypassPermissions",
-        role="worker",
-        extra_env={"DEV_RULES": str(DEV_RULES_ROOT)},
-        stream_output_path=_events_path(workspace, run_id),
-    )
+    def _invoke(session: str) -> ClaudeRunResult:
+        return runner(
+            prompt,
+            cwd=_repo_root(workspace),
+            allowed_tools=WORKER_ALLOWED_TOOLS,
+            disallowed_tools=worker_disallowed_tools(),
+            max_budget_usd=max_budget_usd,
+            session_id=session,
+            permission_mode="bypassPermissions",
+            role="worker",
+            extra_env={"DEV_RULES": str(DEV_RULES_ROOT)},
+            stream_output_path=_events_path(workspace, run_id),
+        )
+
+    def _reset_session_and_retry_fresh() -> ClaudeRunResult:
+        state = load_state(workspace)
+        state["worker_session_id"] = None
+        write_state(workspace, state)
+        return _invoke("")
+
+    result = _invoke(previous_session_id)
     resume_used = bool(previous_session_id)
     worker_session_reset = False
     if retry_on_session_lost and result.session_lost:
-        state = load_state(workspace)
-        state["worker_session_id"] = None
-        write_state(workspace, state)
-        result = runner(
-            prompt,
-            cwd=_repo_root(workspace),
-            allowed_tools=WORKER_ALLOWED_TOOLS,
-            disallowed_tools=worker_disallowed_tools(),
-            max_budget_usd=max_budget_usd,
-            session_id="",
-            permission_mode="bypassPermissions",
-            role="worker",
-            extra_env={"DEV_RULES": str(DEV_RULES_ROOT)},
-            stream_output_path=_events_path(workspace, run_id),
-        )
+        result = _reset_session_and_retry_fresh()
         resume_used = False
         worker_session_reset = True
     elif retry_on_session_lost and resume_used and _is_warning_only(result.output_text):
-        state = load_state(workspace)
-        state["worker_session_id"] = None
-        write_state(workspace, state)
-        result = runner(
-            prompt,
-            cwd=_repo_root(workspace),
-            allowed_tools=WORKER_ALLOWED_TOOLS,
-            disallowed_tools=worker_disallowed_tools(),
-            max_budget_usd=max_budget_usd,
-            session_id="",
-            permission_mode="bypassPermissions",
-            role="worker",
-            extra_env={"DEV_RULES": str(DEV_RULES_ROOT)},
-            stream_output_path=_events_path(workspace, run_id),
-        )
+        result = _reset_session_and_retry_fresh()
         resume_used = False
         worker_session_reset = True
 

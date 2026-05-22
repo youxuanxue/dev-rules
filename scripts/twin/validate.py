@@ -420,17 +420,23 @@ def _behavior_helper_errors() -> list[str]:
     first_unstaged = changed_files_from_status(" M scripts/preflight_common.sh\n")[0]
     if first_unstaged != "scripts/preflight_common.sh":
         errors.append(f"changed_files_from_status should preserve first unstaged path: {first_unstaged!r}")
-    # A resume that produces no assistant turn is a lost session regardless of
-    # exit code: a body-guard / oversized-request rejection exits non-zero with
-    # only an error on stderr, and re-resuming it would replay the doomed 10MB
-    # request forever. Only the parsed assistant turn counts toward "alive".
-    if not detect_session_lost(requested_session="s1", parsed_session="s1", assistant_output=""):
-        errors.append("resume that produced no assistant turn should be session_lost (body-guard rejection)")
-    if detect_session_lost(requested_session="s1", parsed_session="s1", assistant_output="real worker turn"):
-        errors.append("resume with a real assistant turn should not be session_lost")
-    if not detect_session_lost(requested_session="s1", parsed_session="s2", assistant_output="forked turn"):
+    # A resume with no real model turn is a lost session regardless of exit
+    # code: a body-guard / oversized-request rejection emits only an error
+    # event, and re-resuming it would replay the doomed 10MB request forever.
+    # An error result must not count as a live turn, only a genuine one.
+    text_turn = [{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "real worker turn"}]}}]
+    error_result = [{"type": "result", "subtype": "error_during_execution", "is_error": True, "result": "API Error: request too large"}]
+    if not detect_session_lost(requested_session="s1", parsed_session="s1", events=[]):
+        errors.append("resume with no events should be session_lost (silent rejection)")
+    if not detect_session_lost(requested_session="s1", parsed_session="s1", events=error_result):
+        errors.append("resume whose only output is an error result should be session_lost (body-guard rejection)")
+    if detect_session_lost(requested_session="s1", parsed_session="s1", events=text_turn):
+        errors.append("resume with a real model turn should not be session_lost")
+    if detect_session_lost(requested_session="s1", parsed_session="s1", events=[{"type": "result", "subtype": "success", "result": "done"}]):
+        errors.append("resume with a success result should not be session_lost")
+    if not detect_session_lost(requested_session="s1", parsed_session="s2", events=text_turn):
         errors.append("resume that forked into a new session id should be session_lost")
-    if detect_session_lost(requested_session="", parsed_session="", assistant_output=""):
+    if detect_session_lost(requested_session="", parsed_session="", events=[]):
         errors.append("fresh run (no requested session) should never be session_lost")
     weak_flags = assess_run_quality(
         worker_output="我会继续收敛 F6/AC1",
