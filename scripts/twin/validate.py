@@ -37,7 +37,7 @@ from .runtime import (
 )
 from .schema_contract import validate_artifact, validate_schema
 from .util import read_json, write_json
-from .claude_runner import DEFAULT_WORKER_TIMEOUT_SECONDS, WORKER_TIMEOUT_ENV, default_worker_timeout_seconds
+from .claude_runner import DEFAULT_WORKER_TIMEOUT_SECONDS, WORKER_TIMEOUT_ENV, default_worker_timeout_seconds, detect_session_lost
 from .worker import DEFAULT_WORKER_MAX_BUDGET_USD, assess_run_quality, changed_files_from_status, default_worker_max_budget_usd
 from .workspace import WorkspaceError, load_plan, load_state, status_summary, write_plan, write_state
 
@@ -420,6 +420,18 @@ def _behavior_helper_errors() -> list[str]:
     first_unstaged = changed_files_from_status(" M scripts/preflight_common.sh\n")[0]
     if first_unstaged != "scripts/preflight_common.sh":
         errors.append(f"changed_files_from_status should preserve first unstaged path: {first_unstaged!r}")
+    # A resume that produces no assistant turn is a lost session regardless of
+    # exit code: a body-guard / oversized-request rejection exits non-zero with
+    # only an error on stderr, and re-resuming it would replay the doomed 10MB
+    # request forever. Only the parsed assistant turn counts toward "alive".
+    if not detect_session_lost(requested_session="s1", parsed_session="s1", assistant_output=""):
+        errors.append("resume that produced no assistant turn should be session_lost (body-guard rejection)")
+    if detect_session_lost(requested_session="s1", parsed_session="s1", assistant_output="real worker turn"):
+        errors.append("resume with a real assistant turn should not be session_lost")
+    if not detect_session_lost(requested_session="s1", parsed_session="s2", assistant_output="forked turn"):
+        errors.append("resume that forked into a new session id should be session_lost")
+    if detect_session_lost(requested_session="", parsed_session="", assistant_output=""):
+        errors.append("fresh run (no requested session) should never be session_lost")
     weak_flags = assess_run_quality(
         worker_output="我会继续收敛 F6/AC1",
         validation=[],

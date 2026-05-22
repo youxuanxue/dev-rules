@@ -65,6 +65,26 @@ def parse_stream_json(text: str) -> tuple[str, str, list[dict[str, Any]]]:
     return session_id, "\n".join(part for part in parts if part).strip(), events
 
 
+def detect_session_lost(*, requested_session: str, parsed_session: str, assistant_output: str) -> bool:
+    """Whether a ``--resume`` attempt failed to continue the saved session.
+
+    A resume is "lost" when it either forks into a different session id or
+    produces no assistant turn at all. The no-turn case covers both the old
+    silent-success heuristic and a *hard* rejection: once a worker session's
+    transcript grows large enough (e.g. ~10MB), the server body-guard rejects
+    every resumed request, which exits non-zero with only an error on stderr.
+    Replaying the same session id just repeats the doomed request forever, so
+    the caller must fall back to a fresh session. ``assistant_output`` must be
+    the parsed assistant/result text only (no stderr folded in), otherwise a
+    rejection's error text would mask the empty turn.
+    """
+    if not requested_session:
+        return False
+    forked = bool(parsed_session) and parsed_session != requested_session
+    produced_no_turn = not assistant_output.strip()
+    return forked or produced_no_turn
+
+
 def run_claude_headless(
     prompt: str,
     *,
@@ -192,9 +212,17 @@ def run_claude_headless(
         stdout_text = "".join(stdout_parts)
         stderr_text = "".join(stderr_parts)
     parsed_session, output, events = parse_stream_json(stdout_text)
+    # Decide session_lost from the parsed assistant turn *before* folding in
+    # stderr: a body-guard / oversized-request rejection exits non-zero with
+    # only an error on stderr and no assistant turn, and that error text must
+    # not be mistaken for real worker output.
+    session_lost = detect_session_lost(
+        requested_session=session_id,
+        parsed_session=parsed_session,
+        assistant_output=output,
+    )
     if stderr_text.strip():
         output = (output + "\n" + stderr_text.strip()).strip()
-    session_lost = bool(session_id) and ((bool(parsed_session) and parsed_session != session_id) or (proc.returncode == 0 and not output.strip()))
     return ClaudeRunResult(
         session_id=parsed_session or session_id,
         output_text=output,
