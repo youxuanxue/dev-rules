@@ -71,11 +71,15 @@ class FakeRunner:
             return ClaudeRunResult(session_id=requested_session, output_text="", returncode=0, raw_events=[], session_lost=True)
         if self.body_guard_once and requested_session:
             self.body_guard_once = False
+            # Real production rejections emit only an error result event (no model turn),
+            # so detect_session_lost() returns True. Mirror that here so the fixture exercises
+            # the realistic session_lost retry path rather than the defensive elif branch.
             return ClaudeRunResult(
                 session_id=requested_session,
                 output_text="Request body 10062361 bytes exceeded TokenKey pre-flight limit",
                 returncode=1,
                 raw_events=[{"type": "result", "subtype": "error_during_execution", "is_error": True, "result": "request too large"}],
+                session_lost=True,
             )
         if self.warning_only_once and requested_session:
             self.warning_only_once = False
@@ -470,6 +474,16 @@ def _behavior_helper_errors() -> list[str]:
         quality_flags=["SESSION_LOST"],
     ):
         errors.append("session_lost should clear persisted worker session")
+    if not should_clear_worker_session(
+        result=ClaudeRunResult(session_id="fresh-retry", output_text="done", returncode=0, raw_events=[], session_lost=False),
+        quality_flags=["BODY_GUARD_REJECTION", "WORKER_SESSION_RESET"],
+    ):
+        errors.append("BODY_GUARD_REJECTION in quality_flags (after a successful retry) should still clear the persisted session")
+    if should_clear_worker_session(
+        result=ClaudeRunResult(session_id="keep-fresh", output_text="done", returncode=0, raw_events=[], session_lost=False),
+        quality_flags=["SESSION_LOST", "WORKER_SESSION_RESET"],
+    ):
+        errors.append("plain SESSION_LOST (no body-guard) on a successful retry should keep the fresh session id")
     if should_clear_worker_session(
         result=ClaudeRunResult(session_id="keep-me", output_text="done", returncode=0, raw_events=[]),
         quality_flags=["VALIDATION_NOT_REPORTED"],
@@ -904,8 +918,15 @@ def run_fixture_validation() -> list[str]:
             errors.append("body-guard resume should retry fresh once")
         if body_guard_runner.calls[-1].get("session_id"):
             errors.append("body-guard retry should be fresh")
-        if "BODY_GUARD_REJECTION" not in body_guard.get("evidence", {}).get("quality_flags", []):
+        body_guard_flags = body_guard.get("evidence", {}).get("quality_flags", [])
+        if "BODY_GUARD_REJECTION" not in body_guard_flags:
             errors.append("body-guard resume should record BODY_GUARD_REJECTION")
+        if "SESSION_LOST" not in body_guard_flags:
+            errors.append("body-guard resume via session_lost branch should also record SESSION_LOST")
+        if "WORKER_SESSION_RESET" not in body_guard_flags:
+            errors.append("body-guard resume should record WORKER_SESSION_RESET")
+        if load_state(workspace).get("worker_session_id") is not None:
+            errors.append("body-guard resume should clear persisted worker_session_id even on successful retry")
         apply_supervisor_review(workspace, body_guard["run_id"], _review("continue"))
 
         no_progress_workspace = _write_workspace(root / "no-progress-clear")
