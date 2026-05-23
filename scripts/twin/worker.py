@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
-from .claude_runner import ClaudeRunResult, run_claude_headless
+from .claude_runner import ClaudeRunResult, is_body_guard_rejection, run_claude_headless
 from .contracts import DEV_RULES_ROOT, HUMAN_RESPONSE_FILE, PERSONAS_DIR, RUNS_DIR, RUN_SCHEMA, SCHEMA_VERSION, SUPERVISOR_PERSONA_PATH, WORKER_PERSONA_PATH
 from .privacy import PrivacyReport, redact_text, stable_hash
 from .schema_contract import validate_schema
@@ -175,9 +175,10 @@ def assess_run_quality(
         flags.append("WORKER_MAX_BUDGET_EXCEEDED")
     if session_lost:
         flags.append("SESSION_LOST")
+    if is_body_guard_rejection(worker_output, raw_events):
+        flags.append("BODY_GUARD_REJECTION")
     if (
-        resume_used
-        and weak_output
+        weak_output
         and not session_lost
         and pre_git_status == post_git_status
         and pre_git_diff_stat == post_git_diff_stat
@@ -186,6 +187,24 @@ def assess_run_quality(
     if worker_session_reset:
         flags.append("WORKER_SESSION_RESET")
     return flags
+
+
+def should_clear_worker_session(*, result: ClaudeRunResult, quality_flags: list[str]) -> bool:
+    """Drop persisted worker session ids that would replay doomed resumes.
+
+    BODY_GUARD_REJECTION drives clearing in both retry branches (via the force-
+    append in ``start_worker_turn``) because oversized-body pressure tends to
+    recur. Plain ``SESSION_LOST`` without body-guard is just a fork/attribution
+    miss — the fresh retry session is safe to keep, so we don't clear on that
+    flag alone.
+    """
+    if result.session_lost:
+        return True
+    if "NO_PROGRESS_DETECTED" in quality_flags:
+        return True
+    if "BODY_GUARD_REJECTION" in quality_flags:
+        return True
+    return False
 
 
 def build_worker_prompt(workspace: Path, instruction: str) -> str:
@@ -331,9 +350,19 @@ def start_worker_turn(
         return _invoke("")
 
     result = _invoke(previous_session_id)
+    # Capture forensic signals from the first attempt before any retry overwrites `result`.
+    # In production a body-guard rejection emits no model turn, so detect_session_lost fires
+    # and the session_lost branch handles the retry — without this capture, both signals
+    # would be lost from run.json's quality_flags after the (successful) retry.
+    first_attempt_session_lost = result.session_lost
+    first_attempt_body_guard = is_body_guard_rejection(result.output_text, result.raw_events)
     resume_used = bool(previous_session_id)
     worker_session_reset = False
     if retry_on_session_lost and result.session_lost:
+        result = _reset_session_and_retry_fresh()
+        resume_used = False
+        worker_session_reset = True
+    elif retry_on_session_lost and resume_used and first_attempt_body_guard:
         result = _reset_session_and_retry_fresh()
         resume_used = False
         worker_session_reset = True
@@ -360,7 +389,11 @@ def start_worker_turn(
         worker_session_reset=worker_session_reset,
         raw_events=result.raw_events,
     )
-    clear_session_after_run = resume_used and "NO_PROGRESS_DETECTED" in quality_flags
+    if first_attempt_session_lost and "SESSION_LOST" not in quality_flags:
+        quality_flags.append("SESSION_LOST")
+    if first_attempt_body_guard and "BODY_GUARD_REJECTION" not in quality_flags:
+        quality_flags.append("BODY_GUARD_REJECTION")
+    clear_session_after_run = should_clear_worker_session(result=result, quality_flags=quality_flags)
     if clear_session_after_run and "WORKER_SESSION_RESET" not in quality_flags:
         quality_flags.append("WORKER_SESSION_RESET")
     evidence_validation = validation or [VALIDATION_NOT_REPORTED]
