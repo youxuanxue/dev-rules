@@ -4,6 +4,26 @@ $ARGUMENTS
 
 如果未指定审查范围，则审查最近 24 小时内的所有 commit。
 
+## 0. 机械门禁先行（确定性优于肉眼）
+
+在做任何模型判断之前，先跑项目的确定性门禁，把它的结论当作 ground-truth，**不要用模型重新肉眼判断脚本已经机械覆盖的项**。这是 OPC 原则：能机械化的检查由脚本承载，模型只补脚本覆盖不到的判断残差。
+
+1. 若项目存在 `scripts/preflight.sh`，先运行它；PR 审查语境（`--base origin/main`）下传 `PREFLIGHT_BASE=origin/main`：
+
+   ```bash
+   PREFLIGHT_BASE=origin/main bash scripts/preflight.sh 2>&1 | tee /tmp/xj-review-preflight.txt
+   ```
+
+   该脚本已机械覆盖以下原本写在本命令 prose 里的检查（逐项 FAIL 直接转成 finding，无需模型再判断）：契约删除/Web surface 对齐/分层依赖/高风险审批锚点/release skip-ci/workflow 硬失败 pattern/review 与 skill manifest schema/删文件悬空引用/**存在性测试**/`docs/approved` frontmatter 不变量/本地 linter（ruff 等，含**未用 import F401**）。
+
+2. preflight 每个 `FAIL:` 段 = 一条 finding，severity 至少 `high`，直接进 findings 列表，**置信度高于模型推断**。preflight `PASS` 的维度不再由模型重复质疑。
+
+   warn-only 段（如"silent-error-swallow sites"列出的 `|| true` / `--no-verify` / `except: pass` 点）= 确定性候选清单：模型逐项判断是否掩盖真实失败（合法 cleanup 放过，否则升级为 finding）。机械保证的是**召回**（不漏点），判断仍由模型做。
+
+3. preflight 不存在或某检查 `skip`（前置工件缺失）时，该维度才回退到模型判断，并在 finding 里注明"机械门禁缺位"——按下方 OPC 准则，这本身可能就是一条 finding。
+
+4. 脚本天然覆盖不到、需要模型判断的残差（见 §3 与严格 merge-ready 准则）：意图是否超范围、过度抽象、命名复杂度、重复维护、UI 入口过多、文档与代码各讲一遍等设计/语义问题。
+
 ## 1. 风险与审查深度
 
 风险分级直接遵循 `rules/product-dev.mdc`，不要在本命令里另写一套判定标准。输出使用：

@@ -33,6 +33,8 @@
 
 Agent Skills 只在 `.cursor/skills/` 编辑与提交；仓库根 `.claude/skills` 只能是指向 `.cursor/skills` 的 symlink，禁止创建真实副本。
 
+新增 / 修改 skill / command（含各项目自建 skill）须遵循 `rules/dev-rules-convention.mdc` 的「skill / command 确定性基线」：可机械化步骤（计数 / 解析 / 查表 / 抓取 / 校验 / 排序去重 / 状态派生）由脚本承载并被调用，prompt 只留真实判断；`/xj-review` 把「本可机械化却写成 prose」列为必报 finding 作 review-time 兜底。
+
 Claude Code 全局 hooks（如 `gh-pr-guard.py`、`skill-reflect.sh`）唯一源在 `dev-rules/global/hooks/`，由 `sync.sh` symlink 到 `~/.claude/hooks/`；`~/.claude/hooks/` 下不得有真实文件——发现非 symlink 必须 mv 到 canonical mirror 后重 sync。settings.json hook 条目按 `~/.claude/hooks/<name>` 路径引用即可（symlink 透明）。
 
 ## 4. Headless 模式

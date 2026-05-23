@@ -21,7 +21,7 @@ $ARGUMENTS
 PYTHONPATH="$DEV_RULES" python3 -m scripts.twin status [--workspace <workspace>] [--json]
 ```
 
-其中 `/twin status <workspace>` 映射为 `status --workspace <workspace>`。禁止读取 `goal.yaml` / `plan.yaml` / `CURRENT.md` / `runs/*` / `reviews/*` 正文，禁止展开证据文件内容，禁止生成额外总结。status 可用 run artifact 的存在性、mtime、大小派生一行 worker 活性/停滞诊断，但必须保持只读且不修复状态。status 是固定短输出，超过 Python stdout 的内容一律不是 status 命令职责。
+其中 `/twin status <workspace>` 映射为 `status --workspace <workspace>`。禁止读取 `goal.yaml` / `plan.yaml` / `CURRENT.md` / `runs/*` / `reviews/*` 正文，禁止展开证据文件内容，禁止生成额外总结。worker 活性/停滞诊断由 `status_workspace`（`scripts/twin/workspace.py:worker_running_diagnostics`）在 Python 侧确定性算好，作为 `display.worker.{state,note,last_activity_seconds,events_bytes}` 字段随 stdout 返回；status 逐字转发即可，**禁止模型自己从 artifact 的 mtime / 大小重新派生活性**——那是已经机械化的判断，重算只会引入不确定。status 保持只读、不修复状态，是固定短输出，超过 Python stdout 的内容一律不是 status 命令职责。
 
 如果参数以 `respond` 开头，只执行：
 
@@ -49,7 +49,7 @@ supervisor-context → 写 next_instruction → worker-turn → review-context �
 
 ## status 展示
 
-`/twin status [workspace]` 是人类状态面：展示目标、可读状态、当前 item、轮次、下一条命令和必要证据路径；`worker_running` 时额外展示一行 compact worker 诊断（starting/active/quiet/stale/completed artifact）。`--json` 保留机器字段。status 只读，不重写 workspace artifact。
+`/twin status [workspace]` 是人类状态面：展示目标、可读状态、当前 item、轮次、下一条命令和必要证据路径；`worker_running` 时额外展示一行 compact worker 诊断——其 `state`（starting/active/quiet/stale_no_artifacts/completed_artifact_present）与 `note` 均来自 Python 计算字段，非模型推断。`--json` 保留机器字段。status 只读，不重写 workspace artifact。
 
 ## needs_human 展示
 
