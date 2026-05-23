@@ -33,6 +33,8 @@
 
 Agent Skills 只在 `.cursor/skills/` 编辑与提交；仓库根 `.claude/skills` 只能是指向 `.cursor/skills` 的 symlink，禁止创建真实副本。
 
+Claude Code 全局 hooks（如 `gh-pr-guard.py`、`skill-reflect.sh`）唯一源在 `dev-rules/global/hooks/`，由 `sync.sh` symlink 到 `~/.claude/hooks/`；`~/.claude/hooks/` 下不得有真实文件——发现非 symlink 必须 mv 到 canonical mirror 后重 sync。settings.json hook 条目按 `~/.claude/hooks/<name>` 路径引用即可（symlink 透明）。
+
 ## 4. Headless 模式
 
 `claude -p` 模式下额外纪律：

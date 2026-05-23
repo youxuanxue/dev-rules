@@ -29,11 +29,13 @@
 #   ├── rules/*.mdc                            symlink 与 fan-out 都从这里出发
 #   ├── commands/*.md
 #   ├── global/CLAUDE.md
+#   ├── global/hooks/*                         Claude Code 全局 hooks（脚本）
 #   └── personas/*.md                          xuejiao twin persona 版本化源
 #        │
 #        ├──→ ~/.cursor/rules/*.mdc          本地 Cursor 交互式会话（symlink）
 #        ├──→ ~/.claude/commands/*           本地 Claude Code 自定义命令（symlink）
 #        ├──→ ~/.claude/CLAUDE.md            全局工作宪法（symlink）
+#        ├──→ ~/.claude/hooks/*              全局 Claude Code hooks（symlink）
 #        └──→ 各项目/.cursor/rules/*.mdc     云端 Agent 可读（real copy, git tracked）
 #
 #   为什么 home 入口用 symlink，项目用 real copy？
@@ -59,11 +61,13 @@ HOME_CANONICAL="${DEV_RULES_HOME:-$HOME/Codes/dev-rules}"
 HOME_RULES_DIR="$HOME_CANONICAL/rules"
 HOME_COMMANDS_DIR="$HOME_CANONICAL/commands"
 HOME_GLOBAL_DIR="$HOME_CANONICAL/global"
+HOME_HOOKS_DIR="$HOME_GLOBAL_DIR/hooks"
 HOME_PERSONAS_DIR="$HOME_CANONICAL/personas"
 
 CURSOR_HOME="$HOME/.cursor/rules"
 CLAUDE_COMMANDS="$HOME/.claude/commands"
 CLAUDE_GLOBAL_MD="$HOME/.claude/CLAUDE.md"
+CLAUDE_HOOKS="$HOME/.claude/hooks"
 LAUNCH_AGENT_LABEL="local.dev-rules.sync"
 LAUNCH_AGENT_PLIST="$HOME/Library/LaunchAgents/${LAUNCH_AGENT_LABEL}.plist"
 
@@ -211,6 +215,30 @@ sync_to_home() {
             echo "  updated: $basename"
         fi
     done
+
+    echo ""
+    echo "=== Syncing to ~/.claude/hooks/ (symlinks → $HOME_HOOKS_DIR) ==="
+    if [ ! -d "$HOME_HOOKS_DIR" ]; then
+        echo "  (no hooks/ in canonical mirror, skipping)"
+    else
+        mkdir -p "$CLAUDE_HOOKS"
+        for hook in "$HOME_HOOKS_DIR"/*; do
+            [ -f "$hook" ] || continue
+            local basename
+            basename="$(basename "$hook")"
+            local target="$CLAUDE_HOOKS/$basename"
+            if [ -L "$target" ] && [ "$(readlink "$target")" = "$hook" ]; then
+                echo "  ok: $basename"
+            elif [ -L "$target" ] || [ -f "$target" ]; then
+                [ -f "$target" ] && [ ! -L "$target" ] && mv "$target" "$target.bak.$(date +%Y%m%d%H%M%S)"
+                ln -sf "$hook" "$target"
+                echo "  updated: $basename"
+            else
+                ln -sf "$hook" "$target"
+                echo "  created: $basename"
+            fi
+        done
+    fi
 
     echo ""
     echo "=== Syncing to ~/.claude/CLAUDE.md (symlink → $HOME_GLOBAL_DIR/CLAUDE.md) ==="
