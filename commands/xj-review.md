@@ -118,13 +118,14 @@ OPC 哲学：reviewer 工作不是发现问题，而是把 PR 推到可合并状
 
 `merge-ready` 不是 reviewer 的终点。在 PR 上下文里它只是"代码本身可以合"，**PR 真正进入待合并要 CI 全绿**。这一段也是默认 agent 闭环，不是甩给用户的 checklist：
 
-1. **盯 CI**：审查的是 GitHub PR 时，立即用 `Monitor` 工具跟踪 `gh pr checks <num>` 直到所有 required job 进入终态。**不要** sleep 轮询；用 per-occurrence 通知驱动（Monitor 工具的天然契约）。
+1. **盯 CI**：审查的是 GitHub PR 时，立即用 `Monitor` 工具跟踪 `gh pr checks <num>` 直到**所有非 `skipping`/`pending` 的 check** 进入终态。**不要** 仅靠 GitHub branch protection 的 required list——仓库可能未配，required 列表为空时就会漏盯整个 CI。**不要** sleep 轮询；用 per-occurrence 通知驱动（Monitor 工具的天然契约）。
 2. **CI 全绿** → 告诉用户："PR #N 已 merge-ready 且 CI 全绿，等你的合并指令"。
 3. **CI 失败** → 立即诊断，**不允许** "finding 已修就交付、CI 留给以后"：
    - **瞬态故障**（runner 拉 PR merge ref 认证失败 / 镜像 503 / 网络 timeout 等，且代码侧未触达该 job 范围）：直接 `gh run rerun --failed`，继续监控。瞬态判定标准 = "同一 commit、同一 job 配置的其他平行 job 全过" + "故障描述指向 infra 而非代码"。
    - **真实失败**：把失败 job 当成新 finding，回到上一节修复闭环。
-4. **熔断**：同一 job 连续 3 次失败仍未绿 → 暂停并明示。
-5. **永远不调 `gh pr merge`**：合并属于用户授权动作，由 `~/.claude/settings.json` PreToolUse hook 机械兜底；规则层这里只做语义对齐。即使过去用户给过类似 PR 的合并授权，本次也必须等本次的明确指令。
+4. **熔断**：同一 job 连续 3 次失败仍未绿 → 暂停并明示。本节失败回流到上节修复闭环时**合并计数**：`fix → CI fail → fix` 整条链算一个大循环，整体不超过 3 轮。
+5. **用户打断永远 trumps**：等 CI 期间用户改主意（"算了别等了" / "先去做其他事"）随时可以暂停或切走，与修复闭环节同步。
+6. **永远不调 `gh pr merge`**：合并属于用户授权动作，由 `~/.claude/settings.json` PreToolUse hook 机械兜底；规则层这里只做语义对齐。即使过去用户给过类似 PR 的合并授权，本次也必须等本次的明确指令。
 
 ## 5. 持久化：PR comment 优先，本地文件按需
 
