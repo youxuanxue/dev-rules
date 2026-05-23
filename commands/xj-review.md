@@ -16,11 +16,13 @@ $ARGUMENTS
 
    该脚本已机械覆盖以下原本写在本命令 prose 里的检查（逐项 FAIL 直接转成 finding，无需模型再判断）：契约删除/Web surface 对齐/分层依赖/高风险审批锚点/release skip-ci/workflow 硬失败 pattern/review 与 skill manifest schema/删文件悬空引用/**存在性测试**/`docs/approved` frontmatter 不变量/本地 linter（ruff 等，含**未用 import F401**）。
 
+   若项目用其他名字的等价机械门禁脚本（如 dev-rules 自身的 `verify-rules.sh`），按相同方式调用——结论同样视为 ground-truth。判定优先级：`scripts/preflight.sh` → 项目根的等价脚本（`verify-rules.sh` / `Makefile check` 目标等）→ §0.3 fallback。
+
 2. preflight 每个 `FAIL:` 段 = 一条 finding，severity 至少 `high`，直接进 findings 列表，**置信度高于模型推断**。preflight `PASS` 的维度不再由模型重复质疑。
 
    warn-only 段（如"silent-error-swallow sites"列出的 `|| true` / `--no-verify` / `except: pass` 点）= 确定性候选清单：模型逐项判断是否掩盖真实失败（合法 cleanup 放过，否则升级为 finding）。机械保证的是**召回**（不漏点），判断仍由模型做。
 
-3. preflight 不存在或某检查 `skip`（前置工件缺失）时，该维度才回退到模型判断，并在 finding 里注明"机械门禁缺位"——按下方 OPC 准则，这本身可能就是一条 finding。
+3. 上述脚本均不存在、或某检查 `skip`（前置工件缺失）时，该维度才回退到模型判断，并在 finding 里注明"机械门禁缺位"——按下方 OPC 准则，这本身可能就是一条 finding。
 
 4. 脚本天然覆盖不到、需要模型判断的残差（见 §3 与严格 merge-ready 准则）：意图是否超范围、过度抽象、命名复杂度、重复维护、UI 入口过多、文档与代码各讲一遍等设计/语义问题。
 
