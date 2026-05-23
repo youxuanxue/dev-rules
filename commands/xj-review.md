@@ -107,7 +107,7 @@ findings:
 OPC 哲学：reviewer 工作不是发现问题，而是把 PR 推到可合并状态。`needs-fix` 触发以下默认动作，**不再等用户单独发出"请修复"指令**：
 
 1. **逐 finding 修**：按 `critical → high → medium → low` 顺序处理；同级按 R-编号。`suggested_fix` 是参考，不是契约——以理解问题本质优先。
-2. **每轮必跑机械门禁**：`scripts/preflight.sh`、项目 unit/integration 测试套件、相关 linter。脚本失败 → 修；同一脚本连续 2 轮失败 → 暂停告诉用户（全局 `CLAUDE.md` §2 stop-the-line）。
+2. **每轮必跑机械门禁**：复用 §0 定义的判定（`scripts/preflight.sh` 优先，无则项目等价物如 `verify-rules.sh`），加上项目 unit/integration 测试套件与相关 linter。脚本失败 → 修；同一脚本连续 2 轮失败 → 暂停告诉用户（全局 `CLAUDE.md` §2 stop-the-line）。
 3. **commit + push**：commit message 推荐 `fix(scope): address R-001..R-NNN — <summary>` 形态；遵循项目的 commit marker 规则（`no-web-impact` 等）。**禁止** `--amend` 已 push 的 commit、`git push --force`、跳 hook（紧急回滚由用户授权后单独走）。
 4. **自我 re-review**：重跑本命令 §0-§3，直到 `decision: merge-ready` 且零 medium+ finding，再进入下一节。
 5. **熔断**：同一 finding 连续 3 轮修不掉、或 review→fix 大循环超过 3 轮仍未收敛 → 暂停并明示根因，等用户介入。不要无限循环——同一问题反复失败是规则要求的 stop-the-line。
