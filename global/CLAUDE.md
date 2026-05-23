@@ -25,9 +25,10 @@
 
 | 命令 | 用途 |
 | --- | --- |
-| `/user:xj-decompose [需求描述]` | 先判定风险，再拆解子任务；默认单 PR，高风险才升级到原型与审批门禁 |
 | `/user:xj-review [范围]` | 默认对话内精简代码审查；高风险或明确要求时再留 PR comment / 结构化记录 |
 | `/twin <workspace>|status [workspace]|respond <text>` | 运行本机 xuejiao persona supervisor，驱动 worker 完成目标工作区 |
+
+任务拆解走 Claude Code 原生 plan mode（默认按风险落到对话 / PR summary / `docs/approved/*`，参见 `rules/product-dev.mdc`）。
 
 新增命令编辑 `dev-rules/commands/*.md`，运行 `dev-rules/sync.sh` 后立即在所有会话生效（symlink）。
 
