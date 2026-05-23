@@ -453,9 +453,23 @@ def _behavior_helper_errors() -> list[str]:
     if detect_session_lost(requested_session="", parsed_session="", events=[]):
         errors.append("fresh run (no requested session) should never be session_lost")
     if not is_body_guard_rejection("Request body 10062361 bytes exceeded TokenKey pre-flight limit", []):
-        errors.append("body-guard rejection text should be detected")
+        errors.append("body-guard rejection text should be detected (empty-events fallback)")
     if is_body_guard_rejection("real worker turn completed", []):
         errors.append("normal worker output should not look like body-guard rejection")
+    if not is_body_guard_rejection(
+        "request too large",
+        [{"type": "result", "subtype": "error_during_execution", "is_error": True, "result": "request too large"}],
+    ):
+        errors.append("error event carrying body-guard text should be detected")
+    worker_content_event = {
+        "type": "assistant",
+        "message": {"content": [{"type": "text", "text": "讨论 body-guard / request too large 时的兜底逻辑"}]},
+    }
+    if is_body_guard_rejection(
+        "讨论 body-guard / request too large 时的兜底逻辑",
+        [{"type": "system", "session_id": "abc"}, worker_content_event],
+    ):
+        errors.append("worker content mentioning body-guard text must not be flagged as a rejection")
     no_progress_flags = assess_run_quality(
         worker_output="继续推进但没有任何可验收的 diff 或运行结果",
         validation=[],

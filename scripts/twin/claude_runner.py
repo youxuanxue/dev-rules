@@ -96,12 +96,21 @@ def _has_model_turn(events: list[dict[str, Any]]) -> bool:
 
 
 def is_body_guard_rejection(output_text: str, events: list[dict[str, Any]] | None = None) -> bool:
-    """Whether worker output indicates an oversized-body / body-guard rejection."""
-    if BODY_GUARD_REJECTION.search(output_text or ""):
-        return True
+    """Whether the worker's event stream indicates an oversized-body / body-guard rejection.
+
+    Only consults `is_error` events so worker message content that happens to
+    quote body-guard text (e.g. a worker editing this very file) cannot be
+    mistaken for a real rejection. Production rejections always emit an error
+    result event — see the fixture in ``validate.py``. ``output_text`` is only
+    used as a fallback when there are no parsed events at all (e.g. the run
+    timed out before the first event arrived); worker content can't reach that
+    branch because content turns always produce at least the system event.
+    """
     for event in events or []:
         if event.get("is_error") and BODY_GUARD_REJECTION.search(str(event.get("result") or "")):
             return True
+    if not events and BODY_GUARD_REJECTION.search(output_text or ""):
+        return True
     return False
 
 
