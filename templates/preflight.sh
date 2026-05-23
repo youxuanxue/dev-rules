@@ -452,6 +452,25 @@ else
     done
 fi
 
+# ---- 检查 20: 静默吞错形态（|| true / --no-verify / except: pass / continue-on-error） ----
+# warn-only：合法 cleanup (rm ... || true) 普遍存在，硬失败会过吵；这里只列出
+# diff 新增的吞错点供 review，模型判断是否掩盖真实失败。行内 `# preflight-allow: swallow`
+# 可确定性豁免。项目可设 SILENT_SWALLOW_STRICT=1 升级为硬门禁。
+section "silent-error-swallow sites (warn-only)"
+if [ -f dev-rules/scripts/check_silent_error_swallow.py ]; then
+    strict_flag=""
+    [ -n "${SILENT_SWALLOW_STRICT:-}" ] && strict_flag="--strict"
+    if "$PYTHON_BIN" dev-rules/scripts/check_silent_error_swallow.py --base "${PREFLIGHT_BASE:-origin/main}" $strict_flag > /tmp/preflight-silent-swallow.log 2>&1; then
+        head -1 /tmp/preflight-silent-swallow.log | sed 's/^/    /'
+        [ -s /tmp/preflight-silent-swallow.log ] && tail -n +2 /tmp/preflight-silent-swallow.log | sed 's/^/    /'
+    else
+        cat /tmp/preflight-silent-swallow.log | sed 's/^/    /'
+        fail "silent-error-swallow added in diff (SILENT_SWALLOW_STRICT mode)"
+    fi
+else
+    skip "dev-rules/scripts/check_silent_error_swallow.py not present"
+fi
+
 echo ""
 if [ $errors -eq 0 ]; then
     echo "=== preflight: PASS ==="
