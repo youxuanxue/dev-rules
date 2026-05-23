@@ -29,11 +29,13 @@
 #   ├── rules/*.mdc                            symlink 与 fan-out 都从这里出发
 #   ├── commands/*.md
 #   ├── global/CLAUDE.md
+#   ├── global/hooks/*                         Claude Code 全局 hooks（脚本）
 #   └── personas/*.md                          xuejiao twin persona 版本化源
 #        │
 #        ├──→ ~/.cursor/rules/*.mdc          本地 Cursor 交互式会话（symlink）
 #        ├──→ ~/.claude/commands/*           本地 Claude Code 自定义命令（symlink）
 #        ├──→ ~/.claude/CLAUDE.md            全局工作宪法（symlink）
+#        ├──→ ~/.claude/hooks/*              全局 Claude Code hooks（symlink）
 #        └──→ 各项目/.cursor/rules/*.mdc     云端 Agent 可读（real copy, git tracked）
 #
 #   为什么 home 入口用 symlink，项目用 real copy？
@@ -59,11 +61,13 @@ HOME_CANONICAL="${DEV_RULES_HOME:-$HOME/Codes/dev-rules}"
 HOME_RULES_DIR="$HOME_CANONICAL/rules"
 HOME_COMMANDS_DIR="$HOME_CANONICAL/commands"
 HOME_GLOBAL_DIR="$HOME_CANONICAL/global"
+HOME_HOOKS_DIR="$HOME_GLOBAL_DIR/hooks"
 HOME_PERSONAS_DIR="$HOME_CANONICAL/personas"
 
 CURSOR_HOME="$HOME/.cursor/rules"
 CLAUDE_COMMANDS="$HOME/.claude/commands"
 CLAUDE_GLOBAL_MD="$HOME/.claude/CLAUDE.md"
+CLAUDE_HOOKS="$HOME/.claude/hooks"
 LAUNCH_AGENT_LABEL="local.dev-rules.sync"
 LAUNCH_AGENT_PLIST="$HOME/Library/LaunchAgents/${LAUNCH_AGENT_LABEL}.plist"
 
@@ -211,6 +215,30 @@ sync_to_home() {
             echo "  updated: $basename"
         fi
     done
+
+    echo ""
+    echo "=== Syncing to ~/.claude/hooks/ (symlinks → $HOME_HOOKS_DIR) ==="
+    if [ ! -d "$HOME_HOOKS_DIR" ]; then
+        echo "  (no hooks/ in canonical mirror, skipping)"
+    else
+        mkdir -p "$CLAUDE_HOOKS"
+        for hook in "$HOME_HOOKS_DIR"/*; do
+            [ -f "$hook" ] || continue
+            local basename
+            basename="$(basename "$hook")"
+            local target="$CLAUDE_HOOKS/$basename"
+            if [ -L "$target" ] && [ "$(readlink "$target")" = "$hook" ]; then
+                echo "  ok: $basename"
+            elif [ -L "$target" ] || [ -f "$target" ]; then
+                [ -f "$target" ] && [ ! -L "$target" ] && mv "$target" "$target.bak.$(date +%Y%m%d%H%M%S)"
+                ln -sf "$hook" "$target"
+                echo "  updated: $basename"
+            else
+                ln -sf "$hook" "$target"
+                echo "  created: $basename"
+            fi
+        done
+    fi
 
     echo ""
     echo "=== Syncing to ~/.claude/CLAUDE.md (symlink → $HOME_GLOBAL_DIR/CLAUDE.md) ==="
@@ -435,6 +463,38 @@ check_project_drift() {
     return $drift
 }
 
+# Check that each file in $HOME_HOOKS_DIR has a correct symlink in $CLAUDE_HOOKS.
+# Drift cases (each → +1 to HOME_HOOKS_DRIFT):
+#   - missing: no entry in $CLAUDE_HOOKS for a canonical hook
+#   - regular file: entry exists but isn't a symlink (someone edited live, or
+#     a tool unlinked-then-wrote, severing version control)
+#   - wrong target: symlink exists but points elsewhere
+# User-only hooks in $CLAUDE_HOOKS (no counterpart in canonical) are ignored —
+# this check enforces convention only, doesn't police what users add separately.
+check_home_hooks_drift() {
+    HOME_HOOKS_DRIFT=0
+    [ -d "$HOME_HOOKS_DIR" ] || return 0
+    local hook_src basename target actual
+    for hook_src in "$HOME_HOOKS_DIR"/*; do
+        [ -f "$hook_src" ] || continue
+        basename="$(basename "$hook_src")"
+        target="$CLAUDE_HOOKS/$basename"
+        if [ ! -e "$target" ]; then
+            echo "  ✗ MISSING: ~/.claude/hooks/$basename"
+            HOME_HOOKS_DRIFT=$((HOME_HOOKS_DRIFT + 1))
+        elif [ ! -L "$target" ]; then
+            echo "  ✗ REGULAR FILE: ~/.claude/hooks/$basename (should be symlink to canonical mirror)"
+            HOME_HOOKS_DRIFT=$((HOME_HOOKS_DRIFT + 1))
+        else
+            actual="$(readlink "$target")"
+            if [ "$actual" != "$hook_src" ]; then
+                echo "  ✗ WRONG TARGET: ~/.claude/hooks/$basename → $actual (expected → $hook_src)"
+                HOME_HOOKS_DRIFT=$((HOME_HOOKS_DRIFT + 1))
+            fi
+        fi
+    done
+}
+
 check_drift() {
     # Two distinct invocation contexts:
     #   1. SCRIPT_DIR == HOME_CANONICAL → we are the canonical mirror at ~/Codes/dev-rules/.
@@ -460,17 +520,30 @@ check_drift() {
             echo ""
         done < <(iter_local_projects)
 
-        if [ "$checked" -eq 0 ]; then
+        # Home-hooks drift: ~/.claude/hooks/ entries that should be symlinks to
+        # $HOME_HOOKS_DIR but aren't (regular file, missing, wrong target).
+        # User hooks not present in canonical mirror are NOT flagged.
+        echo "=== Checking drift: ~/.claude/hooks/ vs $HOME_HOOKS_DIR ==="
+        check_home_hooks_drift
+        if [ "$HOME_HOOKS_DRIFT" -eq 0 ]; then
+            echo "  ok: hooks symlinks healthy"
+        else
+            total_drift=$((total_drift + HOME_HOOKS_DRIFT))
+            echo "  $HOME_HOOKS_DRIFT hook(s) drifted. Run: $SCRIPT_DIR/sync.sh"
+        fi
+        echo ""
+
+        if [ "$checked" -eq 0 ] && [ "$total_drift" -eq 0 ]; then
             echo "=== Checking drift: no materialized projects on this machine ==="
             echo "  ok: nothing to check (no .registered-projects entries have a matching .local-projects mapping)"
             exit 0
         fi
 
         if [ "$total_drift" -eq 0 ]; then
-            echo "All $checked materialized project(s) in sync."
+            echo "All $checked materialized project(s) and home hooks in sync."
             exit 0
         else
-            echo "$total_drift of $checked project(s) drifted. Run: $SCRIPT_DIR/sync.sh --all"
+            echo "$total_drift drift item(s) across $checked project(s) + home hooks. Run: $SCRIPT_DIR/sync.sh --all"
             exit 1
         fi
     else
@@ -632,6 +705,29 @@ print_status() {
         echo "  ⚠ regular file (run sync.sh to convert to symlink)"
     else
         echo "  ✗ missing"
+    fi
+    echo ""
+    echo "Home ~/.claude/hooks/ (must symlink → $HOME_HOOKS_DIR):"
+    if [ ! -d "$CLAUDE_HOOKS" ]; then
+        echo "  ✗ directory missing — run sync.sh"
+    else
+        local hook_any=0
+        for hook in "$CLAUDE_HOOKS"/*; do
+            [ -e "$hook" ] || continue
+            hook_any=1
+            if [ -L "$hook" ]; then
+                local target
+                target="$(readlink "$hook")"
+                if [[ "$target" == "$HOME_HOOKS_DIR/"* ]]; then
+                    echo "  ✓ $(basename "$hook")"
+                else
+                    echo "  ⚠ $(basename "$hook") → $target (not pointing to canonical mirror)"
+                fi
+            elif [ -f "$hook" ]; then
+                echo "  ⚠ $(basename "$hook") (regular file, should be symlink — mv to $HOME_HOOKS_DIR then re-sync)"
+            fi
+        done
+        [ "$hook_any" -eq 0 ] && echo "  (none — run sync.sh)"
     fi
     echo ""
     echo "Twin personas source ($HOME_PERSONAS_DIR):"
