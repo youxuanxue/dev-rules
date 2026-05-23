@@ -52,19 +52,20 @@ def _is_code_file(path: str) -> bool:
     return p.suffix in CODE_SUFFIXES or p.name in CODE_BASENAMES
 
 
-def added_lines(base: str) -> list[tuple[str, int, str]]:
+def parse_unified_diff(diff_text: str) -> list[tuple[str, int, str]]:
     """Return (path, new_line_number, text) for every added line in code files.
 
     Parses unified diff hunk headers to track the new-file line number so the
-    finding can cite file:line. Uses --unified=0 to avoid context lines.
+    finding can cite file:line. Expects --unified=0 output (no context lines).
+    Metadata lines (`diff --git`, `index`, `--- a/…`) only advance a counter
+    that the next `@@` header resets, so they never corrupt a real line number.
     """
-    out = run_git(["diff", "--unified=0", f"{base}...HEAD"])
     results: list[tuple[str, int, str]] = []
     cur_path = ""
     new_lineno = 0
     in_code = False
     hunk_re = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
-    for raw in out.splitlines():
+    for raw in diff_text.splitlines():
         if raw.startswith("+++ "):
             # "+++ b/path" or "+++ /dev/null"
             target = raw[4:].strip()
@@ -83,9 +84,12 @@ def added_lines(base: str) -> list[tuple[str, int, str]]:
             # removed line: does not advance the new-file counter
             continue
         elif not raw.startswith("\\"):
-            # context line (rare with --unified=0) advances the counter
             new_lineno += 1
     return results
+
+
+def added_lines(base: str) -> list[tuple[str, int, str]]:
+    return parse_unified_diff(run_git(["diff", "--unified=0", f"{base}...HEAD"]))
 
 
 def find_swallows(
@@ -129,7 +133,7 @@ def _self_test() -> int:
         "--- a/y.sh\n+++ b/y.sh\n"
         "@@ -0,0 +1,2 @@\n+do_thing || true\n+second_line\n"
     )
-    parsed = _parse_diff_for_test(diff)
+    parsed = parse_unified_diff(diff)
     md_hits = [t for p, _, t in parsed if p == "x.md"]
     if md_hits:
         failures.append(f"added_lines scanned .md prose: {md_hits}")
@@ -143,34 +147,6 @@ def _self_test() -> int:
         return 1
     print("[check_silent_error_swallow] self-test OK")
     return 0
-
-
-def _parse_diff_for_test(diff_text: str) -> list[tuple[str, int, str]]:
-    """Mirror of added_lines' parser fed a literal diff (test-only seam)."""
-    results: list[tuple[str, int, str]] = []
-    cur_path = ""
-    new_lineno = 0
-    in_code = False
-    hunk_re = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
-    for raw in diff_text.splitlines():
-        if raw.startswith("+++ "):
-            target = raw[4:].strip()
-            cur_path = target[2:] if target.startswith("b/") else target
-            in_code = cur_path != "/dev/null" and _is_code_file(cur_path)
-            continue
-        m = hunk_re.match(raw)
-        if m:
-            new_lineno = int(m.group(1))
-            continue
-        if raw.startswith("+") and not raw.startswith("+++"):
-            if in_code:
-                results.append((cur_path, new_lineno, raw[1:]))
-            new_lineno += 1
-        elif raw.startswith("-") and not raw.startswith("---"):
-            continue
-        elif not raw.startswith("\\"):
-            new_lineno += 1
-    return results
 
 
 def main() -> int:
