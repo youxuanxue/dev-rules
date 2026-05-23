@@ -37,8 +37,8 @@ from .runtime import (
 )
 from .schema_contract import validate_artifact, validate_schema
 from .util import read_json, write_json
-from .claude_runner import DEFAULT_WORKER_TIMEOUT_SECONDS, WORKER_TIMEOUT_ENV, default_worker_timeout_seconds, detect_session_lost
-from .worker import DEFAULT_WORKER_MAX_BUDGET_USD, assess_run_quality, changed_files_from_status, default_worker_max_budget_usd
+from .claude_runner import DEFAULT_WORKER_TIMEOUT_SECONDS, WORKER_TIMEOUT_ENV, default_worker_timeout_seconds, detect_session_lost, is_body_guard_rejection
+from .worker import DEFAULT_WORKER_MAX_BUDGET_USD, assess_run_quality, changed_files_from_status, default_worker_max_budget_usd, should_clear_worker_session
 from .workspace import WorkspaceError, load_plan, load_state, status_summary, write_plan, write_state
 
 
@@ -48,12 +48,14 @@ class FakeRunner:
         *,
         session_lost_once: bool = False,
         warning_only_once: bool = False,
+        body_guard_once: bool = False,
         returncode: int = 0,
         output_text: str | None = None,
     ) -> None:
         self.calls: list[dict[str, Any]] = []
         self.session_lost_once = session_lost_once
         self.warning_only_once = warning_only_once
+        self.body_guard_once = body_guard_once
         self.returncode = returncode
         self.output_text = output_text or "Summary:\n- fixture worker ran\n\nEvidence:\n- tests: fixture pass\n\nRemaining:\n- none"
 
@@ -67,6 +69,14 @@ class FakeRunner:
         if self.session_lost_once and requested_session:
             self.session_lost_once = False
             return ClaudeRunResult(session_id=requested_session, output_text="", returncode=0, raw_events=[], session_lost=True)
+        if self.body_guard_once and requested_session:
+            self.body_guard_once = False
+            return ClaudeRunResult(
+                session_id=requested_session,
+                output_text="Request body 10062361 bytes exceeded TokenKey pre-flight limit",
+                returncode=1,
+                raw_events=[{"type": "result", "subtype": "error_during_execution", "is_error": True, "result": "request too large"}],
+            )
         if self.warning_only_once and requested_session:
             self.warning_only_once = False
             return ClaudeRunResult(
@@ -438,6 +448,33 @@ def _behavior_helper_errors() -> list[str]:
         errors.append("resume that forked into a new session id should be session_lost")
     if detect_session_lost(requested_session="", parsed_session="", events=[]):
         errors.append("fresh run (no requested session) should never be session_lost")
+    if not is_body_guard_rejection("Request body 10062361 bytes exceeded TokenKey pre-flight limit", []):
+        errors.append("body-guard rejection text should be detected")
+    if is_body_guard_rejection("real worker turn completed", []):
+        errors.append("normal worker output should not look like body-guard rejection")
+    no_progress_flags = assess_run_quality(
+        worker_output="继续推进但没有任何可验收的 diff 或运行结果",
+        validation=[],
+        returncode=0,
+        session_lost=False,
+        resume_used=False,
+        pre_git_status="",
+        post_git_status="",
+        pre_git_diff_stat="",
+        post_git_diff_stat="",
+    )
+    if "NO_PROGRESS_DETECTED" not in no_progress_flags:
+        errors.append("NO_PROGRESS should not require resume_used")
+    if not should_clear_worker_session(
+        result=ClaudeRunResult(session_id="doomed", output_text="", returncode=1, raw_events=[], session_lost=True),
+        quality_flags=["SESSION_LOST"],
+    ):
+        errors.append("session_lost should clear persisted worker session")
+    if should_clear_worker_session(
+        result=ClaudeRunResult(session_id="keep-me", output_text="done", returncode=0, raw_events=[]),
+        quality_flags=["VALIDATION_NOT_REPORTED"],
+    ):
+        errors.append("validation-only weak flags should not clear worker session by default")
     weak_flags = assess_run_quality(
         worker_output="我会继续收敛 F6/AC1",
         validation=[],
@@ -860,6 +897,30 @@ def run_fixture_validation() -> list[str]:
         if warning_retry["worker"]["resume_used"]:
             errors.append("warning-only fresh retry should not mark resume_used")
         apply_supervisor_review(workspace, warning_retry["run_id"], _review("continue"))
+
+        body_guard_runner = FakeRunner(body_guard_once=True)
+        body_guard = start_worker_turn(workspace, "测试 body-guard resume", runner=body_guard_runner)
+        if len(body_guard_runner.calls) != 2:
+            errors.append("body-guard resume should retry fresh once")
+        if body_guard_runner.calls[-1].get("session_id"):
+            errors.append("body-guard retry should be fresh")
+        if "BODY_GUARD_REJECTION" not in body_guard.get("evidence", {}).get("quality_flags", []):
+            errors.append("body-guard resume should record BODY_GUARD_REJECTION")
+        apply_supervisor_review(workspace, body_guard["run_id"], _review("continue"))
+
+        no_progress_workspace = _write_workspace(root / "no-progress-clear")
+        np_state = load_state(no_progress_workspace)
+        np_state["worker_session_id"] = "doomed-session-id"
+        np_state["status"] = "continue"
+        np_state["next_instruction"] = "继续"
+        write_state(no_progress_workspace, np_state)
+        weak_runner = FakeRunner(output_text="继续推进但没有任何可验收的 diff 或运行结果")
+        np_run = start_worker_turn(no_progress_workspace, "无进展 fixture", runner=weak_runner)
+        np_after = load_state(no_progress_workspace)
+        if np_after.get("worker_session_id") is not None:
+            errors.append("NO_PROGRESS should clear worker_session_id even after fresh retry")
+        if "NO_PROGRESS_DETECTED" not in np_run.get("evidence", {}).get("quality_flags", []):
+            errors.append("weak fresh worker turn should flag NO_PROGRESS_DETECTED")
 
         needs_run = start_worker_turn(workspace, "等人确认 fixture", runner=runner)
         needs_human = _review("needs_human", question="请确认 fixture")

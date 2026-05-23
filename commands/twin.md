@@ -43,6 +43,16 @@ supervisor-context → 写 next_instruction → worker-turn → review-context �
 
 只在 `accepted_done` / `needs_human` / `failed` / bounded `worker_quiet_timeout` 停下；`review_required` / `continue` 不是用户停点，`/twin <workspace>` 必须从 artifact 自动恢复 review 或下一轮，不能让用户反复说“继续”。`worker_running` 若已出现 run artifact 则进入 review，若无 artifact 则恢复 fresh worker turn，若仍 active/quiet 则调用 bounded `watch` 后再回到 `next`。worker stop 不是完成；后台 worker 完成通知后的确定性重入口也是 `/twin <workspace>`。
 
+## Worker 执行禁令（防 oversized resume 死循环）
+
+worker **只能**通过同步 Bash 调用：
+
+```bash
+PYTHONPATH="$DEV_RULES" python3 -m scripts.twin worker-turn --workspace <ws> --instruction "<supervisor-authored>" --json
+```
+
+禁止用 Claude Code daemon / 后台 slash worker / `Task` 后台模式 / `--fork-session --resume <*.jsonl>` 交互式 transcript / 任何非 `worker-turn` 路径代替 worker。supervisor 在当前交互会话里写 instruction 与 review；**不得**把 supervisor 会话 fork 成 daemon worker 去“代跑 worker”。worker 活性与完成以 `runs/<run_id>/run.json` 与 `events.jsonl` 为准，不以 `~/.claude/jobs/*` 或 daemon roster 为准。若 `worker-turn` 因 oversized body / body-guard 拒载，`scripts.twin` 会清掉 `worker_session_id` 并 fresh retry；不得手工 `--resume` 旧 session 绕过该机制。
+
 ## workspace 契约
 
 `<workspace>` 必须包含 `goal.yaml` 与 `plan.yaml`。workspace 内禁止出现 `supervisor-persona.md` / `worker-persona.md`；persona 直接读 `$DEV_RULES/personas/*.md`。字段定义见 `docs/twin-design.md`。

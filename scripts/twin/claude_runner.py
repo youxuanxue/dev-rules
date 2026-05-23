@@ -2,11 +2,19 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+
+BODY_GUARD_REJECTION = re.compile(
+    r"(request body .* exceeded|body[- ]guard|status.?413|request too large|"
+    r"request entity too large|payload too large|pre-flight limit)",
+    re.IGNORECASE,
+)
 
 
 WORKER_TIMEOUT_ENV = "TWIN_WORKER_TIMEOUT_SECONDS"
@@ -83,6 +91,16 @@ def _has_model_turn(events: list[dict[str, Any]]) -> bool:
                     if isinstance(item, dict) and item.get("type") == "text" and str(item.get("text", "")).strip():
                         return True
         if event.get("type") == "result" and not event.get("is_error") and str(event.get("result") or "").strip():
+            return True
+    return False
+
+
+def is_body_guard_rejection(output_text: str, events: list[dict[str, Any]] | None = None) -> bool:
+    """Whether worker output indicates an oversized-body / body-guard rejection."""
+    if BODY_GUARD_REJECTION.search(output_text or ""):
+        return True
+    for event in events or []:
+        if event.get("is_error") and BODY_GUARD_REJECTION.search(str(event.get("result") or "")):
             return True
     return False
 

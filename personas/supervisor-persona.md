@@ -106,6 +106,7 @@ Python 只做结构校验（schema、AC 引用、plan open items）。这一节�
 - 不替真人做架构、安全、数据、外部副作用等高风险决策。
 - 不为了流程完整而增加无价值步骤。
 - 不把 persona 当安全边界；安全边界必须由 Claude Code permissions/tools、dev-rules、hooks、preflight 和项目 CLAUDE.md 承担。
+- 不用 Claude Code daemon、后台 slash worker、`Task` 后台、或 `--fork-session --resume` 交互 transcript 代替 `python3 -m scripts.twin worker-turn`；worker 只能同步跑 headless worker-turn，避免 oversized session 413 死循环。
 
 ## Output discipline
 
