@@ -16,11 +16,13 @@ $ARGUMENTS
 
    该脚本已机械覆盖以下原本写在本命令 prose 里的检查（逐项 FAIL 直接转成 finding，无需模型再判断）：契约删除/Web surface 对齐/分层依赖/高风险审批锚点/release skip-ci/workflow 硬失败 pattern/review 与 skill manifest schema/删文件悬空引用/**存在性测试**/`docs/approved` frontmatter 不变量/本地 linter（ruff 等，含**未用 import F401**）。
 
+   若项目用其他名字的等价机械门禁脚本（如 dev-rules 自身的 `verify-rules.sh`），按相同方式调用——结论同样视为 ground-truth。判定优先级：`scripts/preflight.sh` → 项目根的等价脚本（`verify-rules.sh` / `Makefile check` 目标等）→ §0.3 fallback。
+
 2. preflight 每个 `FAIL:` 段 = 一条 finding，severity 至少 `high`，直接进 findings 列表，**置信度高于模型推断**。preflight `PASS` 的维度不再由模型重复质疑。
 
    warn-only 段（如"silent-error-swallow sites"列出的 `|| true` / `--no-verify` / `except: pass` 点）= 确定性候选清单：模型逐项判断是否掩盖真实失败（合法 cleanup 放过，否则升级为 finding）。机械保证的是**召回**（不漏点），判断仍由模型做。
 
-3. preflight 不存在或某检查 `skip`（前置工件缺失）时，该维度才回退到模型判断，并在 finding 里注明"机械门禁缺位"——按下方 OPC 准则，这本身可能就是一条 finding。
+3. 上述脚本均不存在、或某检查 `skip`（前置工件缺失）时，该维度才回退到模型判断，并在 finding 里注明"机械门禁缺位"——按下方 OPC 准则，这本身可能就是一条 finding。
 
 4. 脚本天然覆盖不到、需要模型判断的残差（见 §3 与严格 merge-ready 准则）：意图是否超范围、过度抽象、命名复杂度、重复维护、UI 入口过多、文档与代码各讲一遍等设计/语义问题。
 
@@ -100,12 +102,32 @@ findings:
 - **顺手发现的 out-of-scope 问题必须列入 finding**：审查过程中如果路过看到与本 PR 无关但确实存在的问题（命名混乱、注释陈旧、复制粘贴遗留、零调用函数、未使用的 import / 配置 / 路由），必须列出。理由：reviewer 已经在文件里了，让作者顺手修的成本远低于以后单独开 PR。**不允许"留待后续"作为搪塞**——除非该问题本身够大、值得独立 PR 评审，此时仍需在 finding 中明示"建议开独立 PR"并继续保持 `needs-fix`。
 - **Jobs 哲学违背必须列入 finding**：过度抽象（为想象中的未来需求建抽象层）、重复维护（同一信息存两处需手同步）、多此一举的开关 / 配置项 / feature flag、复制粘贴未消除、命名复杂度高于实际语义、UI 入口过多、文档与代码各讲一遍。
 - **OPC 哲学违背必须列入 finding**：流程依赖人记忆（"以后注意"、"下次记得"）、`|| true` 类静默吞错、本可机械化检查但写成 prose 规则、preflight / hook / 自动化缺位、提交一次发现的问题不固化为 check。
-- **循环直到收敛**：发 `needs-fix` 后用户/作者应循环 fix → re-review 直到达到上述零 finding 状态，才发 `merge-ready`。
+- **循环直到收敛是 agent 默认行为，不是把责任甩给用户**。发 `needs-fix` 后立即进入修复闭环（见下），不要止步于"输出 finding 等用户处理"。
 
-### merge-ready 之后必须做什么 / 必须不做什么
+### needs-fix → 修复闭环（默认 agent 主动推进）
 
-- 必须做：在对话中告知用户"已 merge-ready，等待你的合并指令"。
-- 必须不做：**直接调用 `gh pr merge`**。合并属于用户授权动作，不在 `/xj-review` 范围内。即使过去用户给过类似 PR 的合并授权，本次也必须等本次的明确指令。这一条由 `~/.claude/settings.json` PreToolUse hook 机械兜底；规则层这里只做语义对齐。
+OPC 哲学：reviewer 工作不是发现问题，而是把 PR 推到可合并状态。`needs-fix` 触发以下默认动作，**不再等用户单独发出"请修复"指令**：
+
+1. **逐 finding 修**：按 `critical → high → medium → low` 顺序处理；同级按 R-编号。`suggested_fix` 是参考，不是契约——以理解问题本质优先。
+2. **每轮必跑机械门禁**：复用 §0 定义的判定（`scripts/preflight.sh` 优先，无则项目等价物如 `verify-rules.sh`），加上项目 unit/integration 测试套件与相关 linter。脚本失败 → 修；同一脚本连续 2 轮失败 → 暂停告诉用户（全局 `CLAUDE.md` §2 stop-the-line）。
+3. **commit + push**：commit message 推荐 `fix(scope): address R-001..R-NNN — <summary>` 形态；遵循项目的 commit marker 规则（`no-web-impact` 等）。**禁止** `--amend` 已 push 的 commit、`git push --force`、跳 hook（紧急回滚由用户授权后单独走）。
+4. **自我 re-review**：重跑本命令 §0-§3，直到 `decision: merge-ready` 且零 medium+ finding，再进入下一节。
+5. **熔断**：同一 finding 连续 3 轮修不掉、或 review→fix 大循环超过 3 轮仍未收敛 → 暂停并明示根因，等用户介入。不要无限循环——同一问题反复失败是规则要求的 stop-the-line。
+
+修复期间用户给新指令永远 trumps 这个闭环。修复需要破坏性动作（删数据、动他人分支、`--force`、跳 hook）才向用户确认；普通 code/test/doc 改动直接做。
+
+### merge-ready 之后：follow through 到 CI 全绿
+
+`merge-ready` 不是 reviewer 的终点。在 PR 上下文里它只是"代码本身可以合"，**PR 真正进入待合并要 CI 全绿**。这一段也是默认 agent 闭环，不是甩给用户的 checklist：
+
+1. **盯 CI**：审查的是 GitHub PR 时，立即用 `Monitor` 工具跟踪 `gh pr checks <num>` 直到**所有非 `skipping`/`pending` 的 check** 进入终态。**不要** 仅靠 GitHub branch protection 的 required list——仓库可能未配，required 列表为空时就会漏盯整个 CI。**不要** sleep 轮询；用 per-occurrence 通知驱动（Monitor 工具的天然契约）。
+2. **CI 全绿** → 告诉用户："PR #N 已 merge-ready 且 CI 全绿，等你的合并指令"。
+3. **CI 失败** → 立即诊断，**不允许** "finding 已修就交付、CI 留给以后"：
+   - **瞬态故障**（runner 拉 PR merge ref 认证失败 / 镜像 503 / 网络 timeout 等，且代码侧未触达该 job 范围）：直接 `gh run rerun --failed`，继续监控。瞬态判定标准 = "同一 commit、同一 job 配置的其他平行 job 全过" + "故障描述指向 infra 而非代码"。
+   - **真实失败**：把失败 job 当成新 finding，回到上一节修复闭环。
+4. **熔断**：同一 job 连续 3 次失败仍未绿 → 暂停并明示。本节失败回流到上节修复闭环时**合并计数**：`fix → CI fail → fix` 整条链算一个大循环，整体不超过 3 轮。
+5. **用户打断永远 trumps**：等 CI 期间用户改主意（"算了别等了" / "先去做其他事"）随时可以暂停或切走，与修复闭环节同步。
+6. **永远不调 `gh pr merge`**：合并属于用户授权动作，由 `~/.claude/settings.json` PreToolUse hook 机械兜底；规则层这里只做语义对齐。即使过去用户给过类似 PR 的合并授权，本次也必须等本次的明确指令。
 
 ## 5. 持久化：PR comment 优先，本地文件按需
 
