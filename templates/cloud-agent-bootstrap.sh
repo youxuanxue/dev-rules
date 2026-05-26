@@ -178,7 +178,7 @@ install_tool() {
         jq)         install_jq ;;
         # awscli / aws / docker / pnpm / node etc. are intentionally NOT
         # auto-installed: they are heavy, distro-coupled, or contradict
-        # OPC's "least credentials" stance (the long-lived AWS creds case).
+        # deterministic automated ops "least credentials" stance (the long-lived AWS creds case).
         # Projects that genuinely need them install via CLOUD_AGENT_PROJECT_HOOK.
         *)
             log "  no auto-installer for '$t' — checking PATH only (declare in CLOUD_AGENT_PROJECT_HOOK if install needed)"

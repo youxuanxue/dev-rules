@@ -6,7 +6,7 @@ $ARGUMENTS
 
 ## 0. 机械门禁先行（确定性优于肉眼）
 
-在做任何模型判断之前，先跑项目的确定性门禁，把它的结论当作 ground-truth，**不要用模型重新肉眼判断脚本已经机械覆盖的项**。这是 OPC 原则：能机械化的检查由脚本承载，模型只补脚本覆盖不到的判断残差。
+在做任何模型判断之前，先跑项目的确定性门禁，把它的结论当作 ground-truth，**不要用模型重新肉眼判断脚本已经机械覆盖的项**。这是 确定性自动化运营和运维原则：能机械化的检查由脚本承载，模型只补脚本覆盖不到的判断残差。
 
 1. 若项目存在 `scripts/preflight.sh`，先运行它；PR 审查语境（`--base origin/main`）下传 `PREFLIGHT_BASE=origin/main`：
 
@@ -22,7 +22,7 @@ $ARGUMENTS
 
    warn-only 段（如"silent-error-swallow sites"列出的 `|| true` / `--no-verify` / `except: pass` 点）= 确定性候选清单：模型逐项判断是否掩盖真实失败（合法 cleanup 放过，否则升级为 finding）。机械保证的是**召回**（不漏点），判断仍由模型做。
 
-3. 上述脚本均不存在、或某检查 `skip`（前置工件缺失）时，该维度才回退到模型判断，并在 finding 里注明"机械门禁缺位"——按下方 OPC 准则，这本身可能就是一条 finding。
+3. 上述脚本均不存在、或某检查 `skip`（前置工件缺失）时，该维度才回退到模型判断，并在 finding 里注明"机械门禁缺位"——按下方 确定性自动化运营和运维准则，这本身可能就是一条 finding。
 
 4. 脚本天然覆盖不到、需要模型判断的残差（见 §3 与严格 merge-ready 准则）：意图是否超范围、过度抽象、命名复杂度、重复维护、UI 入口过多、文档与代码各讲一遍等设计/语义问题。
 
@@ -69,7 +69,7 @@ $ARGUMENTS
 - 测试覆盖：新增功能测试、bug 复现测试、负向场景、禁止存在性测试。
 - 架构一致性：分层依赖、公共契约同步、Web surface 对齐或 `no-web-impact` 说明。
 - 可维护性：非冗余注释、TODO/FIXME/HACK、跨模块影响。
-- 设计质量：Jobs 简洁、最小 API 面、聚焦边界、OPC 自动化、流程极简。
+- 设计质量：Jobs 简洁、最小 API 面、聚焦边界、确定性自动化、流程极简。
 
 仅在 `full_conformance` 中增加逐项符合性检查：代码 ↔ 设计文档 / API 契约 / 验收标准 / 技术选型 / 任务边界。每个 conformance finding 必须引用审批产物路径和章节。
 
@@ -101,12 +101,12 @@ findings:
 - **零 `medium+` finding**：`critical` / `high` / `medium` 中任一非零都不得发 `merge-ready`，必须 `needs-fix` 并 loop。
 - **顺手发现的 out-of-scope 问题必须列入 finding**：审查过程中如果路过看到与本 PR 无关但确实存在的问题（命名混乱、注释陈旧、复制粘贴遗留、零调用函数、未使用的 import / 配置 / 路由），必须列出。理由：reviewer 已经在文件里了，让作者顺手修的成本远低于以后单独开 PR。**不允许"留待后续"作为搪塞**——除非该问题本身够大、值得独立 PR 评审，此时仍需在 finding 中明示"建议开独立 PR"并继续保持 `needs-fix`。
 - **Jobs 哲学违背必须列入 finding**：过度抽象（为想象中的未来需求建抽象层）、重复维护（同一信息存两处需手同步）、多此一举的开关 / 配置项 / feature flag、复制粘贴未消除、命名复杂度高于实际语义、UI 入口过多、文档与代码各讲一遍。
-- **OPC 哲学违背必须列入 finding**：流程依赖人记忆（"以后注意"、"下次记得"）、`|| true` 类静默吞错、本可机械化检查但写成 prose 规则、preflight / hook / 自动化缺位、提交一次发现的问题不固化为 check。
+- **确定性自动化运营和运维原则违背必须列入 finding**：流程依赖人记忆（"以后注意"、"下次记得"）、`|| true` 类静默吞错、本可机械化检查但写成 prose 规则、preflight / hook / 自动化缺位、提交一次发现的问题不固化为 check。
 - **循环直到收敛是 agent 默认行为，不是把责任甩给用户**。发 `needs-fix` 后立即进入修复闭环（见下），不要止步于"输出 finding 等用户处理"。
 
 ### needs-fix → 修复闭环（默认 agent 主动推进）
 
-OPC 哲学：reviewer 工作不是发现问题，而是把 PR 推到可合并状态。`needs-fix` 触发以下默认动作，**不再等用户单独发出"请修复"指令**：
+确定性自动化运营和运维：reviewer 工作不是发现问题，而是把 PR 推到可合并状态。`needs-fix` 触发以下默认动作，**不再等用户单独发出"请修复"指令**：
 
 1. **逐 finding 修**：按 `critical → high → medium → low` 顺序处理；同级按 R-编号。`suggested_fix` 是参考，不是契约——以理解问题本质优先。
 2. **每轮必跑机械门禁**：复用 §0 定义的判定（`scripts/preflight.sh` 优先，无则项目等价物如 `verify-rules.sh`），加上项目 unit/integration 测试套件与相关 linter。脚本失败 → 修；同一脚本连续 2 轮失败 → 暂停告诉用户（全局 `CLAUDE.md` §2 stop-the-line）。
@@ -141,7 +141,7 @@ OPC 哲学：reviewer 工作不是发现问题，而是把 PR 推到可合并状
 
 需要持久化且存在 GitHub PR 时，优先把 finding 写成 PR comment / review note，而不是本地孤儿文件。写 PR comment 属于共享状态：除非用户已经明确要求，否则先确认。
 
-PR comment 正文给人读，不再注入隐藏 JSON marker——marker 的唯一消费者（历史校准命令）已删除，没有 consumer 还主动注入是 OPC 禁止的"过早工具化"。后续如确实需要重启校准，再统一讨论 marker 形式。
+PR comment 正文给人读，不再注入隐藏 JSON marker——marker 的唯一消费者（历史校准命令）已删除，没有 consumer 还主动注入是 确定性自动化运营和运维禁止的"过早工具化"。后续如确实需要重启校准，再统一讨论 marker 形式。
 
 ### 本地 JSON 只是严格/离线备选
 

@@ -2,7 +2,7 @@
 """Validate frontmatter of every docs/approved/*.md.
 
 Status-vocabulary invariants shared across all dev-rules consumer projects
-(Jobs minimalism + OPC automation; see dev-rules/rules/product-dev.mdc §完成自检
+(Jobs minimalism + deterministic automated ops; see dev-rules/rules/product-dev.mdc §完成自检
 and rules/dev-rules-convention.mdc §approved-doc status vocabulary).
 
 Rules:
