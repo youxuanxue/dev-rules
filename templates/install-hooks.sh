@@ -3,7 +3,7 @@
 # dev-rules/templates/install-hooks.sh — 安装 git hooks
 #
 # 把 preflight 脚本接到 git pre-commit，让硬约束在 commit 时自动触发。
-# 这是 确定性自动化运营和运维「自动化优先」原则的最后一公里：从「记得跑脚本」→「不可能忘记跑」。
+# 这是「确定性自动化运营和运维」「自动化优先」原则的最后一公里：从「记得跑脚本」→「不可能忘记跑」。
 #
 # 解析顺序（fallback chain）：
 #   1. $REPO_ROOT/scripts/preflight.sh        ← 项目级 wrapper（有项目特定检查时使用）

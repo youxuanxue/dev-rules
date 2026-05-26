@@ -70,7 +70,7 @@ fan-out 使用 `.registered-projects` 与 `.local-projects` 的并集：跨机�
 
 ## skill / command 确定性基线（机械化优于 prompt 推断）
 
-这是 确定性自动化运营和运维「自动化优先」落到 skill / command 作者身上的元规则，**适用于本仓库的 `commands/*.md`，也适用于任何项目自建的 `.cursor/skills/**/SKILL.md`**。同一段 prompt 让模型每次重新推断同一件可计算的事，就是不确定性来源；能机械化的必须由脚本/工具承载，prompt 只保留真实判断。
+这是「确定性自动化运营和运维」「自动化优先」落到 skill / command 作者身上的元规则，**适用于本仓库的 `commands/*.md`，也适用于任何项目自建的 `.cursor/skills/**/SKILL.md`**。同一段 prompt 让模型每次重新推断同一件可计算的事，就是不确定性来源；能机械化的必须由脚本/工具承载，prompt 只保留真实判断。
 
 **必须脚本化（确定性 > 模型推断）**：计数与字数、结构化文件解析（JSON / YAML / frontmatter）、查表与映射、按字段排序 / 去重 / 配额筛选、抓取与重试、格式 / schema 校验、路径安全校验、状态/活性派生。判据：输入相同则输出必相同、且无需创意——这类步骤写成 prose 让模型执行属于反模式。
 
@@ -82,7 +82,7 @@ fan-out 使用 `.registered-projects` 与 `.local-projects` 的并集：跨机�
 - 复用既有确定性工具，不重造：契约 / 分层 / Web surface / 高风险锚点 / 存在性测试 / approved frontmatter / 静默吞错等已由 `dev-rules/scripts/check_*.py` + `templates/preflight.sh` 覆盖；skill / command 应**调用** preflight 取 ground-truth，而非让模型重新肉眼判断（参见 `commands/xj-review.md` §0 机械门禁先行）。
 - 反复出现的机械化缺口按 `digital-clone-research.md §二` 落成会失败的脚本 / schema；纯创意步骤不强行工具化。
 
-**review 时的保障**：`/xj-review` 的 确定性自动化运营和运维准则已把「本可机械化检查却写成 prose 规则」列为必报 finding——这就是本基线的 review-time 门禁，新增 skill / command 时按此自审，不另设易误报的新 check。
+**review 时的保障**：`/xj-review` 的「确定性自动化运营和运维」准则已把「本可机械化检查却写成 prose 规则」列为必报 finding——这就是本基线的 review-time 门禁，新增 skill / command 时按此自审，不另设易误报的新 check。
 
 ## 编辑与提交规则
 
@@ -119,7 +119,7 @@ LaunchAgent `local.dev-rules.sync` 每 30 分钟跑 `sync.sh --pull`，把其他
    ```
    增删项目 wrapper 后**无需**重装 hook。
 3. **CI 同步运行**：在 GitHub Actions / GitLab CI 中追加一步 `./scripts/preflight.sh`（若存在）或 `./dev-rules/templates/preflight.sh`。
-4. **dev-rules 子模块自身**：源仓库内置 `scripts/preflight.sh`（调用 `./verify-rules.sh` + `./sync-stats.sh --check`），首次克隆后跑一次 `bash templates/install-hooks.sh` 即可让 pre-commit 自动拦截违例提交。**不要靠记忆手动跑 verify-rules.sh**——这条规则正是 确定性自动化运营和运维「自动化优先」要消灭的"自觉履约"。
+4. **dev-rules 子模块自身**：源仓库内置 `scripts/preflight.sh`（调用 `./verify-rules.sh` + `./sync-stats.sh --check`），首次克隆后跑一次 `bash templates/install-hooks.sh` 即可让 pre-commit 自动拦截违例提交。**不要靠记忆手动跑 verify-rules.sh**——这条规则正是「确定性自动化运营和运维」「自动化优先」要消灭的"自觉履约"。
 
 接入完成后，违反任何一条强约束的提交都会被 hook 拦截，违反者的 CI 会 fail。
 
