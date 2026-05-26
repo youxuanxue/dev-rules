@@ -91,7 +91,7 @@ def handle_post_pr_create(cmd: str) -> int:
             "reason": (
                 "PR 已创建。下一步必做：调用 /xj-review 对本 PR 审查，按严格 "
                 "merge-ready 准则（零 medium+ finding，包含 out-of-scope 顺手问题 "
-                "与 Jobs / OPC 哲学违背）循环 fix → re-review。达到 merge-ready "
+                "与 Jobs / 确定性自动化运营和运维原则违背）循环 fix → re-review。达到 merge-ready "
                 "后，**停下并在对话中等待用户的明确合并指令**；禁止直接调用 "
                 "gh pr merge。"
             ),
