@@ -82,6 +82,8 @@ fan-out 使用 `.registered-projects` 与 `.local-projects` 的并集：跨机�
 - 复用既有确定性工具，不重造：契约 / 分层 / Web surface / 高风险锚点 / 存在性测试 / approved frontmatter / 静默吞错等已由 `dev-rules/scripts/check_*.py` + `templates/preflight.sh` 覆盖；skill / command 应**调用** preflight 取 ground-truth，而非让模型重新肉眼判断（参见 `commands/xj-review.md` §0 机械门禁先行）。
 - 反复出现的机械化缺口按 `digital-clone-research.md §二` 落成会失败的脚本 / schema；纯创意步骤不强行工具化。
 
+**skill 加载位的单一事实来源**：skill 只在 `.cursor/skills/` 编辑与提交（Cursor 读 `.cursor`，Claude Code 读 `.claude`）。让 Claude Code 也能加载同一份 skill **只能靠 symlink，禁止真实副本**（副本会分叉事实来源）。该 symlink 由 `sync.sh` 确定性维护，不靠人工记忆：home 层 `~/.claude/skills → ~/.cursor/skills`；项目 fan-out 时，若项目存在 `.cursor/skills/` 则建 `<project>/.claude/skills → ../.cursor/skills`。`sync.sh --check` 把「缺失 / 真实目录（违禁副本）/ 错误目标」列为漂移并 exit 1。手动建该 symlink 属安装期 debt，应记入项目 `docs/preflight-debt.md`。
+
 **review 时的保障**：`/xj-review` 的「确定性自动化运营和运维」准则已把「本可机械化检查却写成 prose 规则」列为必报 finding——这就是本基线的 review-time 门禁，新增 skill / command 时按此自审，不另设易误报的新 check。
 
 ## 编辑与提交规则
