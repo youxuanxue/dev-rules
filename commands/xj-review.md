@@ -109,10 +109,10 @@ findings:
 
 确定性自动化运营和运维：reviewer 工作不是发现问题，而是把 PR 推到可合并状态。`needs-fix` 触发以下默认动作，**不再等用户单独发出"请修复"指令**。
 
-**循环计数与熔断不由模型手数。** 四个阈值——大循环（§115/§128 合并预算）、同一脚本连续失败、同一 finding 未修掉、同一 CI job 连续失败——全部由确定性脚本 `loop_state.py` 派生（阈值是查表，正属「确定性自动化运营和运维」必须脚本化的类目）。模型只在决策点调用它并**逐字转发** `verdict=`；读到 `verdict=halt` 立即 stop-the-line（全局 `CLAUDE.md` §2）：把 `reason=` 明示给用户、停止循环，不要自己判断"第几轮"。脚本在 dev-rules submodule 内、自包含可直接按路径执行——下文统一写 `dev-rules/scripts/review/loop_state.py`（**审 dev-rules 仓库自身时去掉 `dev-rules/` 前缀**）；状态存 `/tmp`，按 `--key` 隔离。`--key` 用 PR 标识（如 `owner/repo#123`），进入闭环时初始化一次：
+**循环计数与熔断不由模型手数。** 四个阈值——大循环（§115/§128 合并预算）、同一脚本连续失败、同一 finding 未修掉、同一 CI job 连续失败——全部由确定性脚本 `loop_state.py` 派生（阈值是查表，正属「确定性自动化运营和运维」必须脚本化的类目）。模型只在决策点调用它并**逐字转发** `verdict=`；读到 `verdict=halt` 立即 stop-the-line（全局 `CLAUDE.md` §2）：把 `reason=` 明示给用户、停止循环，不要自己判断"第几轮"。脚本在 dev-rules submodule 内、自包含可直接按路径执行——下文统一写 `dev-rules/scripts/review/loop_state.py`（**审 dev-rules 仓库自身时去掉 `dev-rules/` 前缀**）；状态存 `/tmp`，按 `--key` 隔离。`--key` 用 PR 标识（如 `owner/repo#123`），进入闭环时初始化一次，并把 §1 判定的 `risk_level` 传进去（风险判定仍是模型判断，脚本只据此施加确定性后果——**高风险在 push 前 halt**，见步骤 4）：
 
 ```bash
-python3 dev-rules/scripts/review/loop_state.py init --key <owner/repo#PR>
+python3 dev-rules/scripts/review/loop_state.py init --key <owner/repo#PR> --risk <low|normal|high>
 ```
 
 1. **每轮开始登记大循环**：`python3 dev-rules/scripts/review/loop_state.py round-start --key <K>`，转发 `verdict`；halt 即停。
@@ -121,7 +121,13 @@ python3 dev-rules/scripts/review/loop_state.py init --key <owner/repo#PR>
    ```bash
    python3 dev-rules/scripts/review/loop_state.py record --key <K> --kind script --id <preflight|pytest|ruff|...> --outcome <pass|fail>
    ```
-4. **commit + push**：commit message 推荐 `fix(scope): address R-001..R-NNN — <summary>` 形态；遵循项目的 commit marker 规则（`no-web-impact` 等）。**禁止** `--amend` 已 push 的 commit、`git push --force`、跳 hook（紧急回滚由用户授权后单独走）。
+4. **commit（可本地） → push 前过 gate**：commit message 推荐 `fix(scope): address R-001..R-NNN — <summary>` 形态；遵循项目的 commit marker 规则（`no-web-impact` 等）。本地 commit 便宜可逆、直接做；但 **push 是推进 PR 的对外动作，push 前必须过 gate**：
+   ```bash
+   python3 dev-rules/scripts/review/loop_state.py gate --key <K>
+   ```
+   - `verdict=continue`（低 / 常规风险）→ 正常 push。
+   - `verdict=halt`（高风险）→ **不要 push**：把已 commit 的 fix diff 呈给用户、等其明确批准再 push。高风险审批是 OPC 唯一保留的人类介入点（global `CLAUDE.md §1`、product-dev §180 审批锚点），agent 不替用户跨这道门。
+   **禁止** `--amend` 已 push 的 commit、`git push --force`、跳 hook（紧急回滚由用户授权后单独走）。
 5. **自我 re-review**：重跑本命令 §0-§3。每条仍未修掉的 finding 登记一次，直到 `decision: merge-ready` 且零 medium+ finding 再进入下一节：
    ```bash
    python3 dev-rules/scripts/review/loop_state.py record --key <K> --kind finding --id R-NNN --outcome <pass|fail>

@@ -21,6 +21,12 @@ Per-key counters reset to 0 on a `pass` outcome and increment on `fail`; the
 big-loop round only ever increments. A counter reaching its cap yields
 `verdict=halt` — the model must stop and surface the reason, not loop on.
 
+It also carries the change's risk level (a prompt judgement passed at `init`)
+and exposes a `gate` check the loop calls before pushing: a HIGH-risk change
+halts before the outward push so the human approves it — OPC's sole
+human-intervention point (global CLAUDE.md §1, product-dev §180). low/normal
+push autonomously.
+
 CLI mirrors `python3 -m scripts.twin`: argparse subcommands, `key=value`
 stdout lines the model forwards verbatim, `--json` for machine reads.
 Exit codes: 0 = verdict=continue, 1 = verdict=halt (stop-the-line),
@@ -45,6 +51,16 @@ KIND_CAPS = {
     "finding": 3,  # xj-review §115: same finding survives three fix rounds
     "ci-job": 3,  # xj-review §128: same CI job fails three times in a row
 }
+
+# Risk level is a prompt judgement (product-dev.mdc + global CLAUDE.md §1 own
+# the "blast radius / rollback cost" call); this module only stores the
+# verdict and applies its one deterministic consequence: a HIGH-risk change
+# must not be silently committed-and-pushed by the autonomous loop — OPC's
+# sole human-intervention point is the high-risk approval gate. `gate` halts
+# before push so the human approves the outward action. Unknown/normal/low
+# pass through (product-dev §65: when unsure, treat as normal).
+RISK_LEVELS = ("low", "normal", "high")
+GATED_RISK = "high"
 
 EXIT_CONTINUE = 0
 EXIT_HALT = 1
@@ -92,7 +108,7 @@ def _emit(payload: dict, *, as_json: bool) -> None:
     if as_json:
         print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
         return
-    for field in ("key", "verdict", "reason", "round", "round_cap", "kind", "id", "count", "cap", "state_file"):
+    for field in ("key", "verdict", "reason", "risk", "round", "round_cap", "kind", "id", "count", "cap", "state_file"):
         if field in payload and payload[field] is not None:
             print(f"{field}={payload[field]}")
 
@@ -102,14 +118,17 @@ def _verdict_exit(verdict: str) -> int:
 
 
 def cmd_init(args: argparse.Namespace) -> int:
+    if args.risk not in RISK_LEVELS:
+        raise LoopStateError(f"unknown risk {args.risk!r}; expected one of {list(RISK_LEVELS)}")
     path = _state_path(args.key, args.state_file)
-    state = {"key": args.key, "round": 0, "counters": {}}
+    state = {"key": args.key, "round": 0, "counters": {}, "risk": args.risk}
     _save(path, state)
     _emit(
         {
             "key": args.key,
             "verdict": "continue",
-            "reason": "loop initialized",
+            "reason": f"loop initialized (risk={args.risk})",
+            "risk": args.risk,
             "round": 0,
             "round_cap": ROUND_CAP,
             "state_file": str(path),
@@ -117,6 +136,32 @@ def cmd_init(args: argparse.Namespace) -> int:
         as_json=args.json,
     )
     return EXIT_CONTINUE
+
+
+def cmd_gate(args: argparse.Namespace) -> int:
+    """High-risk approval gate, called before an outward push."""
+    path = _state_path(args.key, args.state_file)
+    state = _load(path, args.key)
+    risk = state.get("risk", "normal")
+    if risk == GATED_RISK:
+        verdict, reason = "halt", (
+            "high-risk change: do NOT auto-push. Commit locally is fine, but "
+            "present the fix diff and wait for human approval before push "
+            "(OPC §1 sole human-gate; product-dev §180 high-risk approval anchor)"
+        )
+    else:
+        verdict, reason = "continue", f"risk={risk}: autonomous push allowed"
+    _emit(
+        {
+            "key": args.key,
+            "verdict": verdict,
+            "reason": reason,
+            "risk": risk,
+            "state_file": str(path),
+        },
+        as_json=args.json,
+    )
+    return _verdict_exit(verdict)
 
 
 def cmd_round_start(args: argparse.Namespace) -> int:
@@ -236,8 +281,19 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
         run(["record", *base, "--kind", "ci-job", "--id", "lint", "--outcome", "fail"], EXIT_CONTINUE)
         run(["record", *base, "--kind", "ci-job", "--id", "test", "--outcome", "fail"], EXIT_CONTINUE)
 
-        # unknown kind is a usage error.
+        # high-risk push gate halts; normal/low pass through; default is normal.
+        run(["init", *base, "--risk", "high"], EXIT_CONTINUE)
+        g = run(["gate", *base], EXIT_HALT)
+        if g.get("verdict") != "halt":
+            failures.append("gate: high risk did not halt")
+        run(["init", *base, "--risk", "normal"], EXIT_CONTINUE)
+        run(["gate", *base], EXIT_CONTINUE)
+        run(["init", *base], EXIT_CONTINUE)  # default risk = normal
+        run(["gate", *base], EXIT_CONTINUE)
+
+        # unknown kind / risk are usage errors.
         run(["record", *base, "--kind", "bogus", "--id", "x", "--outcome", "fail"], EXIT_ERROR)
+        run(["init", *base, "--risk", "bogus"], EXIT_ERROR)
 
     if failures:
         for f in failures:
@@ -259,11 +315,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_init = sub.add_parser("init", help="start/reset a review loop session")
     add_common(p_init)
+    # No argparse `choices`: cmd_init validates --risk itself (same reason as
+    # --kind below). Default normal = product-dev §65 "when unsure, normal".
+    p_init.add_argument("--risk", default="normal", help="risk level: low|normal|high")
     p_init.set_defaults(func=cmd_init)
 
     p_round = sub.add_parser("round-start", help="enter a fix/CI big-loop round")
     add_common(p_round)
     p_round.set_defaults(func=cmd_round_start)
+
+    p_gate = sub.add_parser("gate", help="high-risk approval gate before an outward push")
+    add_common(p_gate)
+    p_gate.set_defaults(func=cmd_gate)
 
     p_record = sub.add_parser("record", help="record a script/finding/ci-job outcome")
     add_common(p_record)
