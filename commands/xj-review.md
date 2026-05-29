@@ -69,7 +69,7 @@ $ARGUMENTS
 - 测试覆盖：新增功能测试、bug 复现测试、负向场景、禁止存在性测试。
 - 架构一致性：分层依赖、公共契约同步、Web surface 对齐或 `no-web-impact` 说明。
 - 可维护性：非冗余注释、TODO/FIXME/HACK、跨模块影响。
-- 设计质量与确定性自动化运营和运维：是否违背 Jobs 哲学或 OPC 原则——具体判据与必报清单见下方严格 merge-ready 的「Jobs 哲学违背」「OPC 原则违背」两条（同一标准适用所有风险等级，只是 PR 强模式下必报），此处不再重述。
+- 设计质量与确定性自动化运营和运维：是否违背 Jobs 哲学或确定性自动化运营和运维原则——具体判据与必报清单见下方严格 merge-ready 的「Jobs 哲学违背」「确定性自动化运营和运维原则违背」两条（同一标准适用所有风险等级，只是 PR 强模式下必报），此处不再重述。
 
 仅在 `full_conformance` 中增加逐项符合性检查：代码 ↔ 设计文档 / API 契约 / 验收标准 / 技术选型 / 任务边界。每个 conformance finding 必须引用审批产物路径和章节。
 
@@ -103,7 +103,7 @@ findings:
 - **Jobs 哲学违背必须列入 finding**：过度抽象（为想象中的未来需求建抽象层）、重复维护（同一信息存两处需手同步）、多此一举的开关 / 配置项 / feature flag、复制粘贴未消除、命名复杂度高于实际语义、UI 入口过多、文档与代码各讲一遍。
 - **确定性自动化运营和运维原则违背必须列入 finding**：流程依赖人记忆（"以后注意"、"下次记得"）、`|| true` 类静默吞错、本可机械化检查但写成 prose 规则、preflight / hook / 自动化缺位、提交一次发现的问题不固化为 check。
   - **自指校准（被审对象本身是 prose-rules 载体时——`rules/*.mdc` / `commands/*.md` / `SKILL.md`，典型即 dev-rules 自身）**：「本可机械化却写成 prose」这条对此类仓库**假阳近乎必然，不是"低"**（prose 本就是这类文件的交付物）。发此 finding 前必须先区分：prose 编码的是**确定性计算**（计数 / 解析 / 查表 / 状态派生——`convention §75`）→ 真 finding；是**不可化约的判断或交付内容本身**（选题、架构权衡、风险里的爆炸半径判断——`convention §77` 过度机械化亦是反模式）→ **不报**。报之前必须指名具体哪一步可机械化、由什么脚本承载；指不出就降为提问，不直接发 finding。
-- **方向校准（发上面两类判断 finding 前先做）**：先把这条 finding 对齐 global `CLAUDE.md §1` 的 OPC 原则。**若一条 finding 会减少自动化 / 自主闭环 / 杠杆**（建议把自动步骤改回人工、拆掉闭环、加审批摩擦、为"更可控"砍掉 agent 自主性），在 OPC 下它几乎必然是反的——OPC 偏好更自主的闭合，不是更多人工。最坏的 finding 不是漏报，是反方向推 PR；方向拿不准时降级为提问，不要直接发成 finding。
+- **方向校准（发上面两类判断 finding 前先做）**：先把这条 finding 对齐 global `CLAUDE.md §1` 的确定性自动化运营和运维原则。**若一条 finding 会减少自动化 / 自主闭环 / 杠杆**（建议把自动步骤改回人工、拆掉闭环、加审批摩擦、为"更可控"砍掉 agent 自主性），在该原则下它几乎必然是反的——确定性自动化偏好更自主的闭合，不是更多人工（团队协同照旧，只是把可自动的交给 agent）。最坏的 finding 不是漏报，是反方向推 PR；方向拿不准时降级为提问，不要直接发成 finding。
 - **循环直到收敛是 agent 默认行为，不是把责任甩给用户**。发 `needs-fix` 后立即进入修复闭环（见下），不要止步于"输出 finding 等用户处理"。
 
 ### needs-fix → 修复闭环（默认 agent 主动推进）
@@ -127,7 +127,7 @@ python3 dev-rules/scripts/review/loop_state.py init --key <owner/repo#PR> --risk
    python3 dev-rules/scripts/review/loop_state.py gate --key <K>
    ```
    - `verdict=continue`（低 / 常规风险）→ 正常 push。
-   - `verdict=halt`（高风险）→ **不要 push**：把已 commit 的 fix diff 呈给用户、等其明确批准再 push。高风险审批是 OPC 唯一保留的人类介入点（global `CLAUDE.md §1`、product-dev §180 审批锚点），agent 不替用户跨这道门。
+   - `verdict=halt`（高风险）→ **不要 push**：把已 commit 的 fix diff 呈给用户、等其明确批准再 push。高风险审批是确定性自动化运营和运维原则唯一保留的人类介入点（global `CLAUDE.md §1`、product-dev §180 审批锚点），agent 不替用户跨这道门。
    **禁止** `--amend` 已 push 的 commit、`git push --force`、跳 hook（紧急回滚由用户授权后单独走）。
 5. **自我 re-review**：重跑本命令 §0-§3。每条仍未修掉的 finding 登记一次，直到 `decision: merge-ready` 且零 medium+ finding 再进入下一节：
    ```bash

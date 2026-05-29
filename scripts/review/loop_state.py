@@ -23,9 +23,10 @@ big-loop round only ever increments. A counter reaching its cap yields
 
 It also carries the change's risk level (a prompt judgement passed at `init`)
 and exposes a `gate` check the loop calls before pushing: a HIGH-risk change
-halts before the outward push so the human approves it — OPC's sole
-human-intervention point (global CLAUDE.md §1, product-dev §180). low/normal
-push autonomously.
+halts before the outward push so the human approves it — the sole
+human-intervention point the project's determinism-automation principle
+reserves (global CLAUDE.md §1, product-dev §180). low/normal push
+autonomously.
 
 CLI mirrors `python3 -m scripts.twin`: argparse subcommands, `key=value`
 stdout lines the model forwards verbatim, `--json` for machine reads.
@@ -55,9 +56,10 @@ KIND_CAPS = {
 # Risk level is a prompt judgement (product-dev.mdc + global CLAUDE.md §1 own
 # the "blast radius / rollback cost" call); this module only stores the
 # verdict and applies its one deterministic consequence: a HIGH-risk change
-# must not be silently committed-and-pushed by the autonomous loop — OPC's
-# sole human-intervention point is the high-risk approval gate. `gate` halts
-# before push so the human approves the outward action. Unknown/normal/low
+# must not be silently committed-and-pushed by the autonomous loop — the sole
+# human-intervention point the determinism-automation principle reserves is
+# the high-risk approval gate. `gate` halts before push so the human approves
+# the outward action. Unknown/normal/low
 # pass through (product-dev §65: when unsure, treat as normal).
 RISK_LEVELS = ("low", "normal", "high")
 GATED_RISK = "high"
@@ -147,7 +149,7 @@ def cmd_gate(args: argparse.Namespace) -> int:
         verdict, reason = "halt", (
             "high-risk change: do NOT auto-push. Commit locally is fine, but "
             "present the fix diff and wait for human approval before push "
-            "(OPC §1 sole human-gate; product-dev §180 high-risk approval anchor)"
+            "(global CLAUDE.md §1 sole human-gate; product-dev §180 high-risk approval anchor)"
         )
     else:
         verdict, reason = "continue", f"risk={risk}: autonomous push allowed"
