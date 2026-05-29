@@ -68,6 +68,11 @@ CURSOR_HOME="$HOME/.cursor/rules"
 CLAUDE_COMMANDS="$HOME/.claude/commands"
 CLAUDE_GLOBAL_MD="$HOME/.claude/CLAUDE.md"
 CLAUDE_HOOKS="$HOME/.claude/hooks"
+# Skills single source of truth: authored/committed under .cursor/skills/.
+# Claude Code loads them ONLY via a .claude/skills symlink (never a real copy —
+# a copy forks the truth, which the convention forbids).
+CURSOR_SKILLS="$HOME/.cursor/skills"
+CLAUDE_SKILLS="$HOME/.claude/skills"
 LAUNCH_AGENT_LABEL="local.dev-rules.sync"
 LAUNCH_AGENT_PLIST="$HOME/Library/LaunchAgents/${LAUNCH_AGENT_LABEL}.plist"
 
@@ -173,6 +178,29 @@ iter_local_projects() {
     rm -f "$seen_file"
 }
 
+# Ensure <link> is a symlink → <target> so Claude Code can load skills that are
+# authored/committed under .cursor/skills/. Single source of truth: .cursor/skills/
+# is the only edit/commit point; .claude/skills is a pure pointer, never a copy.
+# No-op when <guard> (the .cursor/skills dir) doesn't exist — projects without
+# skills are left untouched. A pre-existing real dir/file is backed up, never
+# deleted blindly. Uses `ln -sfn` so an existing dir-symlink is replaced in place
+# rather than nested into.
+link_skills_dir() {
+    local link="$1" target="$2" guard="$3" label="$4"
+    [ -d "$guard" ] || return 0
+    if [ -L "$link" ] && [ "$(readlink "$link")" = "$target" ]; then
+        echo "  ok: $label → $target"
+        return 0
+    fi
+    if [ -e "$link" ] && [ ! -L "$link" ]; then
+        local backup="$link.bak.$(date +%Y%m%d%H%M%S)"
+        mv "$link" "$backup"
+        echo "  backup: $link → $backup (was a real copy; single source is $guard)"
+    fi
+    ln -sfn "$target" "$link"
+    echo "  linked: $label → $target"
+}
+
 sync_to_home() {
     if [ ! -d "$HOME_CANONICAL" ]; then
         echo "  WARN: $HOME_CANONICAL not found — skipping home sync"
@@ -258,6 +286,15 @@ sync_to_home() {
     fi
 
     echo ""
+    echo "=== Syncing to ~/.claude/skills/ (symlink → $CURSOR_SKILLS) ==="
+    if [ ! -d "$CURSOR_SKILLS" ]; then
+        echo "  (no ~/.cursor/skills, skipping — nothing for Claude Code to load)"
+    else
+        mkdir -p "$(dirname "$CLAUDE_SKILLS")"
+        link_skills_dir "$CLAUDE_SKILLS" "$CURSOR_SKILLS" "$CURSOR_SKILLS" "skills"
+    fi
+
+    echo ""
     echo "=== Twin personas source ($HOME_PERSONAS_DIR) ==="
     for persona in "$HOME_PERSONAS_DIR"/*.md; do
         [ -f "$persona" ] && echo "  ok: $(basename "$persona")"
@@ -298,6 +335,16 @@ sync_to_project() {
 
     if [ "$changed" -eq 0 ]; then
         echo "  ok: $(basename "$project_dir") (all rules up to date)"
+    fi
+
+    # Skills fan-out: a project that keeps skills under .cursor/skills/ needs a
+    # .claude/skills symlink for Claude Code to load them (Cursor reads .cursor,
+    # Claude Code reads .claude). Relative target so the link is portable across
+    # clones/machines and commits cleanly. No-op when the project has no skills.
+    if [ -d "$project_dir/.cursor/skills" ]; then
+        mkdir -p "$project_dir/.claude"
+        link_skills_dir "$project_dir/.claude/skills" "../.cursor/skills" \
+            "$project_dir/.cursor/skills" "$(basename "$project_dir")/.claude/skills"
     fi
 }
 
@@ -495,6 +542,31 @@ check_home_hooks_drift() {
     done
 }
 
+# Check that ~/.claude/skills is the single-source symlink → ~/.cursor/skills,
+# so Claude Code loads the same skills Cursor does. Only relevant when
+# ~/.cursor/skills exists. Drift cases (each → HOME_SKILLS_DRIFT=1):
+#   - missing: no .claude/skills, so Claude Code can't see any .cursor skill
+#   - real dir/file: a forbidden duplicate that forks the single source
+#   - wrong target: symlink points somewhere other than ~/.cursor/skills
+check_home_skills_drift() {
+    HOME_SKILLS_DRIFT=0
+    [ -d "$CURSOR_SKILLS" ] || return 0
+    if [ ! -e "$CLAUDE_SKILLS" ] && [ ! -L "$CLAUDE_SKILLS" ]; then
+        echo "  ✗ MISSING: ~/.claude/skills (Claude Code can't load ~/.cursor/skills without it)"
+        HOME_SKILLS_DRIFT=1
+    elif [ ! -L "$CLAUDE_SKILLS" ]; then
+        echo "  ✗ REAL DIR: ~/.claude/skills (forbidden duplicate; must be symlink → $CURSOR_SKILLS)"
+        HOME_SKILLS_DRIFT=1
+    else
+        local actual
+        actual="$(readlink "$CLAUDE_SKILLS")"
+        if [ "$actual" != "$CURSOR_SKILLS" ]; then
+            echo "  ✗ WRONG TARGET: ~/.claude/skills → $actual (expected → $CURSOR_SKILLS)"
+            HOME_SKILLS_DRIFT=1
+        fi
+    fi
+}
+
 check_drift() {
     # Two distinct invocation contexts:
     #   1. SCRIPT_DIR == HOME_CANONICAL → we are the canonical mirror at ~/Codes/dev-rules/.
@@ -530,6 +602,18 @@ check_drift() {
         else
             total_drift=$((total_drift + HOME_HOOKS_DRIFT))
             echo "  $HOME_HOOKS_DRIFT hook(s) drifted. Run: $SCRIPT_DIR/sync.sh"
+        fi
+        echo ""
+
+        # Home-skills drift: ~/.claude/skills must be the single-source symlink
+        # → ~/.cursor/skills (only checked when ~/.cursor/skills exists).
+        echo "=== Checking drift: ~/.claude/skills vs $CURSOR_SKILLS ==="
+        check_home_skills_drift
+        if [ "$HOME_SKILLS_DRIFT" -eq 0 ]; then
+            echo "  ok: skills symlink healthy"
+        else
+            total_drift=$((total_drift + HOME_SKILLS_DRIFT))
+            echo "  skills symlink drifted. Run: $SCRIPT_DIR/sync.sh"
         fi
         echo ""
 
