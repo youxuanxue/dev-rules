@@ -45,6 +45,14 @@ else
     fail "twin fixture validation failed"
 fi
 
+section "xj-review loop_state selftest (circuit-breaker caps)"
+if python3 -m scripts.review.loop_state selftest > /tmp/dev-rules-review-loop.log 2>&1; then
+    ok "loop_state caps/reset asserts pass"
+else
+    cat /tmp/dev-rules-review-loop.log | sed 's/^/    /'
+    fail "loop_state selftest failed"
+fi
+
 echo ""
 if [ "$errors" -eq 0 ]; then
     echo "=== preflight: PASS ==="
