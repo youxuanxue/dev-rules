@@ -133,7 +133,7 @@ python3 dev-rules/scripts/review/loop_state.py init --key <owner/repo#PR> --risk
    ```bash
    python3 dev-rules/scripts/review/loop_state.py record --key <K> --kind finding --id R-NNN --outcome <pass|fail>
    ```
-6. **熔断**：以上任一 `round-start` / `record` 返回 `verdict=halt` 即暂停并明示 `reason=`，等用户介入。脚本已把 §115 与 §128 合并为单一 ≤3 的大循环预算（`fix → CI fail → fix` 整条链共享，见下节），模型不再无限循环、也不再手数——同一问题反复失败的 stop-the-line 由脚本机械保证。
+6. **熔断**：以上任一 `round-start` / `record` 返回 `verdict=halt` 即暂停并明示 `reason=`，等用户介入。脚本已把 §115 与 §128 合并为单一大循环预算（上限即脚本里的 `ROUND_CAP`，本文不复述具体数字以免与脚本漂移；`fix → CI fail → fix` 整条链共享，见下节），模型不再无限循环、也不再手数——同一问题反复失败的 stop-the-line 由脚本机械保证。
 
 修复期间用户给新指令永远 trumps 这个闭环。修复需要破坏性动作（删数据、动他人分支、`--force`、跳 hook）才向用户确认；普通 code/test/doc 改动直接做。
 
@@ -149,7 +149,7 @@ python3 dev-rules/scripts/review/loop_state.py init --key <owner/repo#PR> --risk
    ```
    - **瞬态故障**（runner 拉 PR merge ref 认证失败 / 镜像 503 / 网络 timeout 等，且代码侧未触达该 job 范围）：直接 `gh run rerun --failed`，继续监控，**不**登记为 fail。瞬态判定标准 = "同一 commit、同一 job 配置的其他平行 job 全过" + "故障描述指向 infra 而非代码"。
    - **真实失败**：登记 `--outcome fail`，把失败 job 当成新 finding，回到上一节修复闭环。
-4. **熔断**：`record --kind ci-job` 返回 `verdict=halt`（同一 job 连续失败到上限）即暂停并明示 `reason=`。§115 / §128 的预算已在脚本里合并为单一 ≤3 的大循环，由 `round-start` 统一推进——`fix → CI fail → fix` 整条链不会因分两节而各拿一份 3 轮额度。
+4. **熔断**：`record --kind ci-job` 返回 `verdict=halt`（同一 job 连续失败到上限）即暂停并明示 `reason=`。§115 / §128 的预算已在脚本里合并为单一大循环，由 `round-start` 统一推进——`fix → CI fail → fix` 整条链不会因分两节而各拿一份独立额度。
 5. **用户打断永远 trumps**：等 CI 期间用户改主意（"算了别等了" / "先去做其他事"）随时可以暂停或切走，与修复闭环节同步。
 6. **永远不调 `gh pr merge`**：合并属于用户授权动作，由 `~/.claude/settings.json` PreToolUse hook 机械兜底；规则层这里只做语义对齐。即使过去用户给过类似 PR 的合并授权，本次也必须等本次的明确指令。
 
