@@ -69,7 +69,7 @@ $ARGUMENTS
 - 测试覆盖：新增功能测试、bug 复现测试、负向场景、禁止存在性测试。
 - 架构一致性：分层依赖、公共契约同步、Web surface 对齐或 `no-web-impact` 说明。
 - 可维护性：非冗余注释、TODO/FIXME/HACK、跨模块影响。
-- 设计质量：Jobs 简洁、最小 API 面、聚焦边界、确定性自动化运营和运维、流程极简。
+- 设计质量与确定性自动化运营和运维：是否违背 Jobs 哲学或确定性自动化运营和运维原则——具体判据与必报清单见下方严格 merge-ready 的「Jobs 哲学违背」「确定性自动化运营和运维原则违背」两条（同一标准适用所有风险等级，只是 PR 强模式下必报），此处不再重述。
 
 仅在 `full_conformance` 中增加逐项符合性检查：代码 ↔ 设计文档 / API 契约 / 验收标准 / 技术选型 / 任务边界。每个 conformance finding 必须引用审批产物路径和章节。
 
@@ -102,17 +102,38 @@ findings:
 - **顺手发现的 out-of-scope 问题必须列入 finding**：审查过程中如果路过看到与本 PR 无关但确实存在的问题（命名混乱、注释陈旧、复制粘贴遗留、零调用函数、未使用的 import / 配置 / 路由），必须列出。理由：reviewer 已经在文件里了，让作者顺手修的成本远低于以后单独开 PR。**不允许"留待后续"作为搪塞**——除非该问题本身够大、值得独立 PR 评审，此时仍需在 finding 中明示"建议开独立 PR"并继续保持 `needs-fix`。
 - **Jobs 哲学违背必须列入 finding**：过度抽象（为想象中的未来需求建抽象层）、重复维护（同一信息存两处需手同步）、多此一举的开关 / 配置项 / feature flag、复制粘贴未消除、命名复杂度高于实际语义、UI 入口过多、文档与代码各讲一遍。
 - **确定性自动化运营和运维原则违背必须列入 finding**：流程依赖人记忆（"以后注意"、"下次记得"）、`|| true` 类静默吞错、本可机械化检查但写成 prose 规则、preflight / hook / 自动化缺位、提交一次发现的问题不固化为 check。
+  - **自指校准（被审对象本身是 prose-rules 载体时——`rules/*.mdc` / `commands/*.md` / `SKILL.md`，典型即 dev-rules 自身）**：「本可机械化却写成 prose」这条对此类仓库**假阳近乎必然，不是"低"**（prose 本就是这类文件的交付物）。发此 finding 前必须先区分：prose 编码的是**确定性计算**（计数 / 解析 / 查表 / 状态派生——`convention §75`）→ 真 finding；是**不可化约的判断或交付内容本身**（选题、架构权衡、风险里的爆炸半径判断——`convention §77` 过度机械化亦是反模式）→ **不报**。报之前必须指名具体哪一步可机械化、由什么脚本承载；指不出就降为提问，不直接发 finding。
+- **方向校准（发上面两类判断 finding 前先做）**：先把这条 finding 对齐 global `CLAUDE.md §1` 的确定性自动化运营和运维原则。**若一条 finding 会减少自动化 / 自主闭环 / 杠杆**（建议把自动步骤改回人工、拆掉闭环、加审批摩擦、为"更可控"砍掉 agent 自主性），在该原则下它几乎必然是反的——确定性自动化偏好更自主的闭合，不是更多人工（团队协同照旧，只是把可自动的交给 agent）。最坏的 finding 不是漏报，是反方向推 PR；方向拿不准时降级为提问，不要直接发成 finding。
 - **循环直到收敛是 agent 默认行为，不是把责任甩给用户**。发 `needs-fix` 后立即进入修复闭环（见下），不要止步于"输出 finding 等用户处理"。
 
 ### needs-fix → 修复闭环（默认 agent 主动推进）
 
-确定性自动化运营和运维：reviewer 工作不是发现问题，而是把 PR 推到可合并状态。`needs-fix` 触发以下默认动作，**不再等用户单独发出"请修复"指令**：
+确定性自动化运营和运维：reviewer 工作不是发现问题，而是把 PR 推到可合并状态。`needs-fix` 触发以下默认动作，**不再等用户单独发出"请修复"指令**。
 
-1. **逐 finding 修**：按 `critical → high → medium → low` 顺序处理；同级按 R-编号。`suggested_fix` 是参考，不是契约——以理解问题本质优先。
-2. **每轮必跑机械门禁**：复用 §0 定义的判定（`scripts/preflight.sh` 优先，无则项目等价物如 `verify-rules.sh`），加上项目 unit/integration 测试套件与相关 linter。脚本失败 → 修；同一脚本连续 2 轮失败 → 暂停告诉用户（全局 `CLAUDE.md` §2 stop-the-line）。
-3. **commit + push**：commit message 推荐 `fix(scope): address R-001..R-NNN — <summary>` 形态；遵循项目的 commit marker 规则（`no-web-impact` 等）。**禁止** `--amend` 已 push 的 commit、`git push --force`、跳 hook（紧急回滚由用户授权后单独走）。
-4. **自我 re-review**：重跑本命令 §0-§3，直到 `decision: merge-ready` 且零 medium+ finding，再进入下一节。
-5. **熔断**：同一 finding 连续 3 轮修不掉、或 review→fix 大循环超过 3 轮仍未收敛 → 暂停并明示根因，等用户介入。不要无限循环——同一问题反复失败是规则要求的 stop-the-line。
+**循环计数与熔断不由模型手数。** 四个阈值——大循环（§115/§128 合并预算）、同一脚本连续失败、同一 finding 未修掉、同一 CI job 连续失败——全部由确定性脚本 `loop_state.py` 派生（阈值是查表，正属「确定性自动化运营和运维」必须脚本化的类目）。模型只在决策点调用它并**逐字转发** `verdict=`；读到 `verdict=halt` 立即 stop-the-line（全局 `CLAUDE.md` §2）：把 `reason=` 明示给用户、停止循环，不要自己判断"第几轮"。脚本在 dev-rules submodule 内、自包含可直接按路径执行——下文统一写 `dev-rules/scripts/review/loop_state.py`（**审 dev-rules 仓库自身时去掉 `dev-rules/` 前缀**）；状态存 `/tmp`，按 `--key` 隔离。`--key` 用 PR 标识（如 `owner/repo#123`），进入闭环时初始化一次，并把 §1 判定的 `risk_level` 传进去（风险判定仍是模型判断，脚本只据此施加确定性后果——**高风险在 push 前 halt**，见步骤 4）：
+
+```bash
+python3 dev-rules/scripts/review/loop_state.py init --key <owner/repo#PR> --risk <low|normal|high>
+```
+
+1. **每轮开始登记大循环**：`python3 dev-rules/scripts/review/loop_state.py round-start --key <K>`，转发 `verdict`；halt 即停。
+2. **逐 finding 修**：按 `critical → high → medium → low` 顺序处理；同级按 R-编号。`suggested_fix` 是参考，不是契约——以理解问题本质优先。
+3. **每轮必跑机械门禁**：复用 §0 定义的判定（`scripts/preflight.sh` 优先，无则项目等价物如 `verify-rules.sh`），加上项目 unit/integration 测试套件与相关 linter。每跑一个门禁脚本登记一次结果，失败就修：
+   ```bash
+   python3 dev-rules/scripts/review/loop_state.py record --key <K> --kind script --id <preflight|pytest|ruff|...> --outcome <pass|fail>
+   ```
+4. **commit（可本地） → push 前过 gate**：commit message 推荐 `fix(scope): address R-001..R-NNN — <summary>` 形态；遵循项目的 commit marker 规则（`no-web-impact` 等）。本地 commit 便宜可逆、直接做；但 **push 是推进 PR 的对外动作，push 前必须过 gate**：
+   ```bash
+   python3 dev-rules/scripts/review/loop_state.py gate --key <K>
+   ```
+   - `verdict=continue`（低 / 常规风险）→ 正常 push。
+   - `verdict=halt`（高风险）→ **不要 push**：把已 commit 的 fix diff 呈给用户、等其明确批准再 push。高风险审批是确定性自动化运营和运维原则唯一保留的人类介入点（global `CLAUDE.md §1`、product-dev §180 审批锚点），agent 不替用户跨这道门。
+   **禁止** `--amend` 已 push 的 commit、`git push --force`、跳 hook（紧急回滚由用户授权后单独走）。
+5. **自我 re-review**：重跑本命令 §0-§3。每条仍未修掉的 finding 登记一次，直到 `decision: merge-ready` 且零 medium+ finding 再进入下一节：
+   ```bash
+   python3 dev-rules/scripts/review/loop_state.py record --key <K> --kind finding --id R-NNN --outcome <pass|fail>
+   ```
+6. **熔断**：以上任一 `round-start` / `record` 返回 `verdict=halt` 即暂停并明示 `reason=`，等用户介入。脚本已把 §115 与 §128 合并为单一大循环预算（上限即脚本里的 `ROUND_CAP`，本文不复述具体数字以免与脚本漂移；`fix → CI fail → fix` 整条链共享，见下节），模型不再无限循环、也不再手数——同一问题反复失败的 stop-the-line 由脚本机械保证。
 
 修复期间用户给新指令永远 trumps 这个闭环。修复需要破坏性动作（删数据、动他人分支、`--force`、跳 hook）才向用户确认；普通 code/test/doc 改动直接做。
 
@@ -122,10 +143,13 @@ findings:
 
 1. **盯 CI**：审查的是 GitHub PR 时，立即用 `Monitor` 工具跟踪 `gh pr checks <num>` 直到**所有非 `skipping`/`pending` 的 check** 进入终态。**不要** 仅靠 GitHub branch protection 的 required list——仓库可能未配，required 列表为空时就会漏盯整个 CI。**不要** sleep 轮询；用 per-occurrence 通知驱动（Monitor 工具的天然契约）。
 2. **CI 全绿** → 告诉用户："PR #N 已 merge-ready 且 CI 全绿，等你的合并指令"。
-3. **CI 失败** → 立即诊断，**不允许** "finding 已修就交付、CI 留给以后"：
-   - **瞬态故障**（runner 拉 PR merge ref 认证失败 / 镜像 503 / 网络 timeout 等，且代码侧未触达该 job 范围）：直接 `gh run rerun --failed`，继续监控。瞬态判定标准 = "同一 commit、同一 job 配置的其他平行 job 全过" + "故障描述指向 infra 而非代码"。
-   - **真实失败**：把失败 job 当成新 finding，回到上一节修复闭环。
-4. **熔断**：同一 job 连续 3 次失败仍未绿 → 暂停并明示。本节失败回流到上节修复闭环时**合并计数**：`fix → CI fail → fix` 整条链算一个大循环，整体不超过 3 轮。
+3. **CI 失败** → 立即诊断，**不允许** "finding 已修就交付、CI 留给以后"。每个进入终态的 CI job 登记一次（复用上节同一 `--key`，大循环预算自动合并，无需手数）：
+   ```bash
+   python3 dev-rules/scripts/review/loop_state.py record --key <K> --kind ci-job --id <job-name> --outcome <pass|fail>
+   ```
+   - **瞬态故障**（runner 拉 PR merge ref 认证失败 / 镜像 503 / 网络 timeout 等，且代码侧未触达该 job 范围）：直接 `gh run rerun --failed`，继续监控，**不**登记为 fail。瞬态判定标准 = "同一 commit、同一 job 配置的其他平行 job 全过" + "故障描述指向 infra 而非代码"。
+   - **真实失败**：登记 `--outcome fail`，把失败 job 当成新 finding，回到上一节修复闭环。
+4. **熔断**：`record --kind ci-job` 返回 `verdict=halt`（同一 job 连续失败到上限）即暂停并明示 `reason=`。§115 / §128 的预算已在脚本里合并为单一大循环，由 `round-start` 统一推进——`fix → CI fail → fix` 整条链不会因分两节而各拿一份独立额度。
 5. **用户打断永远 trumps**：等 CI 期间用户改主意（"算了别等了" / "先去做其他事"）随时可以暂停或切走，与修复闭环节同步。
 6. **永远不调 `gh pr merge`**：合并属于用户授权动作，由 `~/.claude/settings.json` PreToolUse hook 机械兜底；规则层这里只做语义对齐。即使过去用户给过类似 PR 的合并授权，本次也必须等本次的明确指令。
 
