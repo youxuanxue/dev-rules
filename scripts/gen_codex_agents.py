@@ -151,10 +151,21 @@ def render_block(project: pathlib.Path) -> str:
         if has_dev_rules_submodule(project)
         else "~/.codex/AGENTS.md (global constitution symlink)"
     )
+    # The generator path must be consumer-relative: in a project that vendors
+    # dev-rules as a submodule the script lives at dev-rules/scripts/..., not
+    # scripts/.... Emitting the bare scripts/ path makes the consumer's own
+    # script-ref existence checker (scripts/checks/script-ref-existence.py) flag
+    # a stale reference, because it resolves the literal against the project root.
+    # Mirror the constitution path's submodule-awareness above.
+    gen_script_ref = (
+        "dev-rules/scripts/gen_codex_agents.py"
+        if has_dev_rules_submodule(project)
+        else "scripts/gen_codex_agents.py"
+    )
 
     lines: list[str] = [BEGIN, ""]
     lines.append(
-        "本节由 `dev-rules/sync.sh` 经 `scripts/gen_codex_agents.py` 确定性生成；"
+        f"本节由 `dev-rules/sync.sh` 经 `{gen_script_ref}` 确定性生成；"
         "请勿手工编辑标记之间的内容（手写说明放到标记之外）。"
     )
     lines.append("")
@@ -285,6 +296,10 @@ def _self_test() -> int:
             failures.append("rule index not rendered")
         if "**demo**" not in block or "A demo skill" not in block:
             failures.append("skill index not rendered")
+        # generator self-reference path is consumer-relative. Without a vendored
+        # dev-rules submodule the bare scripts/ path is correct.
+        if "`scripts/gen_codex_agents.py`" not in block:
+            failures.append("non-submodule gen path not rendered")
 
         # 2. compose into empty AGENTS.md, then re-compose → idempotent.
         once = compose("", block)
@@ -319,6 +334,21 @@ def _self_test() -> int:
         else:
             if out.count(BEGIN) != 1:
                 failures.append("backref regen produced wrong marker count")
+
+    # 5. when dev-rules is vendored as a submodule, the generator self-reference
+    # must carry the dev-rules/ prefix so the consumer's script-ref existence
+    # checker resolves it (separate temp dir to avoid mutating the project above).
+    with tempfile.TemporaryDirectory() as tmp2:
+        proj2 = pathlib.Path(tmp2)
+        (proj2 / ".cursor" / "rules").mkdir(parents=True)
+        (proj2 / ".cursor" / "skills").mkdir(parents=True)
+        (proj2 / "dev-rules" / "global").mkdir(parents=True)
+        (proj2 / "dev-rules" / "global" / "CLAUDE.md").write_text("c\n", encoding="utf-8")
+        sub_block = render_block(proj2)
+        if "`dev-rules/scripts/gen_codex_agents.py`" not in sub_block:
+            failures.append("submodule gen path missing dev-rules/ prefix")
+        if "经 `scripts/gen_codex_agents.py`" in sub_block:
+            failures.append("submodule block still emits bare scripts/ gen path")
 
     if failures:
         return cli_fail(PREFIX, "self-test failed", *failures)
