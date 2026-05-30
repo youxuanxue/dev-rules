@@ -20,7 +20,7 @@
 
 ## Agent Skills
 
-`.cursor/skills` 是指向 `$HOME/Codes/agent-skills` 的 symlink，作为 Skills 的编辑与提交入口；不要在 `.claude/skills` 创建真实副本。
+`.cursor/skills` 是指向 `$HOME/Codes/agent-skills` 的 symlink，作为 Skills 的编辑与提交入口；不要在 `.claude/skills` 创建真实副本。Cursor、Claude Code、Codex 三端同源消费：细则与 Codex 消费端（`~/.codex/AGENTS.md`、`~/.codex/skills`、项目 `AGENTS.md` 受管块）见 `rules/dev-rules-convention.mdc`。
 
 ## 关键入口
 

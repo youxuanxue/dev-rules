@@ -185,12 +185,12 @@ else
     fail "rule carrier partition marker missing from dev-rules-convention.mdc or README"
 fi
 
-# ── check_*.py self-tests ─────────────────────────────────────────────
-# Mechanical assurance: check scripts that ship a --self-test mode must
+# ── check_*.py / gen_*.py self-tests ──────────────────────────────────
+# Mechanical assurance: check/gen scripts that ship a --self-test mode must
 # pass their own assertions. Prevents the "check 自己没被检查" anti-pattern.
-section "check_*.py self-tests"
+section "check_*.py / gen_*.py self-tests"
 SECTION_TESTED=0
-for script in "$SCRIPT_DIR"/scripts/check_*.py; do
+for script in "$SCRIPT_DIR"/scripts/check_*.py "$SCRIPT_DIR"/scripts/gen_*.py; do
     [ -f "$script" ] || continue
     if "$script" --help 2>/dev/null | grep -q -- "--self-test"; then
         SECTION_TESTED=1
