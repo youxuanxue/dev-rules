@@ -154,8 +154,9 @@ def render_block(project: pathlib.Path) -> str:
 
     lines: list[str] = [BEGIN, ""]
     lines.append(
-        "本节由 `dev-rules/sync.sh` 经 `scripts/gen_codex_agents.py` 确定性生成；"
-        "请勿手工编辑标记之间的内容（手写说明放到标记之外）。"
+        "本节由 `dev-rules/sync.sh` 确定性生成（generator: "
+        "`dev-rules/scripts/gen_codex_agents.py`）；请勿手工编辑标记之间的内容"
+        "（手写说明放到标记之外）。"
     )
     lines.append("")
     lines.append("## 工作宪法（单一事实来源）")
@@ -285,6 +286,14 @@ def _self_test() -> int:
             failures.append("rule index not rendered")
         if "**demo**" not in block or "A demo skill" not in block:
             failures.append("skill index not rendered")
+        # The block's OWN script references must carry the `dev-rules/` prefix —
+        # in a consumer repo the generator lives at dev-rules/scripts/, NOT
+        # scripts/. A bare `scripts/gen_codex_agents.py` is a stale ref there
+        # (some consumers gate on script-ref existence and will fail).
+        if "`scripts/gen_codex_agents.py`" in block:
+            failures.append("header cites bare scripts/ path (stale in consumers)")
+        if "`dev-rules/scripts/gen_codex_agents.py`" not in block:
+            failures.append("header missing dev-rules/-prefixed generator path")
 
         # 2. compose into empty AGENTS.md, then re-compose → idempotent.
         once = compose("", block)
