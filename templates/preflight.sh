@@ -372,6 +372,39 @@ else
     skip "dev-rules/scripts/check_skill_manifest.py not present"
 fi
 
+# ---- 检查 17b: Codex AGENTS.md 受管块不漂移 ----（对应 gen_codex_agents.py）
+# Codex 经 <repo>/AGENTS.md 的 dev-rules 受管块消费宪法/规则/技能索引；该块由
+# dev-rules/sync.sh 确定性生成，禁止手工编辑。仅当项目已落地该块时才校验。
+section "codex AGENTS.md managed block"
+if [ -f dev-rules/scripts/gen_codex_agents.py ] && [ -f AGENTS.md ] && \
+   grep -q 'dev-rules:codex BEGIN' AGENTS.md 2>/dev/null; then
+    if "$PYTHON_BIN" dev-rules/scripts/gen_codex_agents.py --project "$REPO_ROOT" --check > /tmp/preflight-codex-agents.log 2>&1; then
+        ok "AGENTS.md dev-rules block in sync"
+    else
+        cat /tmp/preflight-codex-agents.log | sed 's/^/    /'
+        fail "AGENTS.md dev-rules block drifted (run dev-rules/sync.sh --project \"$REPO_ROOT\")"
+    fi
+else
+    skip "no Codex AGENTS.md managed block (run dev-rules/sync.sh --project to create)"
+fi
+
+# ---- 检查 17c: 技能描述不超 Codex 加载上限 ----（对应 check_codex_skill_limits.py）
+# Codex 0.122 拒绝 description > 1024 字符的 SKILL.md（静默丢弃该技能）；Cursor /
+# Claude Code 无此限，故为 Codex 复用而硬化。两种技能仓库布局都覆盖：消费项目放
+# .cursor/skills/，技能源仓库（agent-skills）把技能放在仓库根 <name>/SKILL.md。
+section "codex skill description length"
+if [ -f dev-rules/scripts/check_codex_skill_limits.py ] && \
+   { [ -d .cursor/skills ] || ls */SKILL.md >/dev/null 2>&1; }; then
+    if "$PYTHON_BIN" dev-rules/scripts/check_codex_skill_limits.py --root "$REPO_ROOT" > /tmp/preflight-codex-skill.log 2>&1; then
+        head -1 /tmp/preflight-codex-skill.log | sed 's/^/    /'
+    else
+        cat /tmp/preflight-codex-skill.log | sed 's/^/    /'
+        fail "skill description(s) exceed Codex 1024-char limit — Codex will silently drop them"
+    fi
+else
+    skip "no skills found (.cursor/skills or <name>/SKILL.md) to check against Codex limit"
+fi
+
 # ---- 检查 18a: 删除文件不得留下打包元数据 / frontmatter 悬空引用 ----
 # preflight 不构建 wheel，hatchling 等打包后端会在 CI 才报错；硬化这条软约束。
 section "deleted files not still referenced (config/frontmatter)"

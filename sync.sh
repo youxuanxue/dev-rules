@@ -73,6 +73,19 @@ CLAUDE_HOOKS="$HOME/.claude/hooks"
 # a copy forks the truth, which the convention forbids).
 CURSOR_SKILLS="$HOME/.cursor/skills"
 CLAUDE_SKILLS="$HOME/.claude/skills"
+
+# Codex CLI/app consumer. Codex reads ~/.codex/AGENTS.md (global instructions),
+# scans ~/.codex/skills/<name>/SKILL.md (follows symlinks), and keeps its OWN
+# command-approval policy in ~/.codex/rules/*.rules (Starlark) — which is NOT a
+# behavioral-rules dir, so we never write there. Behavioral rules + the
+# constitution reach Codex via AGENTS.md (home symlink + per-project block).
+CODEX_HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
+CODEX_AGENTS_MD="$CODEX_HOME_DIR/AGENTS.md"
+CODEX_SKILLS="$CODEX_HOME_DIR/skills"
+# Skill dir entries we must never treat as user skills (Codex-managed / noise).
+CODEX_SKILL_RESERVED=".system codex-primary-runtime .DS_Store"
+GEN_CODEX_AGENTS="$SCRIPT_DIR/scripts/gen_codex_agents.py"
+
 LAUNCH_AGENT_LABEL="local.dev-rules.sync"
 LAUNCH_AGENT_PLIST="$HOME/Library/LaunchAgents/${LAUNCH_AGENT_LABEL}.plist"
 
@@ -201,6 +214,39 @@ link_skills_dir() {
     echo "  linked: $label → $target"
 }
 
+# Additively symlink each individual skill from a source skills dir into a
+# destination skills dir (used for Codex's ~/.codex/skills, which also holds
+# Codex-managed entries we must NOT touch). Unlike link_skills_dir (whole-dir
+# symlink), this links one <name> at a time so reserved/native entries coexist.
+# Only subdirs containing a SKILL.md are linked. No-op when src is absent.
+link_each_skill() {
+    local src_dir="$1" dst_dir="$2" label="$3"
+    [ -d "$src_dir" ] || return 0
+    mkdir -p "$dst_dir"
+    local entry name link reserved skip
+    for entry in "$src_dir"/*; do
+        [ -d "$entry" ] || continue
+        [ -f "$entry/SKILL.md" ] || continue
+        name="$(basename "$entry")"
+        skip=0
+        for reserved in $CODEX_SKILL_RESERVED; do
+            [ "$name" = "$reserved" ] && skip=1 && break
+        done
+        [ "$skip" -eq 1 ] && continue
+        link="$dst_dir/$name"
+        if [ -L "$link" ] && [ "$(readlink "$link")" = "$entry" ]; then
+            echo "  ok: $label/$name"
+        elif [ -e "$link" ] && [ ! -L "$link" ]; then
+            mv "$link" "$link.bak.$(date +%Y%m%d%H%M%S)"
+            ln -sfn "$entry" "$link"
+            echo "  relinked (backed up real dir): $label/$name"
+        else
+            ln -sfn "$entry" "$link"
+            echo "  linked: $label/$name → $entry"
+        fi
+    done
+}
+
 sync_to_home() {
     if [ ! -d "$HOME_CANONICAL" ]; then
         echo "  WARN: $HOME_CANONICAL not found — skipping home sync"
@@ -299,6 +345,54 @@ sync_to_home() {
     for persona in "$HOME_PERSONAS_DIR"/*.md; do
         [ -f "$persona" ] && echo "  ok: $(basename "$persona")"
     done
+
+    sync_to_codex_home
+}
+
+# Codex CLI/app consumer (~/.codex). Two additive links, neither of which touches
+# Codex-managed content (.system skills, codex-primary-runtime, default.rules):
+#   1. ~/.codex/AGENTS.md  → global/CLAUDE.md  (same constitution as Claude/Cursor)
+#   2. ~/.codex/skills/<name> → ~/.cursor/skills/<name>  (each agent-skill)
+# Behavioral rules are NOT symlinked into ~/.codex/rules (that's Codex's command
+# policy); they reach Codex through AGENTS.md (the constitution references them,
+# and each project's AGENTS.md block indexes them).
+sync_to_codex_home() {
+    if [ ! -d "$CODEX_HOME_DIR" ]; then
+        echo ""
+        echo "=== ~/.codex/ (Codex consumer) ==="
+        echo "  (no $CODEX_HOME_DIR — Codex not installed, skipping)"
+        return 0
+    fi
+
+    echo ""
+    echo "=== Syncing to ~/.codex/AGENTS.md (symlink → $HOME_GLOBAL_DIR/CLAUDE.md) ==="
+    local global_src="$HOME_GLOBAL_DIR/CLAUDE.md"
+    if [ ! -f "$global_src" ]; then
+        echo "  WARN: $global_src not found, skipping"
+    elif [ -L "$CODEX_AGENTS_MD" ] && [ "$(readlink "$CODEX_AGENTS_MD")" = "$global_src" ]; then
+        echo "  ok: AGENTS.md → $global_src"
+    else
+        if [ -e "$CODEX_AGENTS_MD" ] && [ ! -L "$CODEX_AGENTS_MD" ]; then
+            # Codex ships a 0-byte AGENTS.md; back up anything real before linking.
+            if [ -s "$CODEX_AGENTS_MD" ]; then
+                local backup="$CODEX_AGENTS_MD.bak.$(date +%Y%m%d%H%M%S)"
+                mv "$CODEX_AGENTS_MD" "$backup"
+                echo "  backup: $CODEX_AGENTS_MD → $backup"
+            else
+                rm -f "$CODEX_AGENTS_MD"
+            fi
+        fi
+        ln -sfn "$global_src" "$CODEX_AGENTS_MD"
+        echo "  linked: AGENTS.md → $global_src"
+    fi
+
+    echo ""
+    echo "=== Syncing to ~/.codex/skills/ (per-skill symlinks → $CURSOR_SKILLS) ==="
+    if [ ! -d "$CURSOR_SKILLS" ]; then
+        echo "  (no ~/.cursor/skills, skipping — nothing for Codex to load)"
+    else
+        link_each_skill "$CURSOR_SKILLS" "$CODEX_SKILLS" "codex-skills"
+    fi
 }
 
 sync_to_project() {
@@ -345,6 +439,25 @@ sync_to_project() {
         mkdir -p "$project_dir/.claude"
         link_skills_dir "$project_dir/.claude/skills" "../.cursor/skills" \
             "$project_dir/.cursor/skills" "$(basename "$project_dir")/.claude/skills"
+    fi
+
+    # Codex consumer (project layer). Codex reads <repo>/AGENTS.md as project
+    # instructions; it ignores .cursor/rules/*.mdc and has no behavioral-rules
+    # dir, so dev-rules capabilities are injected as a generated managed block
+    # in AGENTS.md (constitution + rule index + skill index + commands).
+    if [ -f "$GEN_CODEX_AGENTS" ]; then
+        if python3 "$GEN_CODEX_AGENTS" --project "$project_dir"; then
+            :
+        else
+            echo "  WARN: gen_codex_agents.py failed for $(basename "$project_dir")"
+        fi
+    fi
+    # Codex also reads project-level .codex/skills/ — mirror the .claude/skills
+    # pattern so Codex loads the same skills natively. No-op without skills.
+    if [ -d "$project_dir/.cursor/skills" ]; then
+        mkdir -p "$project_dir/.codex"
+        link_skills_dir "$project_dir/.codex/skills" "../.cursor/skills" \
+            "$project_dir/.cursor/skills" "$(basename "$project_dir")/.codex/skills"
     fi
 }
 
@@ -507,6 +620,23 @@ check_project_drift() {
         fi
     done
 
+    # Codex AGENTS.md managed block drift — OPT-IN: only check a project that
+    # has already been onboarded to Codex (its AGENTS.md carries the block).
+    # Projects not yet synced for Codex are not false-flagged. Runs the
+    # project's OWN dev-rules generator (locked to its submodule SHA) so the
+    # check matches what that project would regenerate; falls back to this copy.
+    if [ -f "$project_dir/AGENTS.md" ] && \
+       grep -q 'dev-rules:codex BEGIN' "$project_dir/AGENTS.md" 2>/dev/null; then
+        local gen="$project_dir/dev-rules/scripts/gen_codex_agents.py"
+        [ -f "$gen" ] || gen="$GEN_CODEX_AGENTS"
+        if [ -f "$gen" ]; then
+            if ! python3 "$gen" --project "$project_dir" --check > /tmp/dev-rules-codex-block.log 2>&1; then
+                sed 's/^/  /' /tmp/dev-rules-codex-block.log
+                drift=1
+            fi
+        fi
+    fi
+
     return $drift
 }
 
@@ -567,6 +697,55 @@ check_home_skills_drift() {
     fi
 }
 
+# Check the Codex consumer links in ~/.codex. Only relevant when Codex is
+# installed (~/.codex exists). Each problem → +1 to HOME_CODEX_DRIFT:
+#   - AGENTS.md not a symlink → global/CLAUDE.md (missing / real file / wrong target)
+#   - a ~/.cursor/skills/<name> with no matching ~/.codex/skills/<name> symlink
+# Codex-managed entries (.system, codex-primary-runtime, default.rules) are never
+# inspected — this only enforces dev-rules' own additive links.
+check_home_codex_drift() {
+    HOME_CODEX_DRIFT=0
+    [ -d "$CODEX_HOME_DIR" ] || return 0
+
+    local global_src="$HOME_GLOBAL_DIR/CLAUDE.md"
+    if [ ! -f "$global_src" ]; then
+        :
+    elif [ ! -L "$CODEX_AGENTS_MD" ]; then
+        if [ -e "$CODEX_AGENTS_MD" ] && [ -s "$CODEX_AGENTS_MD" ]; then
+            echo "  ✗ REAL FILE: ~/.codex/AGENTS.md (should be symlink → $global_src)"
+        else
+            echo "  ✗ MISSING: ~/.codex/AGENTS.md (Codex can't see the constitution)"
+        fi
+        HOME_CODEX_DRIFT=$((HOME_CODEX_DRIFT + 1))
+    elif [ "$(readlink "$CODEX_AGENTS_MD")" != "$global_src" ]; then
+        echo "  ✗ WRONG TARGET: ~/.codex/AGENTS.md → $(readlink "$CODEX_AGENTS_MD") (expected → $global_src)"
+        HOME_CODEX_DRIFT=$((HOME_CODEX_DRIFT + 1))
+    fi
+
+    [ -d "$CURSOR_SKILLS" ] || return 0
+    local entry name link reserved skip
+    for entry in "$CURSOR_SKILLS"/*; do
+        [ -d "$entry" ] || continue
+        [ -f "$entry/SKILL.md" ] || continue
+        name="$(basename "$entry")"
+        skip=0
+        for reserved in $CODEX_SKILL_RESERVED; do
+            [ "$name" = "$reserved" ] && skip=1 && break
+        done
+        [ "$skip" -eq 1 ] && continue
+        link="$CODEX_SKILLS/$name"
+        if [ -L "$link" ] && [ "$(readlink "$link")" = "$entry" ]; then
+            :
+        elif [ ! -e "$link" ] && [ ! -L "$link" ]; then
+            echo "  ✗ MISSING: ~/.codex/skills/$name (Codex won't load this skill)"
+            HOME_CODEX_DRIFT=$((HOME_CODEX_DRIFT + 1))
+        else
+            echo "  ✗ WRONG: ~/.codex/skills/$name (not a symlink → $entry)"
+            HOME_CODEX_DRIFT=$((HOME_CODEX_DRIFT + 1))
+        fi
+    done
+}
+
 check_drift() {
     # Two distinct invocation contexts:
     #   1. SCRIPT_DIR == HOME_CANONICAL → we are the canonical mirror at ~/Codes/dev-rules/.
@@ -614,6 +793,18 @@ check_drift() {
         else
             total_drift=$((total_drift + HOME_SKILLS_DRIFT))
             echo "  skills symlink drifted. Run: $SCRIPT_DIR/sync.sh"
+        fi
+        echo ""
+
+        # Codex consumer drift: ~/.codex/AGENTS.md + per-skill symlinks
+        # (only when Codex is installed; Codex-managed entries untouched).
+        echo "=== Checking drift: ~/.codex/ (Codex consumer) ==="
+        check_home_codex_drift
+        if [ "$HOME_CODEX_DRIFT" -eq 0 ]; then
+            echo "  ok: Codex AGENTS.md + skills links healthy (or Codex not installed)"
+        else
+            total_drift=$((total_drift + HOME_CODEX_DRIFT))
+            echo "  Codex links drifted. Run: $SCRIPT_DIR/sync.sh"
         fi
         echo ""
 
@@ -822,6 +1013,28 @@ print_status() {
         [ -f "$persona" ] && echo "  ✓ $(basename "$persona")"
     done
     [ "$persona_any" -eq 0 ] && echo "  ✗ missing"
+    echo ""
+    echo "Codex consumer (~/.codex, must mirror constitution + skills):"
+    if [ ! -d "$CODEX_HOME_DIR" ]; then
+        echo "  ⊘ not installed ($CODEX_HOME_DIR absent)"
+    else
+        if [ -L "$CODEX_AGENTS_MD" ] && [ "$(readlink "$CODEX_AGENTS_MD")" = "$HOME_GLOBAL_DIR/CLAUDE.md" ]; then
+            echo "  ✓ AGENTS.md → $HOME_GLOBAL_DIR/CLAUDE.md"
+        elif [ -L "$CODEX_AGENTS_MD" ]; then
+            echo "  ⚠ AGENTS.md → $(readlink "$CODEX_AGENTS_MD") (not the constitution)"
+        elif [ -e "$CODEX_AGENTS_MD" ]; then
+            echo "  ⚠ AGENTS.md is a real file (run sync.sh to link)"
+        else
+            echo "  ✗ AGENTS.md missing (run sync.sh)"
+        fi
+        local codex_linked=0
+        if [ -d "$CODEX_SKILLS" ]; then
+            for s in "$CODEX_SKILLS"/*; do
+                [ -L "$s" ] && codex_linked=$((codex_linked + 1))
+            done
+        fi
+        echo "  skills: $codex_linked dev-rules symlink(s) in ~/.codex/skills (Codex-managed entries untouched)"
+    fi
     echo ""
     echo "LaunchAgent ($LAUNCH_AGENT_LABEL):"
     if [ -f "$LAUNCH_AGENT_PLIST" ]; then
