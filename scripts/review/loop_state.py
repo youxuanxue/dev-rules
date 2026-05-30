@@ -1,6 +1,7 @@
 """Circuit-breaker state for the /xj-review fix/CI loop.
 
-`commands/xj-review.md` runs an autonomous review → fix → push → watch-CI
+The `xj-review` skill (`agent-skills/xj-review/SKILL.md`) runs an autonomous
+review → fix → push → watch-CI
 loop. Its stop-the-line safety used to be four hand-counted thresholds the
 model had to remember across a long loop (and across context summarization):
 
