@@ -10,7 +10,7 @@ idempotent managed block inside AGENTS.md that POINTS at:
   - the constitution (dev-rules/global/CLAUDE.md),
   - the behavioral rule set (.cursor/rules/*.mdc — name + one-line each),
   - the available skills (.cursor/skills/*/SKILL.md — name + description),
-  - the slash commands (/twin, /xj-review — Codex can run their scripts).
+  - the /twin command (Claude-Code-only) and the cross-tool xj-review skill.
 
 Everything inside the block is derived mechanically from on-disk artifacts —
 no model inference — per rules/dev-rules-convention.mdc «skill/command 确定性基线».
@@ -197,11 +197,11 @@ def render_block(project: pathlib.Path) -> str:
     lines.append(
         "- `/twin <workspace>|status [workspace]|respond <text>` — 运行 xuejiao persona "
         "supervisor 驱动 worker；底层入口 `python3 -m scripts.twin`（见 "
-        "`dev-rules/commands/twin.md`）。"
+        "`dev-rules/commands/twin.md`）。Claude-Code-only。"
     )
     lines.append(
-        "- `/xj-review [范围]` — 项目代码审查；机械门禁先跑 `preflight.sh`，"
-        "契约见 `dev-rules/commands/xj-review.md`。"
+        "- 代码审查走三端通用 skill `xj-review`（上面技能索引里）：先跑 `preflight.sh` 取 "
+        "ground-truth，再按风险分级审；Codex 里描述\"review 这个 diff/PR\"即触发。"
     )
     lines.append("")
     lines.append(END)

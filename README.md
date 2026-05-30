@@ -15,12 +15,15 @@
 
 | 命令 | 用法 | 作用 |
 | --- | --- | --- |
-| `commands/xj-review.md` | `/user:xj-review [范围]` | 默认对话内精简审查；按需写 PR comment / 严格记录 |
 | `commands/twin.md` | `/twin "<goal>"\|<workspace>\|status [workspace]\|respond <text>` | 运行 xuejiao persona supervisor，驱动 Claude Code worker 完成目标 |
+
+> `/twin` 是 Claude-Code-only 命令（驱动 `claude` CLI worker）。代码审查不再是命令——已重写为三端通用 skill `xj-review`（见下）。
 
 ## Agent Skills
 
 `.cursor/skills` 是指向 `$HOME/Codes/agent-skills` 的 symlink，作为 Skills 的编辑与提交入口；不要在 `.claude/skills` 创建真实副本。Cursor、Claude Code、Codex 三端同源消费：细则与 Codex 消费端（`~/.codex/AGENTS.md`、`~/.codex/skills`、项目 `AGENTS.md` 受管块）见 `rules/dev-rules-convention.mdc`。
+
+代码审查工作流是 `agent-skills/xj-review/SKILL.md`（三端可调用：Claude Code/Cursor 用 `/xj-review`，Codex 用 `$xj-review` 或描述触发）；输出契约 `schemas/review.schema.json`，机械门禁与熔断复用 `scripts/preflight.sh` / `scripts/review/loop_state.py`。
 
 ## 关键入口
 

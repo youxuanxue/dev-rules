@@ -2,7 +2,7 @@
 """Validate `.reviews/*.json` records against schemas/review.schema.json.
 
 Only triggers when the project actually persists review records (default off
-per commands/xj-review.md). Self-skips otherwise.
+per the xj-review skill). Self-skips otherwise.
 """
 from __future__ import annotations
 

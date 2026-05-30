@@ -52,7 +52,7 @@ SENTINEL="$SENTINEL_DIR/${session_id}-${skill_name}"
 # Locate user-modifiable skill source. Search order:
 #   1. project-local cursor skill
 #   2. user-global cursor skill
-#   3. dev-rules slash command (twin / xj-review live here)
+#   3. dev-rules slash command (twin lives here; xj-review is now a .cursor/skill)
 #   4. project-local Claude Code command
 DEV_RULES_HOME="${DEV_RULES_HOME:-$HOME/Codes/dev-rules}"
 SKILL_PATH=""
