@@ -390,9 +390,11 @@ fi
 
 # ---- 检查 17c: 技能描述不超 Codex 加载上限 ----（对应 check_codex_skill_limits.py）
 # Codex 0.122 拒绝 description > 1024 字符的 SKILL.md（静默丢弃该技能）；Cursor /
-# Claude Code 无此限，故为 Codex 复用而硬化。仅当项目有 .cursor/skills 时触发。
+# Claude Code 无此限，故为 Codex 复用而硬化。两种技能仓库布局都覆盖：消费项目放
+# .cursor/skills/，技能源仓库（agent-skills）把技能放在仓库根 <name>/SKILL.md。
 section "codex skill description length"
-if [ -f dev-rules/scripts/check_codex_skill_limits.py ] && [ -d .cursor/skills ]; then
+if [ -f dev-rules/scripts/check_codex_skill_limits.py ] && \
+   { [ -d .cursor/skills ] || ls */SKILL.md >/dev/null 2>&1; }; then
     if "$PYTHON_BIN" dev-rules/scripts/check_codex_skill_limits.py --root "$REPO_ROOT" > /tmp/preflight-codex-skill.log 2>&1; then
         head -1 /tmp/preflight-codex-skill.log | sed 's/^/    /'
     else
@@ -400,7 +402,7 @@ if [ -f dev-rules/scripts/check_codex_skill_limits.py ] && [ -d .cursor/skills ]
         fail "skill description(s) exceed Codex 1024-char limit — Codex will silently drop them"
     fi
 else
-    skip ".cursor/skills not present (no skills to check against Codex limit)"
+    skip "no skills found (.cursor/skills or <name>/SKILL.md) to check against Codex limit"
 fi
 
 # ---- 检查 18a: 删除文件不得留下打包元数据 / frontmatter 悬空引用 ----

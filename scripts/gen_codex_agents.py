@@ -215,7 +215,10 @@ def compose(existing: str, block: str) -> str:
     - Otherwise appends after the user's content, separated by one blank line.
     """
     if BLOCK_RE.search(existing):
-        replaced = BLOCK_RE.sub("\n\n" + block + "\n", existing)
+        # Function replacement so `block` is inserted LITERALLY — a skill/rule
+        # description may contain backslash sequences (\1, \g<0>, C:\path) that
+        # re.sub would otherwise interpret as group references and crash.
+        replaced = BLOCK_RE.sub(lambda _m: "\n\n" + block + "\n", existing)
         return replaced.lstrip("\n").rstrip() + "\n"
     body = existing.rstrip()
     if body:
@@ -299,6 +302,23 @@ def _self_test() -> int:
         recomposed = compose(composed, render_block(proj))
         if "Hand-written note." not in recomposed or recomposed.count(BEGIN) != 1:
             failures.append("user prose not stable across regen")
+
+        # 4. a skill description containing regex backref / backslash chars must
+        # not crash the replace path (re.sub repl is literal via the lambda).
+        (proj / ".cursor" / "skills" / "tricky").mkdir(parents=True)
+        (proj / ".cursor" / "skills" / "tricky" / "SKILL.md").write_text(
+            "---\nname: tricky\ndescription: uses \\1 and \\g<0> and path C:\\tmp\n---\nbody\n",
+            encoding="utf-8",
+        )
+        tricky_block = render_block(proj)
+        existing_block = BEGIN + "\nstale\n" + END
+        try:
+            out = compose(existing_block, tricky_block)
+        except Exception as exc:  # noqa: BLE001 - any re error is a failure here
+            failures.append(f"backref description crashed compose: {exc!r}")
+        else:
+            if out.count(BEGIN) != 1:
+                failures.append("backref regen produced wrong marker count")
 
     if failures:
         return cli_fail(PREFIX, "self-test failed", *failures)

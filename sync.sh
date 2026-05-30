@@ -349,7 +349,7 @@ sync_to_home() {
     sync_to_codex_home
 }
 
-# Codex CLI/app consumer (~/.codex). Three additive links, none of which touch
+# Codex CLI/app consumer (~/.codex). Two additive links, neither of which touches
 # Codex-managed content (.system skills, codex-primary-runtime, default.rules):
 #   1. ~/.codex/AGENTS.md  → global/CLAUDE.md  (same constitution as Claude/Cursor)
 #   2. ~/.codex/skills/<name> → ~/.cursor/skills/<name>  (each agent-skill)

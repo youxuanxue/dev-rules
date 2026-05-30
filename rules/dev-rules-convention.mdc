@@ -29,7 +29,7 @@ alwaysApply: true
 ~/.codex/skills/<name>→ ~/.cursor/skills/<name>（逐个叠加，不动 Codex 自带 .system/default.rules）
 ```
 
-Codex 消费端要点：Codex 不读 `.cursor/rules/*.mdc`，行为规则经 `AGENTS.md` 的 dev-rules 受管块**指针化**到达（宪法 + 规则索引 + 技能索引 + 命令）；`~/.codex/rules/` 是 Codex 自己的命令审批策略（Starlark `.rules`），**dev-rules 永不写入**；Codex 0.122 无 `~/.codex/prompts/`，`/twin`、`/xj-review` 在受管块内点名引用。
+Codex 消费端要点：Codex 不读 `.cursor/rules/*.mdc`，行为规则经 `AGENTS.md` 的 dev-rules 受管块**指针化**到达（宪法 + 规则索引 + 技能索引 + 命令）；`~/.codex/rules/` 是 Codex 自己的命令审批策略（Starlark `.rules`），**dev-rules 永不写入**；截至 Codex cli 0.122 无 `~/.codex/prompts/`，`/twin`、`/xj-review` 在受管块内点名引用（未来若 Codex 增加 prompts 目录再考虑 symlink commands）。
 
 ## 新项目接入
 
