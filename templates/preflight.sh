@@ -75,10 +75,10 @@ git_sub() {
 #   提交的 PR 都会卡在 preflight 而无法演进。Squash-merge 时人类 reviewer 会把
 #   PR title 重写成业务化文案（fix(...)/feat(...)），最终落入 main 的 commit
 #   message 仍保持业务前缀。
-section "branch naming (prototype/|feature/|fix/|chore/|docs/|merge/|cursor/|main|master)"
+section "branch naming (prototype/|feature/|feat/|fix/|chore/|docs/|merge/|cursor/|main|master)"
 branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
 case "$branch" in
-    main|master|prototype/*|feature/*|fix/*|chore/*|docs/*|merge/*|cursor/*|HEAD)
+    main|master|prototype/*|feature/*|feat/*|fix/*|chore/*|docs/*|merge/*|cursor/*|HEAD)
         ok "branch '$branch'"
         ;;
     *)
