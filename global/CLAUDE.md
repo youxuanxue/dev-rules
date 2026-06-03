@@ -17,6 +17,7 @@
 - 默认研发路径、风险分级、PR / commit 形状与完成自检以 `rules/product-dev.mdc` 为准；本文件不复制第二套流程。
 - 规则来源、同步、hook、项目接入以 `rules/dev-rules-convention.mdc` 为准；禁止直接编辑 sync 产物。
 - 每次准备提交或汇报前执行项目根目录 `scripts/preflight.sh`；失败必须修复后重跑，禁止 `--no-verify` 绕过（紧急回滚除外）。
+- 端到端测试（e2e）一律经真实 UI、用 Playwright 驱动；后端 / API-only / 直调 handler 不算 e2e。细则与 soft→hard 守卫随 `rules/test-philosophy.mdc` §3「e2e 必须经真实 UI」（无 UI 工件不强制 e2e）。
 - 破坏性 shell 命令（`rm -rf`、`git reset --hard`、`git clean -fd`、force push、`drop`/`truncate`、`kill -9`、降权 `chmod` 等）的拦截以 Claude Code permissions / `settings.json` 为单一约束面；规则层不再叠加软提醒。permissions 未禁掉默认放行属于安装期 debt，应记入项目 `docs/preflight-debt.md`。
 - 高风险、范围不清、预算较大或会长时间占用资源的任务，先输出执行计划并等待审批；默认路径下不为“多步骤”本身额外增加审批。
 - 遇到需要业务决策的问题，记录并暂停，不猜测；同一问题连续 3 次失败必须暂停分析，等待人工介入。
