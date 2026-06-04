@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+#
+# claude-doubao — 用 Claude Code 的壳跑字节豆包模型（火山方舟 Anthropic 兼容端点）。
+#
+# 机制：settings.json 的 env 块会覆盖 shell export（实测），所以端点/token/模型
+# 必须走 --settings 注入，禁止 export —— 旧版本用 export，在 settings.json 增加
+# env 块后 BASE_URL/TOKEN 被覆盖回默认中继、只剩 ANTHROPIC_MODEL 幸存，请求
+# 不存在的模型而静默挂死。
+#
+# settings 文件（含 secret，仅本机，不入库）：~/.claude/doubao-settings.json
+#   {
+#     "env": {
+#       "ANTHROPIC_AUTH_TOKEN": "<volcengine ark api key>",
+#       "ANTHROPIC_BASE_URL": "https://ark.cn-beijing.volces.com/api/compatible",
+#       "ANTHROPIC_MODEL": "doubao-seed-2-0-code-preview-260215",  ← 用 GET /api/v3/models 查当前可用 id；"-latest" 别名已失效
+#       "API_TIMEOUT_MS": "3000000"
+#     }
+#   }
+SETTINGS="$HOME/.claude/doubao-settings.json"
+if [ ! -f "$SETTINGS" ]; then
+    echo "claude-doubao: missing $SETTINGS — create it per the header comment of this script" >&2
+    exit 1
+fi
+exec "$HOME/.local/bin/claude" --settings "$SETTINGS" "$@"
