@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+#
+# claude-with-token — claude-<profile> launcher 的单一实现。
+#
+# 同 ~/.claude/settings.json 配置启动 Claude Code，仅替换 ANTHROPIC_AUTH_TOKEN。
+# 通过本目录下的 claude-<profile> 相对 symlink 调用（如 claude-kiro / claude-doubao /
+# claude-ds），从 $0 派生 profile；新增一个 token 入口 = 新增一个 symlink，不复制脚本。
+#
+# 机制：settings.json 的 env 块会覆盖 shell export（实测：export 坏 BASE_URL 后
+# claude 仍正常工作），所以换 token 必须走 --settings —— CLI 传入的 settings
+# 在 merge 链中优先于 ~/.claude/settings.json，只覆盖给出的键，其余配置全部继承。
+# 禁止改回 export 模式（claude-doubao 旧版曾因此静默失效）。
+#
+# token 文件（含 secret，仅本机，不入库）：~/.claude/<profile>-auth-token.json
+#   { "env": { "ANTHROPIC_AUTH_TOKEN": "sk-..." } }
+name="$(basename "$0")"
+profile="${name#claude-}"
+if [ "$name" = "claude-with-token" ] || [ "$profile" = "$name" ] || [ -z "$profile" ]; then
+    echo "claude-with-token: invoke via a claude-<profile> symlink (e.g. claude-kiro), not directly" >&2
+    exit 1
+fi
+SETTINGS="$HOME/.claude/${profile}-auth-token.json"
+if [ ! -f "$SETTINGS" ]; then
+    echo "$name: missing $SETTINGS — create it per the header comment of claude-with-token" >&2
+    exit 1
+fi
+# claude 本体路径：CLAUDE_BIN 显式覆盖 > PATH 解析 > 默认安装位（跨机可复现）
+CLAUDE_BIN="${CLAUDE_BIN:-$(command -v claude || echo "$HOME/.local/bin/claude")}"
+exec "$CLAUDE_BIN" --settings "$SETTINGS" "$@"
