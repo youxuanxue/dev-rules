@@ -21,4 +21,6 @@ if [ ! -f "$SETTINGS" ]; then
     echo "claude-doubao: missing $SETTINGS — create it per the header comment of this script" >&2
     exit 1
 fi
-exec "$HOME/.local/bin/claude" --settings "$SETTINGS" "$@"
+# claude 本体路径：CLAUDE_BIN 显式覆盖 > PATH 解析 > 默认安装位（跨机可复现）
+CLAUDE_BIN="${CLAUDE_BIN:-$(command -v claude || echo "$HOME/.local/bin/claude")}"
+exec "$CLAUDE_BIN" --settings "$SETTINGS" "$@"
