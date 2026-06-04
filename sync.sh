@@ -30,12 +30,14 @@
 #   ├── commands/*.md
 #   ├── global/CLAUDE.md
 #   ├── global/hooks/*                         Claude Code 全局 hooks（脚本）
+#   ├── global/bin/*                           CLI launchers（claude-kiro 等；secret 留 ~/.claude/ 本地文件）
 #   └── personas/*.md                          xuejiao twin persona 版本化源
 #        │
 #        ├──→ ~/.cursor/rules/*.mdc          本地 Cursor 交互式会话（symlink）
 #        ├──→ ~/.claude/commands/*           本地 Claude Code 自定义命令（symlink）
 #        ├──→ ~/.claude/CLAUDE.md            全局工作宪法（symlink）
 #        ├──→ ~/.claude/hooks/*              全局 Claude Code hooks（symlink）
+#        ├──→ ~/.local/bin/*                 CLI launchers（symlink）
 #        └──→ 各项目/.cursor/rules/*.mdc     云端 Agent 可读（real copy, git tracked）
 #
 #   为什么 home 入口用 symlink，项目用 real copy？
@@ -62,12 +64,14 @@ HOME_RULES_DIR="$HOME_CANONICAL/rules"
 HOME_COMMANDS_DIR="$HOME_CANONICAL/commands"
 HOME_GLOBAL_DIR="$HOME_CANONICAL/global"
 HOME_HOOKS_DIR="$HOME_GLOBAL_DIR/hooks"
+HOME_BIN_DIR="$HOME_GLOBAL_DIR/bin"
 HOME_PERSONAS_DIR="$HOME_CANONICAL/personas"
 
 CURSOR_HOME="$HOME/.cursor/rules"
 CLAUDE_COMMANDS="$HOME/.claude/commands"
 CLAUDE_GLOBAL_MD="$HOME/.claude/CLAUDE.md"
 CLAUDE_HOOKS="$HOME/.claude/hooks"
+LOCAL_BIN="$HOME/.local/bin"
 # Skills single source of truth: authored/committed under .cursor/skills/.
 # Claude Code loads them ONLY via a .claude/skills symlink (never a real copy —
 # a copy forks the truth, which the convention forbids).
@@ -309,6 +313,30 @@ sync_to_home() {
                 echo "  updated: $basename"
             else
                 ln -sf "$hook" "$target"
+                echo "  created: $basename"
+            fi
+        done
+    fi
+
+    echo ""
+    echo "=== Syncing to ~/.local/bin/ (launcher symlinks → $HOME_BIN_DIR) ==="
+    if [ ! -d "$HOME_BIN_DIR" ]; then
+        echo "  (no global/bin/ in canonical mirror, skipping)"
+    else
+        mkdir -p "$LOCAL_BIN"
+        for bin_src in "$HOME_BIN_DIR"/*; do
+            [ -f "$bin_src" ] || continue
+            local basename
+            basename="$(basename "$bin_src")"
+            local target="$LOCAL_BIN/$basename"
+            if [ -L "$target" ] && [ "$(readlink "$target")" = "$bin_src" ]; then
+                echo "  ok: $basename"
+            elif [ -L "$target" ] || [ -f "$target" ]; then
+                [ -f "$target" ] && [ ! -L "$target" ] && mv "$target" "$target.bak.$(date +%Y%m%d%H%M%S)"
+                ln -sf "$bin_src" "$target"
+                echo "  updated: $basename"
+            else
+                ln -sf "$bin_src" "$target"
                 echo "  created: $basename"
             fi
         done
@@ -672,6 +700,34 @@ check_home_hooks_drift() {
     done
 }
 
+# Check that each launcher in $HOME_BIN_DIR has a correct symlink in $LOCAL_BIN.
+# Same drift taxonomy as check_home_hooks_drift (missing / regular file / wrong
+# target → +1 to HOME_BIN_DRIFT). User-only binaries in $LOCAL_BIN with no
+# counterpart in canonical are ignored — convention only, not policing.
+check_home_bin_drift() {
+    HOME_BIN_DRIFT=0
+    [ -d "$HOME_BIN_DIR" ] || return 0
+    local bin_src basename target actual
+    for bin_src in "$HOME_BIN_DIR"/*; do
+        [ -f "$bin_src" ] || continue
+        basename="$(basename "$bin_src")"
+        target="$LOCAL_BIN/$basename"
+        if [ ! -e "$target" ]; then
+            echo "  ✗ MISSING: ~/.local/bin/$basename"
+            HOME_BIN_DRIFT=$((HOME_BIN_DRIFT + 1))
+        elif [ ! -L "$target" ]; then
+            echo "  ✗ REGULAR FILE: ~/.local/bin/$basename (should be symlink to canonical mirror)"
+            HOME_BIN_DRIFT=$((HOME_BIN_DRIFT + 1))
+        else
+            actual="$(readlink "$target")"
+            if [ "$actual" != "$bin_src" ]; then
+                echo "  ✗ WRONG TARGET: ~/.local/bin/$basename → $actual (expected → $bin_src)"
+                HOME_BIN_DRIFT=$((HOME_BIN_DRIFT + 1))
+            fi
+        fi
+    done
+}
+
 # Check that ~/.claude/skills is the single-source symlink → ~/.cursor/skills,
 # so Claude Code loads the same skills Cursor does. Only relevant when
 # ~/.cursor/skills exists. Drift cases (each → HOME_SKILLS_DRIFT=1):
@@ -781,6 +837,18 @@ check_drift() {
         else
             total_drift=$((total_drift + HOME_HOOKS_DRIFT))
             echo "  $HOME_HOOKS_DRIFT hook(s) drifted. Run: $SCRIPT_DIR/sync.sh"
+        fi
+        echo ""
+
+        # Home-bin drift: ~/.local/bin/ launchers that should be symlinks to
+        # $HOME_BIN_DIR but aren't. User binaries not in canonical are NOT flagged.
+        echo "=== Checking drift: ~/.local/bin/ vs $HOME_BIN_DIR ==="
+        check_home_bin_drift
+        if [ "$HOME_BIN_DRIFT" -eq 0 ]; then
+            echo "  ok: launcher symlinks healthy"
+        else
+            total_drift=$((total_drift + HOME_BIN_DRIFT))
+            echo "  $HOME_BIN_DRIFT launcher(s) drifted. Run: $SCRIPT_DIR/sync.sh"
         fi
         echo ""
 
@@ -1003,6 +1071,28 @@ print_status() {
             fi
         done
         [ "$hook_any" -eq 0 ] && echo "  (none — run sync.sh)"
+    fi
+    echo ""
+    echo "Home ~/.local/bin/ launchers (must symlink → $HOME_BIN_DIR):"
+    if [ ! -d "$HOME_BIN_DIR" ]; then
+        echo "  (no global/bin/ in canonical mirror)"
+    else
+        local bin_any=0
+        for bin_src in "$HOME_BIN_DIR"/*; do
+            [ -f "$bin_src" ] || continue
+            bin_any=1
+            local bin_name target_link
+            bin_name="$(basename "$bin_src")"
+            target_link="$LOCAL_BIN/$bin_name"
+            if [ -L "$target_link" ] && [ "$(readlink "$target_link")" = "$bin_src" ]; then
+                echo "  ✓ $bin_name"
+            elif [ -e "$target_link" ]; then
+                echo "  ⚠ $bin_name (not a symlink to canonical mirror — run sync.sh)"
+            else
+                echo "  ✗ $bin_name missing — run sync.sh"
+            fi
+        done
+        [ "$bin_any" -eq 0 ] && echo "  (none in canonical mirror)"
     fi
     echo ""
     echo "Twin personas source ($HOME_PERSONAS_DIR):"

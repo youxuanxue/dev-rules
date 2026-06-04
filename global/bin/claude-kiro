@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+#
+# claude-kiro — 同 ~/.claude/settings.json 配置启动 Claude Code，仅替换 ANTHROPIC_AUTH_TOKEN。
+#
+# 机制：settings.json 的 env 块会覆盖 shell export（实测：export 坏 BASE_URL 后
+# claude 仍正常工作），所以换 token 必须走 --settings —— CLI 传入的 settings
+# 在 merge 链中优先于 ~/.claude/settings.json，只覆盖给出的键，其余配置全部继承。
+# 禁止改回 export 模式（claude-doubao 曾因此静默失效）。
+#
+# token 文件（含 secret，仅本机，不入库）：~/.claude/kiro-auth-token.json
+#   { "env": { "ANTHROPIC_AUTH_TOKEN": "sk-..." } }
+SETTINGS="$HOME/.claude/kiro-auth-token.json"
+if [ ! -f "$SETTINGS" ]; then
+    echo "claude-kiro: missing $SETTINGS — create it per the header comment of this script" >&2
+    exit 1
+fi
+# claude 本体路径：CLAUDE_BIN 显式覆盖 > PATH 解析 > 默认安装位（跨机可复现）
+CLAUDE_BIN="${CLAUDE_BIN:-$(command -v claude || echo "$HOME/.local/bin/claude")}"
+exec "$CLAUDE_BIN" --settings "$SETTINGS" "$@"
