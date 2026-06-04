@@ -1,22 +1,15 @@
 #!/usr/bin/env bash
 #
-# claude-doubao — 用 Claude Code 的壳跑字节豆包模型（火山方舟 Anthropic 兼容端点）。
+# claude-doubao — 同 ~/.claude/settings.json 配置启动 Claude Code，仅替换 ANTHROPIC_AUTH_TOKEN
+# （tokenkey 中继上的另一个 key）。
 #
-# 机制：settings.json 的 env 块会覆盖 shell export（实测），所以端点/token/模型
-# 必须走 --settings 注入，禁止 export —— 旧版本用 export，在 settings.json 增加
-# env 块后 BASE_URL/TOKEN 被覆盖回默认中继、只剩 ANTHROPIC_MODEL 幸存，请求
-# 不存在的模型而静默挂死。
+# 机制同 claude-kiro：settings.json 的 env 块会覆盖 shell export（实测），所以换
+# token 必须走 --settings —— CLI 传入的 settings 在 merge 链中优先于
+# ~/.claude/settings.json，只覆盖给出的键，其余配置全部继承。禁止改回 export 模式。
 #
-# settings 文件（含 secret，仅本机，不入库）：~/.claude/doubao-settings.json
-#   {
-#     "env": {
-#       "ANTHROPIC_AUTH_TOKEN": "<volcengine ark api key>",
-#       "ANTHROPIC_BASE_URL": "https://ark.cn-beijing.volces.com/api/compatible",
-#       "ANTHROPIC_MODEL": "doubao-seed-2-0-code-preview-260215",  ← 用 GET /api/v3/models 查当前可用 id；"-latest" 别名已失效
-#       "API_TIMEOUT_MS": "3000000"
-#     }
-#   }
-SETTINGS="$HOME/.claude/doubao-settings.json"
+# token 文件（含 secret，仅本机，不入库）：~/.claude/doubao-auth-token.json
+#   { "env": { "ANTHROPIC_AUTH_TOKEN": "sk-..." } }
+SETTINGS="$HOME/.claude/doubao-auth-token.json"
 if [ ! -f "$SETTINGS" ]; then
     echo "claude-doubao: missing $SETTINGS — create it per the header comment of this script" >&2
     exit 1
