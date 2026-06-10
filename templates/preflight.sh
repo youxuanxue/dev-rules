@@ -281,13 +281,19 @@ else
 fi
 
 # ---- 检查 11: 后端/业务逻辑改动必须对齐 Web surface ----
-section "web surface alignment"
+# MARKER_GATE_ADVISORY=1: pre-commit/pre-push cannot see the in-flight commit
+# message or the PR body, so blocking here on a missing no-web-impact token is
+# a structural false deadlock. The check prints guidance but exits 0; the HARD
+# gate runs in CI reading the PR body (consumer wires the job). Same posture as
+# the sub2api upstream-override / sentinel marker gates.
+section "web surface alignment (advisory locally)"
 if [ -f dev-rules/scripts/check_web_surface_alignment.py ]; then
-    if "$PYTHON_BIN" dev-rules/scripts/check_web_surface_alignment.py --base "${PREFLIGHT_BASE:-origin/main}" > /tmp/preflight-web-surface.log 2>&1; then
-        ok "web surface alignment check passed"
+    if MARKER_GATE_ADVISORY=1 "$PYTHON_BIN" dev-rules/scripts/check_web_surface_alignment.py --base "${PREFLIGHT_BASE:-origin/main}" > /tmp/preflight-web-surface.log 2>&1; then
+        ok "web surface alignment evaluated (advisory; CI enforces on PR body)"
     else
+        # advisory mode never returns non-zero; this only fires on a hard script error.
         cat /tmp/preflight-web-surface.log | sed 's/^/    /'
-        fail "backend/business-logic changes missing Web/config/contract alignment evidence"
+        fail "web surface alignment check errored"
     fi
 else
     skip "dev-rules/scripts/check_web_surface_alignment.py not present"
