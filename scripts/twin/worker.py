@@ -13,6 +13,7 @@ from .contracts import DEV_RULES_ROOT, HUMAN_RESPONSE_FILE, PERSONAS_DIR, RUNS_D
 from .privacy import PrivacyReport, redact_text, stable_hash
 from .schema_contract import validate_schema
 from .util import now_utc, read_json, write_json
+from .worktree import worker_cwd
 from .workspace import (
     WorkspaceError,
     plan_path,
@@ -94,12 +95,12 @@ def _repo_root(workspace: Path) -> Path:
     return workspace.parent
 
 
-def git_status(workspace: Path) -> str:
-    return _run_command(["git", "status", "--short"], _repo_root(workspace))
+def git_status(workspace: Path, root: Path | None = None) -> str:
+    return _run_command(["git", "status", "--short"], root or _repo_root(workspace))
 
 
-def git_diff_stat(workspace: Path) -> str:
-    return _run_command(["git", "diff", "--stat"], _repo_root(workspace))
+def git_diff_stat(workspace: Path, root: Path | None = None) -> str:
+    return _run_command(["git", "diff", "--stat"], root or _repo_root(workspace))
 
 
 STDIN_WARNING_TEXT = "Warning: no stdin data received in 3s, proceeding without it..."
@@ -326,13 +327,20 @@ def start_worker_turn(
         "instruction_hash": stable_hash(instruction),
     })
     write_state(workspace, state)
-    pre_git_status = git_status(workspace)
-    pre_git_diff_stat = git_diff_stat(workspace)
+    # Per-workspace isolated worktree (TWIN_WORKTREE_ISOLATION, default on):
+    # workers no longer share the primary checkout's single mutable HEAD, so a
+    # parallel agent's branch switch can't land this worker's commits on the
+    # wrong branch. Falls back to the shared repo root on any failure. The
+    # pre/post git status used for NO_PROGRESS_DETECTED must observe the SAME
+    # cwd the worker runs in, so thread work_cwd through both.
+    work_cwd = worker_cwd(_repo_root(workspace), workspace)
+    pre_git_status = git_status(workspace, work_cwd)
+    pre_git_diff_stat = git_diff_stat(workspace, work_cwd)
 
     def _invoke(session: str) -> ClaudeRunResult:
         return runner(
             prompt,
-            cwd=_repo_root(workspace),
+            cwd=work_cwd,
             allowed_tools=WORKER_ALLOWED_TOOLS,
             disallowed_tools=worker_disallowed_tools(),
             max_budget_usd=max_budget_usd,
@@ -371,8 +379,8 @@ def start_worker_turn(
         resume_used = False
         worker_session_reset = True
 
-    post_git_status = git_status(workspace)
-    post_git_diff_stat = git_diff_stat(workspace)
+    post_git_status = git_status(workspace, work_cwd)
+    post_git_diff_stat = git_diff_stat(workspace, work_cwd)
     privacy = PrivacyReport()
     worker_output, _flags = redact_text(result.output_text, privacy)
     validation = extract_validation_evidence(worker_output)
