@@ -93,8 +93,16 @@ if [ -f .gitmodules ] && grep -q "dev-rules" .gitmodules; then
     sub_sha="$(git submodule status dev-rules | awk '{print $1}' | sed 's/^[+-]//')"
     if git_sub dev-rules cat-file -e "$sub_sha" 2>/dev/null; then
         ok "submodule SHA $sub_sha exists locally in dev-rules"
-        # remote check (warn-only, may fail if offline)
-        if git_sub dev-rules fetch --quiet origin 2>/dev/null && \
+        # Remote check (warn-only, may fail if offline). Fast path first: if the
+        # SHA is already an ancestor of the locally-known origin/main view, it
+        # was pushed at some point and — since dev-rules main is never force-
+        # pushed (dev-rules-convention.mdc) — is still reachable; the ~10s
+        # network fetch is only needed on a miss (fresh SHA not yet seen
+        # locally). Review loops re-run preflight many times, and this fetch
+        # was the single biggest network cost per run.
+        if git_sub dev-rules merge-base --is-ancestor "$sub_sha" origin/main 2>/dev/null; then
+            ok "submodule SHA is reachable on dev-rules origin/main (local view)"
+        elif git_sub dev-rules fetch --quiet origin 2>/dev/null && \
            git_sub dev-rules merge-base --is-ancestor "$sub_sha" origin/main 2>/dev/null; then
             ok "submodule SHA is reachable on dev-rules origin/main"
         else

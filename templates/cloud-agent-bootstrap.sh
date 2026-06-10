@@ -274,6 +274,24 @@ load_gh_repo_secret_names() {
     fi
     _CLOUD_AGENT_GH_NAMES_LOADED=1
 
+    # TTL cache (60 min): the probe costs 3-4 sequential gh network calls
+    # (auth status / repo view / secret list / variable list ≈ 8-10s) and the
+    # answer — which Actions secrets + variables exist on the repo — changes
+    # rarely. Review loops re-run preflight (and therefore this check) many
+    # times per session; serve from the cache when fresh. Format: line 1 =
+    # nameWithOwner, remaining lines = configured names. Cache is per-user
+    # (uid in the filename) and per-repo (path checksum). Delete the file or
+    # wait out the TTL to force a live probe after changing repo secrets.
+    _gh_cache="${TMPDIR:-/tmp}/cloud-agent-gh-names.$(id -u).$(printf '%s' "$REPO_ROOT" | cksum | cut -d' ' -f1)"
+    if [ -f "$_gh_cache" ] && [ -n "$(find "$_gh_cache" -mmin -60 2>/dev/null)" ]; then
+        _CLOUD_AGENT_GH_REPO="$(head -n1 "$_gh_cache")"
+        if [ -n "$_CLOUD_AGENT_GH_REPO" ]; then
+            _CLOUD_AGENT_GH_NAMES="$(tail -n +2 "$_gh_cache")"
+            _CLOUD_AGENT_GH_AVAILABLE=1
+            return 0
+        fi
+    fi
+
     if ! command -v gh >/dev/null 2>&1; then
         _CLOUD_AGENT_GH_REASON="gh CLI not on PATH (add 'gh' to CLOUD_AGENT_TOOLS so bootstrap auto-installs it)"
         return 1
@@ -301,6 +319,7 @@ load_gh_repo_secret_names() {
 
     _CLOUD_AGENT_GH_AVAILABLE=1
     _CLOUD_AGENT_GH_NAMES="$(printf '%s\n%s\n' "$repo_secrets" "$repo_vars" | awk 'NF' | sort -u)"
+    { printf '%s\n' "$_CLOUD_AGENT_GH_REPO"; printf '%s\n' "$_CLOUD_AGENT_GH_NAMES"; } >"$_gh_cache" 2>/dev/null || true
     return 0
 }
 
