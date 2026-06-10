@@ -131,7 +131,8 @@ while IFS=$'\t' read -r name cmd; do
 
     while IFS= read -r f; do
         [ -f "$f" ] || continue
-        # Quick filter: file must contain this stat block
+        # Re-assert the prefilter per file (cheap on the already-narrowed list;
+        # keeps the loop body self-sufficient if the prefilter ever changes)
         grep -qE "<!-- stat:$name -->" "$f" 2>/dev/null || continue
 
         if [ "$MODE" = "--check" ]; then
@@ -149,7 +150,14 @@ while IFS=$'\t' read -r name cmd; do
                 total_updated=$((total_updated + 1))
             fi
         fi
-    done < <(find_doc_files)
+    # Prefilter with ONE grep pass over the whole candidate list instead of one
+    # grep PROCESS per file: consumer repos carry hundreds-to-thousands of
+    # md/mdc files and per-file process spawn made --check cost ~3s per stat
+    # while matching files are typically <5. NUL-delimited to survive spaces.
+    # /dev/null sentinel: GNU xargs runs the command once even on EMPTY input,
+    # and grep with no file args would read stdin (hangs/eats input in hook
+    # contexts); the sentinel guarantees ≥1 file arg and never matches -l.
+    done < <(find_doc_files | tr '\n' '\0' | xargs -0 grep -lE "<!-- stat:$name -->" /dev/null 2>/dev/null)
 done < <(extract_stats)
 
 if [ "$MODE" = "--check" ]; then
