@@ -53,6 +53,10 @@ PYTHONPATH="$DEV_RULES" python3 -m scripts.twin worker-turn --workspace <ws> --i
 
 禁止用 Claude Code daemon / 后台 slash worker / `Task` 后台模式 / `--fork-session --resume <*.jsonl>` 交互式 transcript / 任何非 `worker-turn` 路径代替 worker。supervisor 在当前交互会话里写 instruction 与 review；**不得**把 supervisor 会话 fork 成 daemon worker 去“代跑 worker”。worker 活性与完成以 `runs/<run_id>/run.json` 与 `events.jsonl` 为准，不以 `~/.claude/jobs/*` 或 daemon roster 为准。若 `worker-turn` 因 oversized body / body-guard 拒载，`scripts.twin` 会清掉 `worker_session_id` 并 fresh retry；不得手工 `--resume` 旧 session 绕过该机制。
 
+### worker git 隔离（默认开）
+
+每个 workspace 的 worker 默认在一个**独立 git worktree**(`<repo-parent>/<repo>-twin-<workspace-id>` sibling 放置，故 go.mod `replace => ../../new-api` 等相对路径天然解析)里运行，由 `scripts/twin/worktree.py` 按 workspace 稳定创建/复用、`templates/worktree-bootstrap.sh` 一键 bootstrap(submodule init + 项目 `scripts/worktree-bootstrap-hook.sh`)、workspace 达 `accepted_done`/`failed` 时清理。目的：worker 不再与交互 session / 其他 worker 共享主 checkout 的单一可变 HEAD，杜绝并行切分支把提交落到错分支的污染。任何创建/bootstrap 失败都**回退到共享 checkout**，绝不弄垮 worker turn。需要关闭(回到旧的共享 checkout 行为)时设 `TWIN_WORKTREE_ISOLATION=0`。
+
 ## workspace 契约
 
 `<workspace>` 必须包含 `goal.yaml` 与 `plan.yaml`。workspace 内禁止出现 `supervisor-persona.md` / `worker-persona.md`；persona 直接读 `$DEV_RULES/personas/*.md`。字段定义见 `docs/twin-design.md`。

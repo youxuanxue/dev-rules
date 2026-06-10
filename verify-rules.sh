@@ -206,6 +206,19 @@ if [ "$SECTION_TESTED" = "0" ]; then
     ok "no check_*.py exposes --self-test mode"
 fi
 
+# ── twin worktree isolation self-test ─────────────────────────────────
+# worktree.py runs its assertions when invoked directly (no --self-test
+# flag), so the generic check_*/gen_* loop above does not reach it. Run it
+# explicitly: it exercises deterministic path derivation, the env gate, and
+# real git worktree create/idempotent-reuse/remove against a temp repo.
+section "twin worktree isolation self-test"
+if python3 "$SCRIPT_DIR/scripts/twin/worktree.py" > /tmp/dev-rules-twin-worktree.log 2>&1; then
+    ok "scripts/twin/worktree.py selftest"
+else
+    sed 's/^/    /' /tmp/dev-rules-twin-worktree.log
+    fail "scripts/twin/worktree.py selftest failed"
+fi
+
 # ── LaunchAgent reality matches doc promise (macOS dev only) ───────────
 # §三 anti-drift: a doc claim ("agent runs every 30 min") has to be
 # observable in launchctl, otherwise the cross-machine sync is fiction.

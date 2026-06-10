@@ -7,6 +7,8 @@ from .contracts import CURRENT_FILE, HUMAN_RESPONSE_FILE, RUN_SCHEMA, SUPERVISOR
 from .plan import acceptance_evidence, acceptance_focus, apply_plan_updates, choose_next_item, plan_gaps
 from .schema_contract import validate_schema
 from .util import now_utc, read_json, write_json
+from .worker import _repo_root
+from .worktree import remove_worktree
 from .workspace import (
     WorkspaceError,
     load_goal,
@@ -149,6 +151,14 @@ def apply_supervisor_review(workspace: Path, run_id: str, review: dict[str, Any]
         run["status"] = "failed"
     else:
         raise WorkspaceError(f"unknown review status: {status}")
+
+    # Terminal status → tear down this workspace's isolated worker worktree
+    # (best-effort; no-op when isolation was disabled or never created one).
+    if status in {"accepted_done", "failed"}:
+        try:
+            remove_worktree(_repo_root(workspace), workspace)
+        except Exception:  # cleanup must never break review application
+            pass
 
     state["last_review_status"] = status
     state["current_run_id"] = run_id
