@@ -267,6 +267,7 @@ _CLOUD_AGENT_GH_AVAILABLE=0
 _CLOUD_AGENT_GH_NAMES=""
 _CLOUD_AGENT_GH_REASON=""
 _CLOUD_AGENT_GH_REPO=""
+_CLOUD_AGENT_GH_FROM_CACHE=0
 
 load_gh_repo_secret_names() {
     if [ -n "$_CLOUD_AGENT_GH_NAMES_LOADED" ]; then
@@ -280,14 +281,19 @@ load_gh_repo_secret_names() {
     # rarely. Review loops re-run preflight (and therefore this check) many
     # times per session; serve from the cache when fresh. Format: line 1 =
     # nameWithOwner, remaining lines = configured names. Cache is per-user
-    # (uid in the filename) and per-repo (path checksum). Delete the file or
-    # wait out the TTL to force a live probe after changing repo secrets.
+    # (uid in the filename, mode 0600) and per-repo (path checksum). Gate-
+    # failing answers never come from the cache: a REQUIRED secret reading
+    # "missing" in a cached snapshot invalidates the cache and re-probes live
+    # (see gh_repo_has_secret_name), so an operator who just added the missing
+    # secret is never failed by yesterday's snapshot. Warn-only negatives
+    # (optional secrets) are answered from the cache as-is.
     _gh_cache="${TMPDIR:-/tmp}/cloud-agent-gh-names.$(id -u).$(printf '%s' "$REPO_ROOT" | cksum | cut -d' ' -f1)"
     if [ -f "$_gh_cache" ] && [ -n "$(find "$_gh_cache" -mmin -60 2>/dev/null)" ]; then
         _CLOUD_AGENT_GH_REPO="$(head -n1 "$_gh_cache")"
         if [ -n "$_CLOUD_AGENT_GH_REPO" ]; then
             _CLOUD_AGENT_GH_NAMES="$(tail -n +2 "$_gh_cache")"
             _CLOUD_AGENT_GH_AVAILABLE=1
+            _CLOUD_AGENT_GH_FROM_CACHE=1
             return 0
         fi
     fi
@@ -318,8 +324,11 @@ load_gh_repo_secret_names() {
     repo_vars=$(cd "$REPO_ROOT" && gh variable list -R "$_CLOUD_AGENT_GH_REPO" --json name -q '.[].name' 2>/dev/null) || repo_vars=""
 
     _CLOUD_AGENT_GH_AVAILABLE=1
+    _CLOUD_AGENT_GH_FROM_CACHE=0
     _CLOUD_AGENT_GH_NAMES="$(printf '%s\n%s\n' "$repo_secrets" "$repo_vars" | awk 'NF' | sort -u)"
-    { printf '%s\n' "$_CLOUD_AGENT_GH_REPO"; printf '%s\n' "$_CLOUD_AGENT_GH_NAMES"; } >"$_gh_cache" 2>/dev/null || true
+    # 0600: the file lists the repo's secret/variable NAMES (not values) —
+    # keep it out of other users' reach on shared machines anyway.
+    ( umask 077; { printf '%s\n' "$_CLOUD_AGENT_GH_REPO"; printf '%s\n' "$_CLOUD_AGENT_GH_NAMES"; } >"$_gh_cache" ) 2>/dev/null || true
     return 0
 }
 
@@ -330,7 +339,28 @@ gh_repo_has_secret_name() {
     if [ "$_CLOUD_AGENT_GH_AVAILABLE" != "1" ]; then
         return 2
     fi
-    printf '%s\n' "$_CLOUD_AGENT_GH_NAMES" | grep -Fxq "$1"
+    if printf '%s\n' "$_CLOUD_AGENT_GH_NAMES" | grep -Fxq "$1"; then
+        return 0
+    fi
+    # A NEGATIVE answer for a REQUIRED secret from a cached snapshot is not
+    # trustworthy — the operator may have added the secret since the snapshot
+    # was taken (the very thing the FAIL tells them to do). Invalidate and
+    # re-probe live once, then answer from fresh data. Scoped to gate-failing
+    # negatives only ($2=required): a missing OPTIONAL secret is warn-only and
+    # may legitimately stay missing forever — re-probing on those would defeat
+    # the cache on every run for repos with undeclared optional capabilities.
+    if [ "${2:-required}" = "required" ] && [ "$_CLOUD_AGENT_GH_FROM_CACHE" = "1" ]; then
+        rm -f "$_gh_cache" 2>/dev/null
+        _CLOUD_AGENT_GH_NAMES_LOADED=""
+        _CLOUD_AGENT_GH_FROM_CACHE=0
+        load_gh_repo_secret_names || return 2
+        if [ "$_CLOUD_AGENT_GH_AVAILABLE" != "1" ]; then
+            return 2
+        fi
+        printf '%s\n' "$_CLOUD_AGENT_GH_NAMES" | grep -Fxq "$1"
+        return $?
+    fi
+    return 1
 }
 
 if load_gh_repo_secret_names; then
@@ -359,7 +389,7 @@ if [ -z "$CLOUD_AGENT_OPTIONAL_SECRETS" ]; then
     log "  (none declared)"
 fi
 for s in $CLOUD_AGENT_OPTIONAL_SECRETS; do
-    if gh_repo_has_secret_name "$s"; then
+    if gh_repo_has_secret_name "$s" optional; then
         ok "$s configured on GitHub repo (Actions secret or variable)"
     else
         rc=$?
