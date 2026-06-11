@@ -55,8 +55,15 @@ def worktree_path(repo_root: Path, workspace: Path) -> Path:
 
 
 def _run(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    # Strip inherited git worktree-context env. When invoked from inside a git
+    # hook (e.g. pre-commit running this selftest), git exports GIT_DIR /
+    # GIT_INDEX_FILE / GIT_WORK_TREE; those bind our `git worktree` calls to the
+    # outer repo's index and break add/remove. Each call already targets the
+    # right repo via cwd, so these vars must not leak in.
+    env = {k: v for k, v in os.environ.items()
+           if k not in {"GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE"}}
     return subprocess.run(
-        args, cwd=str(cwd) if cwd else None,
+        args, cwd=str(cwd) if cwd else None, env=env,
         capture_output=True, text=True, check=False, timeout=120,
     )
 

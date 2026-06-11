@@ -37,6 +37,8 @@ Agent Skills 只在 `.cursor/skills/` 编辑与提交；`.claude/skills` 只能�
 
 **Codex 也是执行端**：同一份技能/规则/宪法经 `sync.sh` 同源分发给 Codex —— `~/.codex/AGENTS.md` symlink 到本宪法、`~/.codex/skills/<name>` 逐个 symlink 到 `.cursor/skills`、项目 `AGENTS.md` 受管块承载规则与技能索引；`~/.codex/rules/`（Codex 命令审批策略）不碰。技能 `description` 须 ≤1024 字符否则 Codex 静默丢弃（preflight 硬拦）。细则见 `rules/dev-rules-convention.mdc`。
 
+**Antigravity CLI 同理**：Google `agy` 的 customization 模型与 Codex 同构，经同一 `sync.sh` 同源消费 —— `~/.gemini/antigravity-cli/AGENTS.md` symlink 到本宪法、`~/.gemini/antigravity-cli/skills/<name>` 逐个 symlink 到 `.cursor/skills`、项目根 `AGENTS.md` 复用与 Codex 同一受管块（工作区技能走 `<project>/.agents/skills`）；不碰 `~/.gemini/GEMINI.md`（gemini-cli 的根）。`sync.sh --check` 守卫 Codex 与 Antigravity 两端家目录链漂移。
+
 新增 / 修改 skill / command（含各项目自建 skill）须遵循 `rules/dev-rules-convention.mdc` 的「skill / command 确定性基线」：可机械化步骤（计数 / 解析 / 查表 / 抓取 / 校验 / 排序去重 / 状态派生）由脚本承载并被调用，prompt 只留真实判断；`/xj-review` 把「本可机械化却写成 prose」列为必报 finding 作 review-time 兜底。
 
 Claude Code 全局 hooks（如 `gh-pr-guard.py`、`skill-reflect.sh`）唯一源在 `dev-rules/global/hooks/`，由 `sync.sh` symlink 到 `~/.claude/hooks/`；`~/.claude/hooks/` 下不得有真实文件——发现非 symlink 必须 mv 到 canonical mirror 后重 sync。settings.json hook 条目按 `~/.claude/hooks/<name>` 路径引用即可（symlink 透明）。

@@ -3,8 +3,10 @@
 
 Codex CLI reads <repo>/AGENTS.md as project instructions but ignores
 .cursor/rules/*.mdc (a Cursor format) and has no behavioral-rules directory of
-its own (~/.codex/rules is its command-approval policy, not coding rules). So
-the way dev-rules capabilities reach Codex in a project is a deterministic,
+its own (~/.codex/rules is its command-approval policy, not coding rules). The
+Google Antigravity CLI reads the SAME <repo>/AGENTS.md as its workspace rules and
+likewise doesn't auto-load .cursor/rules — so this single managed block serves
+both. The way dev-rules capabilities reach them in a project is a deterministic,
 idempotent managed block inside AGENTS.md that POINTS at:
 
   - the constitution (dev-rules/global/CLAUDE.md),
