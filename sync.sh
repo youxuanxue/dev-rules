@@ -38,6 +38,8 @@
 #        ├──→ ~/.claude/CLAUDE.md            全局工作宪法（symlink）
 #        ├──→ ~/.claude/hooks/*              全局 Claude Code hooks（symlink）
 #        ├──→ ~/.local/bin/*                 CLI launchers（symlink）
+#        ├──→ ~/.codex/AGENTS.md + skills/*  Codex 消费端：同一宪法 + 逐个 skill（symlink）
+#        ├──→ ~/.gemini/antigravity-cli/     Antigravity CLI 消费端：AGENTS.md 宪法 + skills/*（symlink）
 #        └──→ 各项目/.cursor/rules/*.mdc     云端 Agent 可读（real copy, git tracked）
 #
 #   为什么 home 入口用 symlink，项目用 real copy？
@@ -89,6 +91,20 @@ CODEX_SKILLS="$CODEX_HOME_DIR/skills"
 # Skill dir entries we must never treat as user skills (Codex-managed / noise).
 CODEX_SKILL_RESERVED=".system codex-primary-runtime .DS_Store"
 GEN_CODEX_AGENTS="$SCRIPT_DIR/scripts/gen_codex_agents.py"
+
+# Antigravity CLI (Google `agy`, brew cask antigravity-cli) consumer. Antigravity
+# 1.0.7 auto-discovers customizations from its Global Customizations Root (= the CLI
+# app data dir, ~/.gemini/antigravity-cli): global rules from AGENTS.md, skills from
+# skills/<name>/SKILL.md. Same model as Codex, so the SAME two additive links carry
+# the single source: AGENTS.md → the constitution, skills/<name> → each agent-skill.
+# Workspace-level rules reach it via the project-root AGENTS.md managed block (shared
+# with Codex); workspace skills via <project>/.agents/skills (its Workspace Root).
+ANTIGRAVITY_HOME_DIR="${ANTIGRAVITY_HOME:-$HOME/.gemini/antigravity-cli}"
+ANTIGRAVITY_AGENTS_MD="$ANTIGRAVITY_HOME_DIR/AGENTS.md"
+ANTIGRAVITY_SKILLS="$ANTIGRAVITY_HOME_DIR/skills"
+# Source-side names link_each_skill must skip (noise only; Antigravity's own builtin
+# skills live elsewhere and our additive links never touch unrelated dest entries).
+ANTIGRAVITY_SKILL_RESERVED=".DS_Store"
 
 LAUNCH_AGENT_LABEL="local.dev-rules.sync"
 LAUNCH_AGENT_PLIST="$HOME/Library/LaunchAgents/${LAUNCH_AGENT_LABEL}.plist"
@@ -219,12 +235,14 @@ link_skills_dir() {
 }
 
 # Additively symlink each individual skill from a source skills dir into a
-# destination skills dir (used for Codex's ~/.codex/skills, which also holds
-# Codex-managed entries we must NOT touch). Unlike link_skills_dir (whole-dir
-# symlink), this links one <name> at a time so reserved/native entries coexist.
-# Only subdirs containing a SKILL.md are linked. No-op when src is absent.
+# destination skills dir (used for Codex's ~/.codex/skills and Antigravity's
+# ~/.gemini/antigravity-cli/skills, which also hold tool-managed entries we must
+# NOT touch). Unlike link_skills_dir (whole-dir symlink), this links one <name>
+# at a time so reserved/native entries coexist. Only subdirs containing a SKILL.md
+# are linked. The 4th arg is the source-side reserved-name list to skip (defaults
+# to Codex's); No-op when src is absent.
 link_each_skill() {
-    local src_dir="$1" dst_dir="$2" label="$3"
+    local src_dir="$1" dst_dir="$2" label="$3" reserved_list="${4:-$CODEX_SKILL_RESERVED}"
     [ -d "$src_dir" ] || return 0
     mkdir -p "$dst_dir"
     local entry name link reserved skip
@@ -233,7 +251,7 @@ link_each_skill() {
         [ -f "$entry/SKILL.md" ] || continue
         name="$(basename "$entry")"
         skip=0
-        for reserved in $CODEX_SKILL_RESERVED; do
+        for reserved in $reserved_list; do
             [ "$name" = "$reserved" ] && skip=1 && break
         done
         [ "$skip" -eq 1 ] && continue
@@ -375,6 +393,7 @@ sync_to_home() {
     done
 
     sync_to_codex_home
+    sync_to_antigravity_home
 }
 
 # Codex CLI/app consumer (~/.codex). Two additive links, neither of which touches
@@ -420,6 +439,53 @@ sync_to_codex_home() {
         echo "  (no ~/.cursor/skills, skipping — nothing for Codex to load)"
     else
         link_each_skill "$CURSOR_SKILLS" "$CODEX_SKILLS" "codex-skills"
+    fi
+}
+
+# Antigravity CLI consumer (~/.gemini/antigravity-cli, its Global Customizations
+# Root). Two additive links, mirroring Codex, neither touching Antigravity-managed
+# content (builtin/, brain/, cache/, native skills):
+#   1. .../AGENTS.md       → global/CLAUDE.md  (same constitution as Claude/Codex)
+#   2. .../skills/<name>   → ~/.cursor/skills/<name>  (each agent-skill)
+# Antigravity ignores .cursor/rules/*.mdc just like Codex; behavioral rules reach it
+# through AGENTS.md (the constitution references them; each project's AGENTS.md block
+# indexes them). No-op when Antigravity CLI isn't installed.
+sync_to_antigravity_home() {
+    if [ ! -d "$ANTIGRAVITY_HOME_DIR" ]; then
+        echo ""
+        echo "=== ~/.gemini/antigravity-cli/ (Antigravity CLI consumer) ==="
+        echo "  (no $ANTIGRAVITY_HOME_DIR — Antigravity CLI not installed, skipping)"
+        return 0
+    fi
+
+    echo ""
+    echo "=== Syncing to ~/.gemini/antigravity-cli/AGENTS.md (symlink → $HOME_GLOBAL_DIR/CLAUDE.md) ==="
+    local global_src="$HOME_GLOBAL_DIR/CLAUDE.md"
+    if [ ! -f "$global_src" ]; then
+        echo "  WARN: $global_src not found, skipping"
+    elif [ -L "$ANTIGRAVITY_AGENTS_MD" ] && [ "$(readlink "$ANTIGRAVITY_AGENTS_MD")" = "$global_src" ]; then
+        echo "  ok: AGENTS.md → $global_src"
+    else
+        if [ -e "$ANTIGRAVITY_AGENTS_MD" ] && [ ! -L "$ANTIGRAVITY_AGENTS_MD" ]; then
+            # Back up anything real (non-empty) before linking; drop a 0-byte stub.
+            if [ -s "$ANTIGRAVITY_AGENTS_MD" ]; then
+                local backup="$ANTIGRAVITY_AGENTS_MD.bak.$(date +%Y%m%d%H%M%S)"
+                mv "$ANTIGRAVITY_AGENTS_MD" "$backup"
+                echo "  backup: $ANTIGRAVITY_AGENTS_MD → $backup"
+            else
+                rm -f "$ANTIGRAVITY_AGENTS_MD"
+            fi
+        fi
+        ln -sfn "$global_src" "$ANTIGRAVITY_AGENTS_MD"
+        echo "  linked: AGENTS.md → $global_src"
+    fi
+
+    echo ""
+    echo "=== Syncing to ~/.gemini/antigravity-cli/skills/ (per-skill symlinks → $CURSOR_SKILLS) ==="
+    if [ ! -d "$CURSOR_SKILLS" ]; then
+        echo "  (no ~/.cursor/skills, skipping — nothing for Antigravity to load)"
+    else
+        link_each_skill "$CURSOR_SKILLS" "$ANTIGRAVITY_SKILLS" "antigravity-skills" "$ANTIGRAVITY_SKILL_RESERVED"
     fi
 }
 
@@ -486,6 +552,16 @@ sync_to_project() {
         mkdir -p "$project_dir/.codex"
         link_skills_dir "$project_dir/.codex/skills" "../.cursor/skills" \
             "$project_dir/.cursor/skills" "$(basename "$project_dir")/.codex/skills"
+    fi
+
+    # Antigravity CLI reads project-level .agents/skills/ (its Workspace
+    # Customizations Root). Same .claude/skills pattern. Workspace RULES need no
+    # extra link — Antigravity reads the project-root AGENTS.md managed block
+    # (generated above), the same file Codex consumes. No-op without skills.
+    if [ -d "$project_dir/.cursor/skills" ]; then
+        mkdir -p "$project_dir/.agents"
+        link_skills_dir "$project_dir/.agents/skills" "../.cursor/skills" \
+            "$project_dir/.cursor/skills" "$(basename "$project_dir")/.agents/skills"
     fi
 }
 
@@ -802,6 +878,55 @@ check_home_codex_drift() {
     done
 }
 
+# Check the Antigravity CLI consumer links in ~/.gemini/antigravity-cli. Mirror of
+# check_home_codex_drift; only relevant when Antigravity CLI is installed. Each
+# problem → +1 to HOME_ANTIGRAVITY_DRIFT:
+#   - AGENTS.md not a symlink → global/CLAUDE.md (missing / real file / wrong target)
+#   - a ~/.cursor/skills/<name> with no matching skills/<name> symlink
+# Antigravity-managed content (builtin/, brain/, native skills) is never inspected.
+check_home_antigravity_drift() {
+    HOME_ANTIGRAVITY_DRIFT=0
+    [ -d "$ANTIGRAVITY_HOME_DIR" ] || return 0
+
+    local global_src="$HOME_GLOBAL_DIR/CLAUDE.md"
+    if [ ! -f "$global_src" ]; then
+        :
+    elif [ ! -L "$ANTIGRAVITY_AGENTS_MD" ]; then
+        if [ -e "$ANTIGRAVITY_AGENTS_MD" ] && [ -s "$ANTIGRAVITY_AGENTS_MD" ]; then
+            echo "  ✗ REAL FILE: ~/.gemini/antigravity-cli/AGENTS.md (should be symlink → $global_src)"
+        else
+            echo "  ✗ MISSING: ~/.gemini/antigravity-cli/AGENTS.md (Antigravity can't see the constitution)"
+        fi
+        HOME_ANTIGRAVITY_DRIFT=$((HOME_ANTIGRAVITY_DRIFT + 1))
+    elif [ "$(readlink "$ANTIGRAVITY_AGENTS_MD")" != "$global_src" ]; then
+        echo "  ✗ WRONG TARGET: ~/.gemini/antigravity-cli/AGENTS.md → $(readlink "$ANTIGRAVITY_AGENTS_MD") (expected → $global_src)"
+        HOME_ANTIGRAVITY_DRIFT=$((HOME_ANTIGRAVITY_DRIFT + 1))
+    fi
+
+    [ -d "$CURSOR_SKILLS" ] || return 0
+    local entry name link reserved skip
+    for entry in "$CURSOR_SKILLS"/*; do
+        [ -d "$entry" ] || continue
+        [ -f "$entry/SKILL.md" ] || continue
+        name="$(basename "$entry")"
+        skip=0
+        for reserved in $ANTIGRAVITY_SKILL_RESERVED; do
+            [ "$name" = "$reserved" ] && skip=1 && break
+        done
+        [ "$skip" -eq 1 ] && continue
+        link="$ANTIGRAVITY_SKILLS/$name"
+        if [ -L "$link" ] && [ "$(readlink "$link")" = "$entry" ]; then
+            :
+        elif [ ! -e "$link" ] && [ ! -L "$link" ]; then
+            echo "  ✗ MISSING: ~/.gemini/antigravity-cli/skills/$name (Antigravity won't load this skill)"
+            HOME_ANTIGRAVITY_DRIFT=$((HOME_ANTIGRAVITY_DRIFT + 1))
+        else
+            echo "  ✗ WRONG: ~/.gemini/antigravity-cli/skills/$name (not a symlink → $entry)"
+            HOME_ANTIGRAVITY_DRIFT=$((HOME_ANTIGRAVITY_DRIFT + 1))
+        fi
+    done
+}
+
 check_drift() {
     # Two distinct invocation contexts:
     #   1. SCRIPT_DIR == HOME_CANONICAL → we are the canonical mirror at ~/Codes/dev-rules/.
@@ -873,6 +998,18 @@ check_drift() {
         else
             total_drift=$((total_drift + HOME_CODEX_DRIFT))
             echo "  Codex links drifted. Run: $SCRIPT_DIR/sync.sh"
+        fi
+        echo ""
+
+        # Antigravity CLI consumer drift: ~/.gemini/antigravity-cli/AGENTS.md +
+        # per-skill symlinks (only when Antigravity is installed; managed entries untouched).
+        echo "=== Checking drift: ~/.gemini/antigravity-cli/ (Antigravity CLI consumer) ==="
+        check_home_antigravity_drift
+        if [ "$HOME_ANTIGRAVITY_DRIFT" -eq 0 ]; then
+            echo "  ok: Antigravity AGENTS.md + skills links healthy (or Antigravity not installed)"
+        else
+            total_drift=$((total_drift + HOME_ANTIGRAVITY_DRIFT))
+            echo "  Antigravity links drifted. Run: $SCRIPT_DIR/sync.sh"
         fi
         echo ""
 
@@ -1124,6 +1261,28 @@ print_status() {
             done
         fi
         echo "  skills: $codex_linked dev-rules symlink(s) in ~/.codex/skills (Codex-managed entries untouched)"
+    fi
+    echo ""
+    echo "Antigravity CLI consumer (~/.gemini/antigravity-cli, must mirror constitution + skills):"
+    if [ ! -d "$ANTIGRAVITY_HOME_DIR" ]; then
+        echo "  ⊘ not installed ($ANTIGRAVITY_HOME_DIR absent)"
+    else
+        if [ -L "$ANTIGRAVITY_AGENTS_MD" ] && [ "$(readlink "$ANTIGRAVITY_AGENTS_MD")" = "$HOME_GLOBAL_DIR/CLAUDE.md" ]; then
+            echo "  ✓ AGENTS.md → $HOME_GLOBAL_DIR/CLAUDE.md"
+        elif [ -L "$ANTIGRAVITY_AGENTS_MD" ]; then
+            echo "  ⚠ AGENTS.md → $(readlink "$ANTIGRAVITY_AGENTS_MD") (not the constitution)"
+        elif [ -e "$ANTIGRAVITY_AGENTS_MD" ]; then
+            echo "  ⚠ AGENTS.md is a real file (run sync.sh to link)"
+        else
+            echo "  ✗ AGENTS.md missing (run sync.sh)"
+        fi
+        local antigravity_linked=0
+        if [ -d "$ANTIGRAVITY_SKILLS" ]; then
+            for s in "$ANTIGRAVITY_SKILLS"/*; do
+                [ -L "$s" ] && antigravity_linked=$((antigravity_linked + 1))
+            done
+        fi
+        echo "  skills: $antigravity_linked dev-rules symlink(s) in ~/.gemini/antigravity-cli/skills (managed entries untouched)"
     fi
     echo ""
     echo "LaunchAgent ($LAUNCH_AGENT_LABEL):"
