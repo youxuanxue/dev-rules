@@ -53,6 +53,14 @@ else
     fail "loop_state selftest failed"
 fi
 
+section "review pipeline selftest (stateless fan-out: dimensions/dedup/triggers)"
+if python3 -m scripts.review.pipeline selftest > /tmp/dev-rules-review-pipeline.log 2>&1; then
+    ok "pipeline pruning/dedup/trigger asserts pass"
+else
+    cat /tmp/dev-rules-review-pipeline.log | sed 's/^/    /'
+    fail "pipeline selftest failed"
+fi
+
 echo ""
 if [ "$errors" -eq 0 ]; then
     echo "=== preflight: PASS ==="
