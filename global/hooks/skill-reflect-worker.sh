@@ -228,9 +228,29 @@ TRAP_BRANCH_NEW="$NEW_BRANCH"
 cp "$STAGING_FILE" "$SKILL_PATH" || { log_skip "cp staging→skill failed"; exit 0; }
 git -C "$REPO" add -- "$SKILL_PATH" || { log_skip "git add failed"; exit 0; }
 git -C "$REPO" commit -m "$COMMIT_MSG" 2>&1 || { log_skip "git commit failed"; exit 0; }
+
+HEAD_SHORT="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || true)"
+BASE_REF="$CURRENT_BRANCH"
+if git -C "$REPO" rev-parse --verify --quiet "origin/$CURRENT_BRANCH" >/dev/null 2>&1; then
+  BASE_REF="origin/$CURRENT_BRANCH"
+fi
+MERGE_BASE="$(git -C "$REPO" merge-base HEAD "$BASE_REF" 2>/dev/null || true)"
+if [ -n "$MERGE_BASE" ]; then
+  COMMIT_LIST="$(git -C "$REPO" log --oneline "$MERGE_BASE"..HEAD 2>/dev/null || true)"
+else
+  COMMIT_LIST="$(git -C "$REPO" log --oneline "$BASE_REF"..HEAD 2>/dev/null || true)"
+fi
+PR_BODY="$(printf '%s\n\n## 提交\n%s\n\n最新提交：%s\n' "$PR_BODY" "$COMMIT_LIST" "$HEAD_SHORT")"
+PR_BODY_FILE="$STAGING_DIR/pr-body.md"
+printf '%s\n' "$PR_BODY" > "$PR_BODY_FILE"
+if ! python3 "$DEV_RULES_HOME/global/hooks/gh-pr-guard.py" validate-body-file "$PR_BODY_FILE" "$REPO" "$CURRENT_BRANCH" 2>&1; then
+  log_skip "generated PR body failed Chinese/freshness validation"
+  exit 0
+fi
+
 git -C "$REPO" push -u origin "$NEW_BRANCH" 2>&1 || { log_skip "git push failed"; exit 0; }
 
-PR_URL="$(gh -R "$OWNER_REPO" pr create --title "$PR_TITLE" --body "$PR_BODY" 2>&1 || true)"
+PR_URL="$(gh -R "$OWNER_REPO" pr create --title "$PR_TITLE" --body-file "$PR_BODY_FILE" 2>&1 || true)"
 if ! printf '%s' "$PR_URL" | grep -qE '^https?://'; then
   log_skip "gh pr create failed: $PR_URL (branch pushed at $NEW_BRANCH)"
   exit 0

@@ -35,12 +35,13 @@ DECISION: skip <一句话理由>
    COMMIT_MSG: <一句话 commit message，<= 70 字，格式 "refactor(skill/${SKILL_NAME}): ..."  或 "fix(skill/${SKILL_NAME}): ..."  >
    PR_TITLE: skill(${SKILL_NAME}): <一句话>
    PR_BODY:
-   <多行 PR body 到输出末尾——包含：触发上下文、识别到的问题、改动方案、为何这次改值得>
+   <多行中文 PR body 到输出末尾——包含：触发上下文、识别到的问题、改动方案、为何这次改值得；不要写提交清单，worker 会按真实 commit 自动补>
    ```
 
 ## 严格约束
 - 不要 Write 到 ${STAGING_FILE} 以外的任何路径。
 - 决策输出必须按上述 markers 格式，否则 worker 会判定为"未做决策"并 skip。
 - COMMIT_MSG / PR_TITLE 各自只能一行；PR_BODY 占多行直到输出末尾。
+- PR_BODY 必须用中文正文；技术名词、路径、命令可保留英文。
 - 任何不确定 → `DECISION: skip <reason>`，**不要硬上**。
 - 不要复述本指令、不要解释你的思考过程到最终输出里——markers 之外的内容会被丢弃，但越冗长越增加解析失败风险。

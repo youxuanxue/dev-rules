@@ -173,6 +173,14 @@ else
     fail "twin worker must deny persona writes and supervisor persona must include Self-verification section"
 fi
 
+section "global hook self-tests"
+if python3 "$GLOBAL_DIR/hooks/gh-pr-guard.py" --self-test > /tmp/dev-rules-gh-pr-guard.log 2>&1; then
+    ok "gh-pr-guard.py self-test"
+else
+    cat /tmp/dev-rules-gh-pr-guard.log | sed 's/^/    /'
+    fail "gh-pr-guard.py self-test failed"
+fi
+
 # ── rule carrier partition anchor ─────────────────────────────────────
 # Prevent the system-level simplification rule from drifting into another
 # prose-only promise. The detailed partition belongs in dev-rules-convention;
