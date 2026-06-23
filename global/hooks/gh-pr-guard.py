@@ -404,7 +404,7 @@ def _gh_pr_view(cwd: str | None, selector: str | None, repo_args: list[str]) -> 
     args = ["gh", *repo_args, "pr", "view"]
     if selector:
         args.append(selector)
-    args.extend(["--json", "body,baseRefName,url,commits,headRefOid"])
+    args.extend(["--json", "body,baseRefName,url,commits,headRefOid,headRefName"])
     result = _run(args, cwd=cwd)
     if result.returncode != 0:
         return None
@@ -433,6 +433,14 @@ def _head_short_from_pr(pr: dict | None) -> str:
     if not pr:
         return ""
     return str(pr.get("headRefOid") or "")[:7]
+
+
+def _should_validate_pr_with_local_head(pr: dict | None, cwd: str | None) -> bool:
+    if not pr:
+        return True
+    head_ref = str(pr.get("headRefName") or "")
+    current = _current_branch(cwd)
+    return bool(head_ref and current and head_ref == current)
 
 
 def load_input() -> dict:
@@ -482,12 +490,13 @@ def _handle_pr_body_writes(cmd: str, cwd: str | None) -> int:
                 _gh_repo_args(tokens),
             )
             base_name = (pr or {}).get("baseRefName")
+            validate_with_local_head = _should_validate_pr_with_local_head(pr, effective_cwd)
             errors = validate_body_text(
                 body,
                 cwd=effective_cwd,
                 base_name=base_name,
-                commit_entries=_commit_entries_from_pr(pr),
-                head_short=_head_short_from_pr(pr),
+                commit_entries=None if validate_with_local_head else _commit_entries_from_pr(pr),
+                head_short=None if validate_with_local_head else _head_short_from_pr(pr),
             )
             if errors:
                 sys.stderr.write(_body_guard_message(errors))
@@ -702,6 +711,10 @@ def _self_test() -> int:
             failures.append(f"temp git first commit failed: {first.stderr.strip()}")
         _run(["git", "branch", "-M", "main"], cwd=str(repo))
         _run(["git", "checkout", "-q", "-b", "feature/pr-body"], cwd=str(repo))
+        if not _should_validate_pr_with_local_head({"headRefName": "feature/pr-body"}, str(repo)):
+            failures.append("current-branch PR edits should validate against local HEAD")
+        if _should_validate_pr_with_local_head({"headRefName": "other-branch"}, str(repo)):
+            failures.append("other-branch PR edits should validate against PR commits")
         (repo / "a.txt").write_text("a\nb\n", encoding="utf-8")
         _run(["git", "add", "a.txt"], cwd=str(repo))
         second = _run(["git", "commit", "-q", "-m", "fix hook subject"], cwd=str(repo))
