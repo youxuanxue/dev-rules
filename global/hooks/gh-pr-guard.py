@@ -332,6 +332,8 @@ def validate_body_text(
     *,
     cwd: str | None = None,
     base_name: str | None = None,
+    commit_entries: list[tuple[str, str]] | None = None,
+    head_short: str | None = None,
     require_commit_refs: bool = True,
 ) -> list[str]:
     errors: list[str] = []
@@ -343,7 +345,7 @@ def validate_body_text(
     if missing_sections:
         errors.append("PR body 必须包含中文小节：" + "、".join(missing_sections) + "。")
     if require_commit_refs:
-        entries = _commit_entries_for_body(cwd, base_name)
+        entries = commit_entries if commit_entries is not None else _commit_entries_for_body(cwd, base_name)
         missing = [sha for sha, _subject in entries if sha not in body]
         if missing:
             preview = ", ".join(missing[:8])
@@ -364,7 +366,7 @@ def validate_body_text(
                 "PR body 的「提交」小节必须包含所有 commit subject；"
                 f"缺少 {preview}{more}。"
             )
-        head = _git(["rev-parse", "--short", "HEAD"], cwd)
+        head = head_short if head_short is not None else _git(["rev-parse", "--short", "HEAD"], cwd)
         if head and not re.search(rf"最新提交[：:]\s*{re.escape(head)}\b", body):
             errors.append(f"PR body 必须包含 freshness anchor：`最新提交：{head}`。")
     return errors
@@ -379,8 +381,31 @@ def _body_guard_message(errors: list[str]) -> str:
     )
 
 
+def _gh_repo_args(tokens: list[str]) -> list[str]:
+    repo = _option_value(tokens, ("--repo", "-R"))
+    return ["-R", repo] if repo else []
+
+
+def _gh_pr_selector(tokens: list[str], subcommand: str) -> str | None:
+    for i, token in enumerate(tokens):
+        if token == "pr" and i + 1 < len(tokens) and tokens[i + 1] == subcommand:
+            candidate_index = i + 2
+            if candidate_index < len(tokens) and not tokens[candidate_index].startswith("-"):
+                return tokens[candidate_index]
+            return None
+    return None
+
+
 def _gh_pr_view_current(cwd: str | None) -> dict | None:
-    result = _run(["gh", "pr", "view", "--json", "body,baseRefName,url"], cwd=cwd)
+    return _gh_pr_view(cwd, None, [])
+
+
+def _gh_pr_view(cwd: str | None, selector: str | None, repo_args: list[str]) -> dict | None:
+    args = ["gh", *repo_args, "pr", "view"]
+    if selector:
+        args.append(selector)
+    args.extend(["--json", "body,baseRefName,url,commits,headRefOid"])
+    result = _run(args, cwd=cwd)
     if result.returncode != 0:
         return None
     try:
@@ -388,6 +413,26 @@ def _gh_pr_view_current(cwd: str | None) -> dict | None:
     except json.JSONDecodeError:
         return None
     return data if isinstance(data, dict) else None
+
+
+def _commit_entries_from_pr(pr: dict | None) -> list[tuple[str, str]]:
+    entries: list[tuple[str, str]] = []
+    if not pr:
+        return entries
+    for item in pr.get("commits") or []:
+        if not isinstance(item, dict):
+            continue
+        oid = str(item.get("oid") or "")
+        subject = str(item.get("messageHeadline") or "")
+        if oid:
+            entries.append((oid[:7], subject))
+    return entries
+
+
+def _head_short_from_pr(pr: dict | None) -> str:
+    if not pr:
+        return ""
+    return str(pr.get("headRefOid") or "")[:7]
 
 
 def load_input() -> dict:
@@ -431,9 +476,19 @@ def _handle_pr_body_writes(cmd: str, cwd: str | None) -> int:
                 return 2
             if body is None:
                 continue
-            pr = _gh_pr_view_current(effective_cwd)
+            pr = _gh_pr_view(
+                effective_cwd,
+                _gh_pr_selector(tokens, "edit"),
+                _gh_repo_args(tokens),
+            )
             base_name = (pr or {}).get("baseRefName")
-            errors = validate_body_text(body, cwd=effective_cwd, base_name=base_name)
+            errors = validate_body_text(
+                body,
+                cwd=effective_cwd,
+                base_name=base_name,
+                commit_entries=_commit_entries_from_pr(pr),
+                head_short=_head_short_from_pr(pr),
+            )
             if errors:
                 sys.stderr.write(_body_guard_message(errors))
                 return 2
@@ -592,6 +647,10 @@ def _self_test() -> int:
         failures.append("-b body extraction failed")
     if not any(_is_gh_pr(_segment_tokens(segment), "create") for segment in _split_segments("gh -R owner/repo pr create -F body.md")):
         failures.append("post create detector should handle gh -R owner/repo pr create")
+    if _gh_pr_selector(_segment_tokens("gh -R owner/repo pr edit 77 -F body.md"), "edit") != "77":
+        failures.append("gh pr edit selector detection failed")
+    if _gh_repo_args(_segment_tokens("gh -R owner/repo pr edit 77 -F body.md")) != ["-R", "owner/repo"]:
+        failures.append("gh repo arg extraction failed")
     if _commit_cwds("cd repo && git commit -m msg", "/tmp") != ["/tmp/repo"]:
         failures.append("post commit cwd tracking failed")
     if not _looks_chinese("摘要：这里是中文说明，风险较低，验证已经完成，提交包含 abc1234。"):
@@ -611,6 +670,26 @@ def _self_test() -> int:
     errors = validate_body_text("Summary only", require_commit_refs=False)
     if not errors:
         failures.append("English body should be rejected")
+    explicit_body = (
+        "## 摘要\n这里是中文说明，确保正文使用中文描述。\n\n"
+        "## 风险\n风险较低。\n\n"
+        "## 验证\n已经完成自测。\n\n"
+        "## 提交\nabc1234 fix explicit pr subject\n\n最新提交：abc1234\n"
+    )
+    explicit_errors = validate_body_text(
+        explicit_body,
+        commit_entries=[("abc1234", "fix explicit pr subject")],
+        head_short="abc1234",
+    )
+    if explicit_errors:
+        failures.append(f"explicit PR commit list body rejected: {explicit_errors}")
+    stale_explicit_errors = validate_body_text(
+        explicit_body.replace("fix explicit pr subject", "wrong subject"),
+        commit_entries=[("abc1234", "fix explicit pr subject")],
+        head_short="abc1234",
+    )
+    if not any("commit subject" in error for error in stale_explicit_errors):
+        failures.append("explicit stale commit subject should be rejected")
     with tempfile.TemporaryDirectory() as tmp:
         repo = Path(tmp)
         _run(["git", "init", "-q"], cwd=str(repo))
