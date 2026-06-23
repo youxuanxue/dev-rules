@@ -387,11 +387,31 @@ def _gh_repo_args(tokens: list[str]) -> list[str]:
 
 
 def _gh_pr_selector(tokens: list[str], subcommand: str) -> str | None:
+    value_options = {
+        "-R", "--repo",
+        "-b", "--body",
+        "-F", "--body-file",
+        "-B", "--base",
+        "-t", "--title",
+        "--add-assignee", "--add-label", "--add-project", "--add-reviewer",
+        "-m", "--milestone",
+        "--remove-assignee", "--remove-label", "--remove-project", "--remove-reviewer",
+    }
     for i, token in enumerate(tokens):
         if token == "pr" and i + 1 < len(tokens) and tokens[i + 1] == subcommand:
-            candidate_index = i + 2
-            if candidate_index < len(tokens) and not tokens[candidate_index].startswith("-"):
-                return tokens[candidate_index]
+            j = i + 2
+            while j < len(tokens):
+                candidate = tokens[j]
+                if candidate in value_options:
+                    j += 2
+                    continue
+                if any(candidate.startswith(f"{option}=") for option in value_options if option.startswith("--")):
+                    j += 1
+                    continue
+                if candidate.startswith("-"):
+                    j += 1
+                    continue
+                return candidate
             return None
     return None
 
@@ -658,6 +678,10 @@ def _self_test() -> int:
         failures.append("post create detector should handle gh -R owner/repo pr create")
     if _gh_pr_selector(_segment_tokens("gh -R owner/repo pr edit 77 -F body.md"), "edit") != "77":
         failures.append("gh pr edit selector detection failed")
+    if _gh_pr_selector(_segment_tokens("gh pr edit -F body.md 77"), "edit") != "77":
+        failures.append("gh pr edit selector after flags detection failed")
+    if _gh_pr_selector(_segment_tokens("gh pr edit --body-file=body.md 77"), "edit") != "77":
+        failures.append("gh pr edit selector after long flag assignment failed")
     if _gh_repo_args(_segment_tokens("gh -R owner/repo pr edit 77 -F body.md")) != ["-R", "owner/repo"]:
         failures.append("gh repo arg extraction failed")
     if _commit_cwds("cd repo && git commit -m msg", "/tmp") != ["/tmp/repo"]:
