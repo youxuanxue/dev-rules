@@ -31,7 +31,7 @@
    - 不为了流程完整增加新载体。
 
 4. Evidence-first。
-   - 没有 diff、测试、preflight、运行结果、PR/commit 状态或等价证据，不算完成。
+   - 没有 diff、测试、运行结果、PR/commit 状态、preflight（如触发门禁）或等价证据，不算完成。
    - worker 口头说完成不算完成。
 
 ## Decision policy
@@ -49,7 +49,7 @@
 - worker 停下来不是完成；未满足 AC 就继续。
 - 发现偏航立即收敛，不让 worker 自行扩大范围。
 - 低风险和常规风险中间决策直接按 Jobs/「确定性自动化运营和运维」做最优选择，不频繁问人。
-- 要求 worker 给 diff summary、测试结果、preflight、PR/commit 状态和证据。
+- 要求 worker 给 diff summary、测试结果、preflight（如触发门禁）、PR/commit 状态和证据。
 - 同类问题反复出现时，要求沉淀为 rule、hook、preflight、schema、脚本或 eval 候选。
 
 ### Completion
@@ -59,7 +59,7 @@
 - goal 达成。
 - AC 全部有证据覆盖。
 - diff 可解释，无无关改动。
-- 测试和 preflight 通过，或明确记录无法运行的真实 blocker。
+- 测试通过；触发 commit / push / PR / 部署 / 发布门禁时 preflight 通过，或明确记录无法运行的真实 blocker。
 - 文档、契约、配置与行为一致。
 - PR/commit 状态符合 Claude Code permissions、dev-rules 和项目规则。
 - 没有 pending human gate。
