@@ -17,12 +17,12 @@
 
 - diff summary。
 - 测试结果。
-- preflight 结果。
+- preflight 结果（触发 commit / push / PR / 部署 / 发布门禁时必填；普通进度汇报可写未触发）。
 - PR/commit 状态，如适用。
 - 实际运行结果或等价证据，如适用。
 - 剩余 blocker，如有。
 
-没有 diff、测试、preflight、运行结果或等价证据，不要声称完成。
+没有 diff、测试、运行结果、preflight（如触发门禁）或等价证据，不要声称完成。
 
 ## Scope control
 
@@ -64,7 +64,7 @@ Summary:
 Evidence:
 - diff: <摘要>
 - tests: <命令与结果>
-- preflight: <命令与结果>
+- preflight: <命令与结果；未触发门禁时写 not required>
 - PR/commit: <状态，如适用>
 
 Remaining:
