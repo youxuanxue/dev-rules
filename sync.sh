@@ -79,6 +79,7 @@ LOCAL_BIN="$HOME/.local/bin"
 # a copy forks the truth, which the convention forbids).
 CURSOR_SKILLS="$HOME/.cursor/skills"
 CLAUDE_SKILLS="$HOME/.claude/skills"
+HOME_CURSOR_SKILLS_SRC="$HOME_CANONICAL/.cursor/skills"
 
 # Codex CLI/app consumer. Codex reads ~/.codex/AGENTS.md (global instructions),
 # scans ~/.codex/skills/<name>/SKILL.md (follows symlinks), and keeps its OWN
@@ -375,6 +376,16 @@ sync_to_home() {
         fi
         ln -sf "$global_src" "$CLAUDE_GLOBAL_MD"
         echo "  linked: CLAUDE.md → $global_src"
+    fi
+
+    echo ""
+    echo "=== Syncing to ~/.cursor/skills/ (symlink → $HOME_CURSOR_SKILLS_SRC) ==="
+    if [ ! -d "$HOME_CURSOR_SKILLS_SRC" ]; then
+        echo "  WARN: $HOME_CURSOR_SKILLS_SRC not found — skipping global skills link"
+        echo "        (agent skills source is required for Claude/Codex/Antigravity global skills)"
+    else
+        mkdir -p "$(dirname "$CURSOR_SKILLS")"
+        link_skills_dir "$CURSOR_SKILLS" "$HOME_CURSOR_SKILLS_SRC" "$HOME_CURSOR_SKILLS_SRC" "cursor-skills"
     fi
 
     echo ""
@@ -804,6 +815,35 @@ check_home_bin_drift() {
     done
 }
 
+# Check that ~/.cursor/skills is the home-level entrypoint to the canonical
+# agent-skills source. Claude/Codex/Antigravity links are layered on top of this
+# path, so a missing or dangling ~/.cursor/skills makes all global skills vanish
+# even when their downstream links look correct.
+check_home_cursor_skills_drift() {
+    HOME_CURSOR_SKILLS_DRIFT=0
+
+    if [ ! -d "$HOME_CURSOR_SKILLS_SRC" ]; then
+        echo "  ✗ SOURCE MISSING: $HOME_CURSOR_SKILLS_SRC (agent skills source unavailable)"
+        HOME_CURSOR_SKILLS_DRIFT=1
+        return 0
+    fi
+
+    if [ ! -e "$CURSOR_SKILLS" ] && [ ! -L "$CURSOR_SKILLS" ]; then
+        echo "  ✗ MISSING: ~/.cursor/skills (global skills entrypoint missing)"
+        HOME_CURSOR_SKILLS_DRIFT=1
+    elif [ ! -L "$CURSOR_SKILLS" ]; then
+        echo "  ✗ REAL DIR: ~/.cursor/skills (should be symlink → $HOME_CURSOR_SKILLS_SRC)"
+        HOME_CURSOR_SKILLS_DRIFT=1
+    else
+        local actual
+        actual="$(readlink "$CURSOR_SKILLS")"
+        if [ "$actual" != "$HOME_CURSOR_SKILLS_SRC" ]; then
+            echo "  ✗ WRONG TARGET: ~/.cursor/skills → $actual (expected → $HOME_CURSOR_SKILLS_SRC)"
+            HOME_CURSOR_SKILLS_DRIFT=1
+        fi
+    fi
+}
+
 # Check that ~/.claude/skills is the single-source symlink → ~/.cursor/skills,
 # so Claude Code loads the same skills Cursor does. Only relevant when
 # ~/.cursor/skills exists. Drift cases (each → HOME_SKILLS_DRIFT=1):
@@ -974,6 +1014,19 @@ check_drift() {
         else
             total_drift=$((total_drift + HOME_BIN_DRIFT))
             echo "  $HOME_BIN_DRIFT launcher(s) drifted. Run: $SCRIPT_DIR/sync.sh"
+        fi
+        echo ""
+
+        # Home Cursor skills entrypoint: ~/.cursor/skills must exist and point
+        # to the canonical mirror's .cursor/skills source. Downstream Claude,
+        # Codex, and Antigravity links intentionally build on this path.
+        echo "=== Checking drift: ~/.cursor/skills vs $HOME_CURSOR_SKILLS_SRC ==="
+        check_home_cursor_skills_drift
+        if [ "$HOME_CURSOR_SKILLS_DRIFT" -eq 0 ]; then
+            echo "  ok: Cursor skills entrypoint healthy"
+        else
+            total_drift=$((total_drift + HOME_CURSOR_SKILLS_DRIFT))
+            echo "  Cursor skills entrypoint drifted. Run: $SCRIPT_DIR/sync.sh"
         fi
         echo ""
 
@@ -1171,6 +1224,21 @@ print_status() {
         fi
     done
     [ "$any" -eq 0 ] && echo "  (none — run sync.sh)"
+    echo ""
+    echo "Home ~/.cursor/skills (must symlink → $HOME_CURSOR_SKILLS_SRC):"
+    if [ -L "$CURSOR_SKILLS" ]; then
+        local target
+        target="$(readlink "$CURSOR_SKILLS")"
+        if [ "$target" = "$HOME_CURSOR_SKILLS_SRC" ]; then
+            echo "  ✓ → $target"
+        else
+            echo "  ⚠ → $target (not pointing to canonical skills source)"
+        fi
+    elif [ -e "$CURSOR_SKILLS" ]; then
+        echo "  ⚠ real entry (run sync.sh to convert to symlink)"
+    else
+        echo "  ✗ missing (global skills will not load)"
+    fi
     echo ""
     echo "Home ~/.claude/CLAUDE.md:"
     if [ -L "$CLAUDE_GLOBAL_MD" ]; then
