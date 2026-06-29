@@ -6,6 +6,11 @@ Codex 0.122 rejects a skill whose SKILL.md `description` exceeds 1024 chars:
     ERROR codex_core::session: failed to load skill .../SKILL.md:
     invalid description: exceeds maximum length of 1024 characters
 
+Codex also reports `missing YAML frontmatter delimited by ---` when the file
+does not begin with `---` (common causes: UTF-8 BOM, leading whitespace, or an
+agent saving SKILL.md before the frontmatter block is written). This check flags
+those load failures before Codex silently drops the skill.
+
 The skill is then dropped from Codex entirely with no prompt — the operator
 only finds out by reading stderr. Cursor and Claude Code have no such cap, so a
 description authored for them silently breaks Codex reuse. This check makes that
@@ -35,10 +40,10 @@ except ImportError:  # pragma: no cover
 # Reuse the exact frontmatter parser the generator uses (folded-scalar aware),
 # so "what we measure" matches "what Codex reads".
 try:
-    from gen_codex_agents import parse_frontmatter
+    from gen_codex_agents import FRONTMATTER_RE, parse_frontmatter
 except ImportError:  # pragma: no cover
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-    from gen_codex_agents import parse_frontmatter
+    from gen_codex_agents import FRONTMATTER_RE, parse_frontmatter
 
 PREFIX = "check_codex_skill_limits"
 # Observed limit in Codex 0.122 (the runtime error message). Not in public docs;
@@ -64,11 +69,39 @@ def overlong(files: list[pathlib.Path]) -> list[tuple[pathlib.Path, int]]:
     return out
 
 
+def invalid_frontmatter(files: list[pathlib.Path]) -> list[str]:
+    """Return human-readable issues that make Codex skip a skill."""
+    issues: list[str] = []
+    for f in files:
+        raw = f.read_bytes()
+        if raw.startswith(b"\xef\xbb\xbf"):
+            issues.append(f"{f}: UTF-8 BOM before opening --- (Codex reports missing frontmatter)")
+            continue
+        text = raw.decode("utf-8")
+        if not FRONTMATTER_RE.match(text):
+            issues.append(f"{f}: missing YAML frontmatter delimited by --- at byte 0")
+            continue
+        fm = parse_frontmatter(text)
+        name = fm.get("name", "").strip()
+        desc = fm.get("description", "").strip()
+        if not name or not desc:
+            issues.append(f"{f}: frontmatter must include non-empty name and description")
+            continue
+        if name != f.parent.name:
+            issues.append(
+                f"{f}: name {name!r} must match parent directory {f.parent.name!r} (agentskills.io)"
+            )
+    return issues
+
+
 def run(root: pathlib.Path) -> int:
     files = discover(root)
     if not files:
         print(f"[{PREFIX}] skip: no .cursor/skills/*/SKILL.md under {root}")
         return 0
+    fm_issues = invalid_frontmatter(files)
+    if fm_issues:
+        return cli_fail(PREFIX, "skill frontmatter invalid for Codex", *fm_issues)
     bad = overlong(files)
     if bad:
         details = [
@@ -76,7 +109,10 @@ def run(root: pathlib.Path) -> int:
             for f, n in bad
         ]
         return cli_fail(PREFIX, "skill description(s) exceed Codex limit", *details)
-    print(f"[{PREFIX}] {len(files)} skill description(s) within Codex {DESCRIPTION_MAX}-char limit")
+    print(
+        f"[{PREFIX}] {len(files)} skill description(s) within Codex {DESCRIPTION_MAX}-char limit "
+        "and frontmatter OK"
+    )
     return 0
 
 
@@ -109,6 +145,13 @@ def _self_test() -> int:
         )
         if run(root) != 0:
             failures.append("run() should pass when all descriptions are within limit")
+
+        (skills / "bombad").mkdir(parents=True)
+        (skills / "bombad" / "SKILL.md").write_bytes(
+            b"\xef\xbb\xbf---\nname: bombad\ndescription: has bom\n---\nbody\n"
+        )
+        if run(root) == 0:
+            failures.append("run() should fail when a skill has UTF-8 BOM")
 
     if failures:
         return cli_fail(PREFIX, "self-test failed", *failures)
