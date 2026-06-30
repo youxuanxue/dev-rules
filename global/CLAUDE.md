@@ -60,6 +60,15 @@ CLI launcher（如 `claude-kiro`、`claude-doubao`：换 token / 后端启动 cl
 
 当某个“靠自觉”的问题反复出现，必须新增检查到 `scripts/preflight.sh` 或 `dev-rules/verify-rules.sh`，把软约束硬化。
 
+## 5.1 多端 UI 行为 SSOT（Single Source of Truth）
+
+同一用户意图若在 **两个及以上** 页面/组件重复出现（例如同一类预览、下载、历史重载、过期态、权限守卫），必须遵守：
+
+1. **一个 owner**：行为逻辑落在 **一个** composable / service / `*.tk.ts` 工具；展示落在 **一个** 共享组件。页面级文件只做编排与 props 接线，禁止复制粘贴状态机、刷新、持久化、下载 / copy-link 等守卫。
+2. **持久化与重载同路径**：浏览器本地历史、缓存、hydrate、过期资源刷新等生命周期逻辑，所有消费方走同一函数；禁止各页各自写一套 persist / restore 规则。
+3. **机械锚点**：load-bearing SSOT 模块必须登记项目 sentinel / contract 检查，并用测试覆盖核心路径；上游 merge 删掉共享模块应 fail preflight，而不是编译绿、功能静默回归。
+4. **项目落地表**：具体 owner 文件路径写在**项目** `CLAUDE.md` / `AGENTS.md` 或项目约定文档；本宪法只定原则，不复制项目路径表。
+
 ## 6. Memory 纪律（精品柜，非日志）
 
 memory 是**货架有限的精品柜**，不是日记。默认动作是**不写**——干完一件事不是写 memory 的理由，绝大多数任务结束应当静默。
