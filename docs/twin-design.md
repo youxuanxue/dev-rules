@@ -4,7 +4,7 @@
 
 `twin` 是运行在 Claude Code 交互模式里的 **xuejiao persona supervisor**：它持有目标、指挥 headless worker 多轮推进、验收证据，并只在真正需要真人判断时停下。
 
-worker harness 由 dev-rules、项目 `CLAUDE.md`、hooks、preflight、worktree、Claude Code `-p --permission-mode bypassPermissions` 承担；`twin` 不再造 agent 平台。
+worker harness 由 dev-rules、项目 `CLAUDE.md`、hooks、preflight、worktree、Claude Code `-p --permission-mode bypassPermissions` 承担；`twin` 不再造 agent 平台。普通 Agent 会话要新建、切换或销毁 worktree 时不复用 twin harness，走 `$git-worktree-submodule`；`twin` 内部 worktree 仍由 `scripts/twin/worktree.py` 管理。
 
 ## 核心约束
 

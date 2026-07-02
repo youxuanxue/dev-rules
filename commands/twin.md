@@ -55,7 +55,7 @@ PYTHONPATH="$DEV_RULES" python3 -m scripts.twin worker-turn --workspace <ws> --i
 
 ### worker git 隔离（默认开）
 
-每个 workspace 的 worker 默认在一个**独立 git worktree**(`<repo-parent>/<repo>-twin-<workspace-id>` sibling 放置，故 go.mod `replace => ../../new-api` 等相对路径天然解析)里运行，由 `scripts/twin/worktree.py` 按 workspace 稳定创建/复用、`templates/worktree-bootstrap.sh` 一键 bootstrap(submodule init + 项目 `scripts/worktree-bootstrap-hook.sh`)、workspace 达 `accepted_done`/`failed` 时清理。目的：worker 不再与交互 session / 其他 worker 共享主 checkout 的单一可变 HEAD，杜绝并行切分支把提交落到错分支的污染。任何创建/bootstrap 失败都**回退到共享 checkout**，绝不弄垮 worker turn。需要关闭(回到旧的共享 checkout 行为)时设 `TWIN_WORKTREE_ISOLATION=0`。
+每个 workspace 的 worker 默认在一个**独立 git worktree**(`<repo-parent>/<repo>-twin-<workspace-id>` sibling 放置，故 go.mod `replace => ../../new-api` 等相对路径天然解析)里运行，由 `scripts/twin/worktree.py` 按 workspace 稳定创建/复用、`templates/worktree-bootstrap.sh` 一键 bootstrap(submodule init + 项目 `scripts/worktree-bootstrap-hook.sh`)、workspace 达 `accepted_done`/`failed` 时清理。目的：worker 不再与交互 session / 其他 worker 共享主 checkout 的单一可变 HEAD，杜绝并行切分支把提交落到错分支的污染。任何创建/bootstrap 失败都**回退到共享 checkout**，绝不弄垮 worker turn。需要关闭(回到旧的共享 checkout 行为)时设 `TWIN_WORKTREE_ISOLATION=0`。这是 `/twin` 内部 harness，不是普通交互式 Agent 的 worktree 入口；非 `/twin` 场景的新建/切换/销毁 worktree 必须走 `$git-worktree-submodule`，并遵守它的 `session-workdir` / `session-check`。
 
 ## workspace 契约
 

@@ -21,6 +21,10 @@
 #
 # Idempotent: safe to re-run on an already-bootstrapped worktree.
 #
+# This is not the public entry point for interactive agents. For normal
+# create/switch/remove workflows use $git-worktree-submodule, which also
+# enforces shared submodule storage and session-workdir verification.
+#
 # Usage: worktree-bootstrap.sh <worktree_dir>
 set -euo pipefail
 
