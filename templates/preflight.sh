@@ -268,10 +268,12 @@ else
 fi
 
 # ---- 检查 10: 公共契约删除必须有显式说明锚点 ----
+# 阶段语义与检查 13 相同：staged 删除并入判定，pre-commit 读不到待提交
+# message，staged-only 删除只 WARN；commit-msg hook 硬拦截。成功路径回显日志。
 section "contract deletion notice"
 if [ -f dev-rules/scripts/check_contract_deletion_notice.py ]; then
     if "$PYTHON_BIN" dev-rules/scripts/check_contract_deletion_notice.py --base "${PREFLIGHT_BASE:-origin/main}" > /tmp/preflight-contract-delete.log 2>&1; then
-        ok "contract deletion notice check passed"
+        cat /tmp/preflight-contract-delete.log | sed 's/^/    /'
     else
         cat /tmp/preflight-contract-delete.log | sed 's/^/    /'
         fail "contract deletion detected without explicit notice token"
@@ -319,10 +321,16 @@ fi
 # ---- 检查 13: 高风险改动必须绑定审批锚点 ----
 # 默认只覆盖通用高风险目录（migrations/schema）；项目可通过
 # .preflight/high-risk-anchor.conf 覆写 [high_risk_paths]/[anchor_paths]/[anchor_tokens]。
+# 阶段语义：staged（--cached）改动始终并入判定，堵住「分支首个 commit 时
+# base...HEAD 为空 → 静默放行」的 pre-commit 盲区。pre-commit 结构上读不到
+# 待提交 message（COMMIT_EDITMSG 此时还是上一条），所以 staged-only 风险改动
+# 只 WARN（exit 0，避免 token-in-message 工作流假死锁）；install-hooks.sh 安装
+# 的 commit-msg hook 以 --commit-msg-file 重跑本检查并硬拦截。成功路径也回显
+# 日志，WARN 才能被看见。
 section "high-risk approval anchor"
 if [ -f dev-rules/scripts/check_high_risk_anchor.py ]; then
     if "$PYTHON_BIN" dev-rules/scripts/check_high_risk_anchor.py --base "${PREFLIGHT_BASE:-origin/main}" > /tmp/preflight-high-risk-anchor.log 2>&1; then
-        ok "high-risk anchor check passed"
+        cat /tmp/preflight-high-risk-anchor.log | sed 's/^/    /'
     else
         cat /tmp/preflight-high-risk-anchor.log | sed 's/^/    /'
         fail "high-risk changes missing approval anchor"

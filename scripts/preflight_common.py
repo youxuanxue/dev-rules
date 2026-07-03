@@ -17,6 +17,72 @@ def changed_paths(base: str) -> list[str]:
     return [line.strip() for line in out.splitlines() if line.strip()]
 
 
+def staged_paths() -> list[str]:
+    """Paths staged in the index — the pre-commit view of the pending commit.
+
+    `git diff --cached` diffs index vs HEAD; inside git hooks GIT_INDEX_FILE
+    points at the temporary index for pathspec/partial commits, so this
+    reflects exactly what is about to be committed. On a branch's first
+    commit `base...HEAD` is empty while this is not — checks that only read
+    the committed range silently pass staged high-risk changes.
+    """
+    out = run_git(["diff", "--cached", "--name-only"])
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+def _deleted_from_name_status(out: str) -> list[str]:
+    paths: list[str] = []
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        if parts and parts[0] == "D" and len(parts) >= 2:
+            paths.append(parts[1])
+    return paths
+
+
+def deleted_paths(base: str) -> list[str]:
+    """Committed deletions (D status) in base...HEAD."""
+    return _deleted_from_name_status(run_git(["diff", "--name-status", f"{base}...HEAD"]))
+
+
+def staged_deleted_paths() -> list[str]:
+    """Staged deletions (D status, index vs HEAD) — same pre-commit blind-spot
+    rationale as staged_paths()."""
+    return _deleted_from_name_status(run_git(["diff", "--cached", "--name-status"]))
+
+
+def merge_in_progress() -> bool:
+    """True while MERGE_HEAD exists. Staged paths are ignored then: merging
+    upstream stages paths whose approval/notice lives in their own history."""
+    res = subprocess.run(
+        ["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return res.returncode == 0
+
+
+_SCISSORS_MARK = "------------------------ >8 ------------------------"
+
+
+def read_pending_message(path: pathlib.Path) -> str:
+    """Read a commit message file (commit-msg hook's $1), truncating at git's
+    scissors line and dropping `#` comment lines — neither survives default
+    --cleanup, so tokens there must not count. Without the scissors cut,
+    `git commit -v` would leak the full diff body (not `#`-prefixed) into the
+    token scan and a token-looking string inside the diff would silently pass
+    the gate."""
+    body: list[str] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("#") and _SCISSORS_MARK in line:
+            break
+        if not line.startswith("#"):
+            body.append(line)
+    return "\n".join(body)
+
+
 def commit_text(base: str, *, fallback_head: bool = False) -> str:
     text = run_git(["log", "--format=%s%n%b", f"{base}..HEAD"])
     if fallback_head and not text.strip():

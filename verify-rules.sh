@@ -181,6 +181,48 @@ else
     fail "gh-pr-guard.py self-test failed"
 fi
 
+section "install-hooks linked worktree self-test"
+if (
+    set -eu
+    tmp="$(mktemp -d)"
+    wt="${tmp}-wt"
+    unset_git_env() {
+        unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_NAMESPACE \
+              GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
+              GIT_COMMON_DIR GIT_PREFIX
+    }
+    git_clean() (
+        unset_git_env
+        git "$@"
+    )
+    cleanup() {
+        git_clean -C "$tmp" worktree remove -f "$wt" >/dev/null 2>&1 || true
+        rm -rf "$tmp" "$wt"
+    }
+    trap cleanup EXIT
+
+    git_clean -C "$tmp" init -q
+    git_clean -C "$tmp" config user.email t@t
+    git_clean -C "$tmp" config user.name t
+    git_clean -C "$tmp" commit --allow-empty -m base >/dev/null
+    git_clean -C "$tmp" worktree add -q --detach "$wt" HEAD
+    ln -s "$SCRIPT_DIR" "$wt/dev-rules"
+
+    cd "$wt"
+    unset_git_env
+    bash dev-rules/templates/install-hooks.sh
+    pre_commit="$(git rev-parse --git-path hooks/pre-commit)"
+    commit_msg="$(git rev-parse --git-path hooks/commit-msg)"
+    test -x "$pre_commit"
+    test -x "$commit_msg"
+    bash -n "$pre_commit" "$commit_msg"
+) > /tmp/dev-rules-install-hooks-worktree.log 2>&1; then
+    ok "install-hooks.sh works from linked worktree"
+else
+    cat /tmp/dev-rules-install-hooks-worktree.log | sed 's/^/    /'
+    fail "install-hooks.sh must install hooks from linked worktrees"
+fi
+
 # ── rule carrier partition anchor ─────────────────────────────────────
 # Prevent the system-level simplification rule from drifting into another
 # prose-only promise. The detailed partition belongs in dev-rules-convention;
