@@ -17,6 +17,19 @@ def changed_paths(base: str) -> list[str]:
     return [line.strip() for line in out.splitlines() if line.strip()]
 
 
+def staged_paths() -> list[str]:
+    """Paths staged in the index — the pre-commit view of the pending commit.
+
+    `git diff --cached` diffs index vs HEAD; inside git hooks GIT_INDEX_FILE
+    points at the temporary index for pathspec/partial commits, so this
+    reflects exactly what is about to be committed. On a branch's first
+    commit `base...HEAD` is empty while this is not — checks that only read
+    the committed range silently pass staged high-risk changes.
+    """
+    out = run_git(["diff", "--cached", "--name-only"])
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
 def commit_text(base: str, *, fallback_head: bool = False) -> str:
     text = run_git(["log", "--format=%s%n%b", f"{base}..HEAD"])
     if fallback_head and not text.strip():
