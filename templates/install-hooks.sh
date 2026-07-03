@@ -21,12 +21,27 @@
 # 用法（在项目根目录）：
 #   bash dev-rules/templates/install-hooks.sh
 #
-# 卸载：rm .git/hooks/pre-commit .git/hooks/commit-msg .git/hooks/pre-push
+# 卸载：
+#   rm "$(git rev-parse --git-path hooks/pre-commit)" \
+#      "$(git rev-parse --git-path hooks/commit-msg)" \
+#      "$(git rev-parse --git-path hooks/pre-push)"
 
 set -e
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
-HOOK="$REPO_ROOT/.git/hooks/pre-commit"
+
+git_hook_path() {
+    local name="$1"
+    local path
+    path="$(git -C "$REPO_ROOT" rev-parse --git-path "hooks/$name")"
+    case "$path" in
+        /*) printf '%s\n' "$path" ;;
+        *) printf '%s\n' "$REPO_ROOT/$path" ;;
+    esac
+}
+
+HOOK="$(git_hook_path pre-commit)"
+mkdir -p "$(dirname "$HOOK")"
 
 PROJECT_PREFLIGHT="$REPO_ROOT/scripts/preflight.sh"
 TEMPLATE_PREFLIGHT="$REPO_ROOT/dev-rules/templates/preflight.sh"
@@ -77,7 +92,7 @@ echo "Installed pre-commit hook → $HOOK"
 echo "  active target: $PREFLIGHT_TARGET preflight (resolved at runtime)"
 
 # --- commit-msg hook (token gates: high-risk anchor + contract deletion notice) ---
-COMMIT_MSG_HOOK="$REPO_ROOT/.git/hooks/commit-msg"
+COMMIT_MSG_HOOK="$(git_hook_path commit-msg)"
 
 if [ -f "$COMMIT_MSG_HOOK" ] && ! grep -q "check_high_risk_anchor" "$COMMIT_MSG_HOOK"; then
     echo ""
@@ -118,7 +133,7 @@ fi
 
 # --- pre-push hook (optional) ---
 PRE_PUSH_SCRIPT="$REPO_ROOT/scripts/pre-push-web-surface.sh"
-PRE_PUSH_HOOK="$REPO_ROOT/.git/hooks/pre-push"
+PRE_PUSH_HOOK="$(git_hook_path pre-push)"
 
 if [ -f "$PRE_PUSH_SCRIPT" ]; then
     if [ -f "$PRE_PUSH_HOOK" ] && ! grep -q "pre-push-web-surface" "$PRE_PUSH_HOOK"; then
