@@ -30,6 +30,48 @@ def staged_paths() -> list[str]:
     return [line.strip() for line in out.splitlines() if line.strip()]
 
 
+def _deleted_from_name_status(out: str) -> list[str]:
+    paths: list[str] = []
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        if parts and parts[0] == "D" and len(parts) >= 2:
+            paths.append(parts[1])
+    return paths
+
+
+def deleted_paths(base: str) -> list[str]:
+    """Committed deletions (D status) in base...HEAD."""
+    return _deleted_from_name_status(run_git(["diff", "--name-status", f"{base}...HEAD"]))
+
+
+def staged_deleted_paths() -> list[str]:
+    """Staged deletions (D status, index vs HEAD) — same pre-commit blind-spot
+    rationale as staged_paths()."""
+    return _deleted_from_name_status(run_git(["diff", "--cached", "--name-status"]))
+
+
+def merge_in_progress() -> bool:
+    """True while MERGE_HEAD exists. Staged paths are ignored then: merging
+    upstream stages paths whose approval/notice lives in their own history."""
+    res = subprocess.run(
+        ["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return res.returncode == 0
+
+
+def read_pending_message(path: pathlib.Path) -> str:
+    """Read a commit message file (commit-msg hook's $1), dropping git's `#`
+    comment lines — they never survive default --cleanup, so tokens there
+    don't count."""
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    return "\n".join(line for line in lines if not line.startswith("#"))
+
+
 def commit_text(base: str, *, fallback_head: bool = False) -> str:
     text = run_git(["log", "--format=%s%n%b", f"{base}..HEAD"])
     if fallback_head and not text.strip():

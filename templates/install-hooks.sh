@@ -10,9 +10,10 @@
 #   2. $REPO_ROOT/dev-rules/templates/preflight.sh  ← dev-rules 模板（通用检查段，见模板文件头）
 #
 # 固定 hook：
-#   commit-msg — 高风险锚点硬门禁。pre-commit 结构上读不到待提交 message
-#   （COMMIT_EDITMSG 此时还是上一条），commit-msg 是本地唯一同时知道
-#   staged paths + message 的阶段，锚点缺失在这里被硬拦截而不是等到 CI。
+#   commit-msg — token 类门禁（高风险锚点、契约删除公告）的硬拦截点。
+#   pre-commit 结构上读不到待提交 message（COMMIT_EDITMSG 此时还是上一条），
+#   commit-msg 是本地唯一同时知道 staged paths + message 的阶段，
+#   token 缺失在这里被硬拦截而不是等到 CI。
 #
 # 可选 hook：
 #   pre-push — 当 $REPO_ROOT/scripts/pre-push-web-surface.sh 存在时自动安装
@@ -75,42 +76,44 @@ chmod +x "$HOOK"
 echo "Installed pre-commit hook → $HOOK"
 echo "  active target: $PREFLIGHT_TARGET preflight (resolved at runtime)"
 
-# --- commit-msg hook (high-risk anchor hard gate) ---
+# --- commit-msg hook (token gates: high-risk anchor + contract deletion notice) ---
 COMMIT_MSG_HOOK="$REPO_ROOT/.git/hooks/commit-msg"
 
 if [ -f "$COMMIT_MSG_HOOK" ] && ! grep -q "check_high_risk_anchor" "$COMMIT_MSG_HOOK"; then
     echo ""
-    echo "WARN: $COMMIT_MSG_HOOK already exists and is not the high-risk-anchor hook."
+    echo "WARN: $COMMIT_MSG_HOOK already exists and is not the dev-rules token-gate hook."
     echo "      Skipping commit-msg installation — inspect it manually."
 else
     cat > "$COMMIT_MSG_HOOK" <<'HOOK_EOF'
 #!/usr/bin/env bash
 #
 # Auto-installed by dev-rules/templates/install-hooks.sh
-# Hard gate for the high-risk approval anchor: commit-msg is the only local
-# stage where BOTH the staged paths and the pending commit message ($1) are
-# known, so the check fails deterministically here. pre-commit runs the same
-# check advisory-only for staged-only findings (it cannot read the message).
-# Resolution order covers consumer projects (dev-rules/ submodule) and the
-# dev-rules source repo itself (scripts/).
+# Hard gate for token-based checks (high-risk approval anchor, contract
+# deletion notice): commit-msg is the only local stage where BOTH the staged
+# paths and the pending commit message ($1) are known, so these checks fail
+# deterministically here. pre-commit runs them advisory-only for staged-only
+# findings (it cannot read the message). Resolution order covers consumer
+# projects (dev-rules/ submodule) and the dev-rules source repo (scripts/).
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
-for CHECK in "$REPO_ROOT/dev-rules/scripts/check_high_risk_anchor.py" \
-             "$REPO_ROOT/scripts/check_high_risk_anchor.py"; do
-    [ -f "$CHECK" ] && break
-done
-if [ ! -f "$CHECK" ]; then
-    exit 0  # check script not vendored here — nothing to enforce (degraded mode)
-fi
 PYTHON_BIN="$(command -v python3 2>/dev/null || command -v python 2>/dev/null)"
 if [ -z "$PYTHON_BIN" ]; then
     echo "commit-msg hook: no python interpreter found, allowing commit (degraded mode)" >&2
     exit 0
 fi
-exec "$PYTHON_BIN" "$CHECK" --base "${PREFLIGHT_BASE:-origin/main}" --commit-msg-file "$1"
+status=0
+for name in check_high_risk_anchor.py check_contract_deletion_notice.py; do
+    CHECK=""
+    for candidate in "$REPO_ROOT/dev-rules/scripts/$name" "$REPO_ROOT/scripts/$name"; do
+        if [ -f "$candidate" ]; then CHECK="$candidate"; break; fi
+    done
+    [ -n "$CHECK" ] || continue  # not vendored here — nothing to enforce
+    "$PYTHON_BIN" "$CHECK" --base "${PREFLIGHT_BASE:-origin/main}" --commit-msg-file "$1" || status=1
+done
+exit $status
 HOOK_EOF
     chmod +x "$COMMIT_MSG_HOOK"
-    echo "Installed commit-msg hook → $COMMIT_MSG_HOOK (high-risk anchor hard gate)"
+    echo "Installed commit-msg hook → $COMMIT_MSG_HOOK (token-gate hard stop: high-risk anchor + contract deletion notice)"
 fi
 
 # --- pre-push hook (optional) ---
