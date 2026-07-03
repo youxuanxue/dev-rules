@@ -205,6 +205,20 @@ def _git_fixture_failures() -> list[str]:
             )
             if verdict != "pass-token":
                 failures.append(f"fixture: commit-msg with token verdict = {verdict}")
+
+            # `git commit -v`: token inside the below-scissors diff body must NOT count.
+            msg.write_text(
+                "refactor: drop schema\n\n"
+                "# ------------------------ >8 ------------------------\n"
+                "+doc line mentioning contract-deletion-notice inside the diff\n",
+                encoding="utf-8",
+            )
+            verdict, _ = evaluate(
+                deleted_paths("HEAD"), staged_deleted_paths(), commit_text("HEAD"),
+                read_pending_message(msg), DEFAULTS,
+            )
+            if verdict != "fail":
+                failures.append(f"fixture: verbose-diff token leaked through scissors, verdict = {verdict}")
     finally:
         os.chdir(cwd)
         os.environ.update(saved)

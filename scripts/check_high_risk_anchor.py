@@ -224,6 +224,20 @@ def _git_fixture_failures() -> list[str]:
             )
             if verdict != "pass-token":
                 failures.append(f"fixture: commit-msg with token verdict = {verdict}")
+
+            # `git commit -v`: the diff body below the scissors line is not
+            # `#`-prefixed — a token inside it must NOT pass the gate.
+            msg.write_text(
+                "feat: db\n\n"
+                "# ------------------------ >8 ------------------------\n"
+                "+doc line mentioning high-risk-anchor inside the diff\n",
+                encoding="utf-8",
+            )
+            verdict, _ = evaluate(
+                changed_paths("HEAD"), staged_paths(), commit_text("HEAD"), read_pending_message(msg), DEFAULTS
+            )
+            if verdict != "fail":
+                failures.append(f"fixture: verbose-diff token leaked through scissors, verdict = {verdict}")
     finally:
         os.chdir(cwd)
         os.environ.update(saved)

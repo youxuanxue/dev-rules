@@ -64,12 +64,23 @@ def merge_in_progress() -> bool:
     return res.returncode == 0
 
 
+_SCISSORS_MARK = "------------------------ >8 ------------------------"
+
+
 def read_pending_message(path: pathlib.Path) -> str:
-    """Read a commit message file (commit-msg hook's $1), dropping git's `#`
-    comment lines — they never survive default --cleanup, so tokens there
-    don't count."""
-    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    return "\n".join(line for line in lines if not line.startswith("#"))
+    """Read a commit message file (commit-msg hook's $1), truncating at git's
+    scissors line and dropping `#` comment lines — neither survives default
+    --cleanup, so tokens there must not count. Without the scissors cut,
+    `git commit -v` would leak the full diff body (not `#`-prefixed) into the
+    token scan and a token-looking string inside the diff would silently pass
+    the gate."""
+    body: list[str] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("#") and _SCISSORS_MARK in line:
+            break
+        if not line.startswith("#"):
+            body.append(line)
+    return "\n".join(body)
 
 
 def commit_text(base: str, *, fallback_head: bool = False) -> str:
