@@ -1,0 +1,275 @@
+#!/usr/bin/env bash
+#
+# wts — create an isolated git worktree (shared-submodule layout) and start an
+# interactive agent session in the current terminal (Cursor Agent CLI / Codex / Claude Code).
+#
+# Canonical source: dev-rules/global/bin/wts (symlinked to ~/.local/bin/wts by sync.sh).
+# Under the hood: git-worktree-submodule/scripts/wtree.py
+#
+# Usage:
+#   wts <slug> [agent|codex|claude|ide]   # create worktree + exec session here (default: agent)
+#   wts open <path-or-slug> [runtime]     # attach session to an existing worktree
+#   wts --iterm <slug> [runtime]          # open a new iTerm window instead
+#
+set -euo pipefail
+
+usage() {
+    cat <<'EOF'
+Usage:
+  wts <slug> [agent|codex|claude|ide]
+      Create an isolated worktree from origin/main and start a session.
+      Default: current terminal + agent --workspace <worktree>.
+
+  wts open <path-or-slug> [agent|codex|claude|ide]
+      Open an existing worktree without creating a new one.
+
+Options:
+  --repo PATH    Superproject path (default: git root from cwd)
+  --iterm        Open a new iTerm window instead of the current terminal
+  --here         Same as default (accepted for compatibility)
+  -h, --help     Show this help
+
+Examples:
+  cd ~/Codes/sub2api && wts prob
+  cd ~/Codes/sub2api && wts prob codex
+  cd ~/Codes/sub2api && wts --iterm prob agent
+  cd ~/Codes/sub2api && wts open prob
+
+Environment:
+  WTREE_SCRIPT / AGENT_BIN / CODEX_BIN / CLAUDE_BIN   Override binaries
+  WTS_HERE=0     Same as --iterm (open iTerm)
+EOF
+}
+
+die() {
+    echo "wts: $*" >&2
+    exit 1
+}
+
+resolve_wtree_script() {
+    if [[ -n "${WTREE_SCRIPT:-}" && -f "$WTREE_SCRIPT" ]]; then
+        echo "$WTREE_SCRIPT"
+        return 0
+    fi
+    local bin_dir candidates candidate
+    bin_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    candidates=(
+        "$bin_dir/../.cursor/skills/git-worktree-submodule/scripts/wtree.py"
+        "$HOME/Codes/dev-rules/.cursor/skills/git-worktree-submodule/scripts/wtree.py"
+        "$HOME/Codes/agent-skills/git-worktree-submodule/scripts/wtree.py"
+    )
+    for candidate in "${candidates[@]}"; do
+        if [[ -f "$candidate" ]]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    die "cannot find wtree.py — run dev-rules/sync.sh or set WTREE_SCRIPT"
+}
+
+resolve_repo() {
+    local repo="${1:-.}"
+    if [[ "$repo" != "." ]]; then
+        repo="$(cd "$repo" && pwd)"
+    elif git rev-parse --show-toplevel >/dev/null 2>&1; then
+        repo="$(git rev-parse --show-toplevel)"
+    else
+        die "not inside a git repository — pass --repo PATH"
+    fi
+    echo "$repo"
+}
+
+worktree_from_json() {
+    python3 -c 'import json,sys; print(json.load(sys.stdin)["worktree"])'
+}
+
+resolve_open_target() {
+    local repo="$1"
+    local raw="$2"
+    local target repo_name candidate
+
+    if [[ -d "$raw" ]]; then
+        echo "$(cd "$raw" && pwd)"
+        return 0
+    fi
+
+    target="$(cd "$(dirname "$raw")" 2>/dev/null && pwd)/$(basename "$raw")" || true
+    if [[ -n "${target:-}" && -d "$target" ]]; then
+        echo "$target"
+        return 0
+    fi
+
+    repo_name="$(basename "$repo")"
+    candidate="$(cd "$repo/.." && pwd)/${repo_name}-wt-${raw}"
+    if [[ -d "$candidate" ]]; then
+        echo "$candidate"
+        return 0
+    fi
+
+    die "open target not found: $raw (tried directory path and ${repo_name}-wt-${raw})"
+}
+
+normalize_runtime() {
+    case "$1" in
+        cursor | agent) echo "agent" ;;
+        ide | cursor-ide) echo "ide" ;;
+        codex | claude) echo "$1" ;;
+        *)
+            die "unknown runtime: $1 (expected agent, codex, claude, or ide)"
+            ;;
+    esac
+}
+
+session_command() {
+    local runtime="$1"
+    local worktree="$2"
+    local -a cmd=()
+
+    case "$runtime" in
+        agent)
+            local agent_bin="${AGENT_BIN:-$(command -v agent 2>/dev/null || echo "$HOME/.local/bin/agent")}"
+            [[ -x "$agent_bin" ]] || die "agent not found in PATH (set AGENT_BIN)"
+            cmd=("$agent_bin" "--workspace" "$worktree")
+            ;;
+        codex)
+            local codex_bin="${CODEX_BIN:-$(command -v codex 2>/dev/null || true)}"
+            [[ -n "$codex_bin" ]] || die "codex not found in PATH (set CODEX_BIN)"
+            cmd=("$codex_bin" "-C" "$worktree")
+            ;;
+        claude)
+            local claude_bin="${CLAUDE_BIN:-$(command -v claude 2>/dev/null || echo "$HOME/.local/bin/claude")}"
+            [[ -x "$claude_bin" ]] || die "claude not found in PATH (set CLAUDE_BIN)"
+            cmd=("$claude_bin")
+            ;;
+        ide)
+            python3 "$WTREE" open-workspace --worktree "$worktree"
+            echo "worktree: $worktree"
+            echo "→ 在新 Cursor IDE 窗口里新开 Agent Chat 继续"
+            return 0
+            ;;
+        *)
+            die "unknown runtime: $runtime"
+            ;;
+    esac
+
+    launch_session "$worktree" "${cmd[@]}"
+}
+
+launch_session() {
+    local worktree="$1"
+    shift
+    local -a cmd=("$@")
+
+    if [[ "${WTS_HERE:-1}" -eq 1 ]] || [[ "$(uname -s)" != "Darwin" ]]; then
+        cd "$worktree" || die "cd failed: $worktree"
+        exec "${cmd[@]}"
+    fi
+
+    if ! osascript -e 'tell application "iTerm" to return version' >/dev/null 2>&1; then
+        die "iTerm is not available — omit --iterm to use the current terminal"
+    fi
+
+    python3 - "$worktree" "${cmd[@]}" <<'PY'
+import shlex
+import subprocess
+import sys
+
+worktree = sys.argv[1]
+cmd = sys.argv[2:]
+inner = f"cd {shlex.quote(worktree)} && exec " + " ".join(shlex.quote(part) for part in cmd)
+inner_esc = inner.replace("\\", "\\\\").replace('"', '\\"')
+script = f'''tell application "iTerm"
+  activate
+  create window with default profile
+  tell current session of current window
+    write text "{inner_esc}"
+  end tell
+end tell'''
+subprocess.run(["osascript", "-e", script], check=True)
+PY
+
+    echo "worktree: $worktree"
+    echo "→ iTerm session: ${cmd[*]}"
+}
+
+create_worktree() {
+    local repo="$1"
+    local slug="$2"
+    python3 "$WTREE" create --repo "$repo" --no-open-workspace --json "$slug" | worktree_from_json
+}
+
+main() {
+    local cmd="create"
+    local repo="."
+    local slug=""
+    local runtime="agent"
+    WTS_HERE="${WTS_HERE:-1}"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h | --help)
+                usage
+                exit 0
+                ;;
+            --repo)
+                [[ $# -ge 2 ]] || die "--repo requires a path"
+                repo="$2"
+                shift 2
+                ;;
+            --iterm)
+                WTS_HERE=0
+                shift
+                ;;
+            --here)
+                WTS_HERE=1
+                shift
+                ;;
+            open)
+                cmd="open"
+                shift
+                ;;
+            create)
+                cmd="create"
+                shift
+                ;;
+            agent | cursor | codex | claude | ide | cursor-ide)
+                runtime="$(normalize_runtime "$1")"
+                shift
+                ;;
+            --)
+                shift
+                break
+                ;;
+            -*)
+                die "unknown option: $1"
+                ;;
+            *)
+                if [[ -z "$slug" ]]; then
+                    slug="$1"
+                else
+                    runtime="$(normalize_runtime "$1")"
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    [[ -n "$slug" ]] || {
+        usage >&2
+        exit 1
+    }
+
+    WTREE="$(resolve_wtree_script)"
+    repo="$(resolve_repo "$repo")"
+
+    local worktree=""
+    if [[ "$cmd" == "open" ]]; then
+        worktree="$(resolve_open_target "$repo" "$slug")"
+    else
+        worktree="$(create_worktree "$repo" "$slug")"
+    fi
+
+    session_command "$runtime" "$worktree"
+}
+
+main "$@"

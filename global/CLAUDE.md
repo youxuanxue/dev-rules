@@ -44,7 +44,7 @@ Agent Skills 只在 `.cursor/skills/` 编辑与提交；`.claude/skills` 只能�
 
 Claude Code 全局 hooks（如 `gh-pr-guard.py`、`skill-reflect.sh`）唯一源在 `dev-rules/global/hooks/`，由 `sync.sh` symlink 到 `~/.claude/hooks/`；`~/.claude/hooks/` 下不得有真实文件——发现非 symlink 必须 mv 到 canonical mirror 后重 sync。settings.json hook 条目按 `~/.claude/hooks/<name>` 路径引用即可（symlink 透明）。
 
-CLI launcher（如 `claude-kiro`、`claude-doubao`：换 token / 后端启动 claude）唯一源在 `dev-rules/global/bin/`，由 `sync.sh` symlink 到 `~/.local/bin/`，同样禁止真实副本。launcher 一律用 `claude --settings <本地文件>` 注入差异配置（settings.json 的 `env` 块会覆盖 shell export，export 模式会静默失效）；secret 只存本机 `~/.claude/*.json`，永不入库。
+CLI launcher（如 `claude-kiro`、`claude-doubao`：换 token / 后端启动 claude；`wts`：建 submodule-safe worktree 并进入 Cursor/Codex/Claude 交互会话）唯一源在 `dev-rules/global/bin/`，由 `sync.sh` symlink 到 `~/.local/bin/`，同样禁止真实副本。token 类 launcher 一律用 `claude --settings <本地文件>` 注入差异配置（settings.json 的 `env` 块会覆盖 shell export，export 模式会静默失效）；secret 只存本机 `~/.claude/*.json`，永不入库。可选 shell 包装见 `global/lib/wts.sh`。
 
 ## 4. Headless 模式
 
