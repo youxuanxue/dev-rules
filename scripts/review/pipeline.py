@@ -299,22 +299,31 @@ def _normalize(description: str) -> str:
     return s.strip(" .,:;。，；：")
 
 
-def _load_findings(path: str) -> list[dict]:
-    """Load a raw/verified findings JSON. Accepts either a bare array or a
-    `{"findings": [...]}` envelope (so a prior subcommand's --json output pipes
-    straight in)."""
-    p = Path(path).expanduser()
-    if not p.exists():
-        raise PipelineError(f"no findings file at {p}")
+def _load_findings(args: argparse.Namespace) -> list[dict]:
+    """Load findings from a file, stdin, or an inline JSON argument."""
+    source = "inline JSON"
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise PipelineError(f"cannot read findings {p}: {exc}") from exc
+        if args.findings_json is not None:
+            text = args.findings_json
+        elif args.findings_file == "-":
+            source = "stdin"
+            text = sys.stdin.read()
+        else:
+            p = Path(args.findings_file).expanduser()
+            source = f"findings file {p}"
+            if not p.exists():
+                raise PipelineError(f"no findings file at {p}")
+            text = p.read_text(encoding="utf-8")
+        data = json.loads(text)
+    except OSError as exc:
+        raise PipelineError(f"cannot read {source}: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise PipelineError(f"invalid JSON from {source}: {exc}") from exc
     if isinstance(data, dict) and "findings" in data:
         data = data["findings"]
     if not isinstance(data, list):
         raise PipelineError(
-            f"findings file {p} must be a JSON array or {{'findings': [...]}}"
+            f"{source} must contain a JSON array or {{'findings': [...]}}"
         )
     return data
 
@@ -372,7 +381,7 @@ def cmd_find(args: argparse.Namespace) -> int:
 
 
 def cmd_adversarial_verify(args: argparse.Namespace) -> int:
-    raw = _load_findings(args.findings)
+    raw = _load_findings(args)
     out = []
     for f in raw:
         flags = []
@@ -396,7 +405,7 @@ SEV = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
 
 def cmd_dedup(args: argparse.Namespace) -> int:
-    findings = _load_findings(args.findings)
+    findings = _load_findings(args)
     # 纯机械:归一化 key 去重 + severity 排序 + 同主题合并(convention §75)
     seen: dict = {}
     merged: list[dict] = []
@@ -441,10 +450,19 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
 
     failures: list[str] = []
 
-    def run_json(argv: list[str], expect_exit: int) -> dict:
+    def run_json(argv: list[str], expect_exit: int, *, stdin: str | None = None) -> dict:
         buf = io.StringIO()
-        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
-            code = main(argv)
+        original_stdin = sys.stdin
+        try:
+            if stdin is not None:
+                sys.stdin = io.StringIO(stdin)
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+                try:
+                    code = main(argv)
+                except SystemExit as exc:
+                    code = int(exc.code)
+        finally:
+            sys.stdin = original_stdin
         try:
             payload = json.loads(buf.getvalue())
         except json.JSONDecodeError:
@@ -483,7 +501,7 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
              "description": "no test for edge case", "human_verdict": {}},
         ]
         ff.write_text(json.dumps(raw), encoding="utf-8")
-        dd = run_json(["dedup", "--findings", str(ff), "--json"], EXIT_OK)
+        dd = run_json(["dedup", "--findings-file", str(ff), "--json"], EXIT_OK)
         fs = dd.get("findings", [])
         if len(fs) != 3:
             failures.append(f"dedup: expected 3 after merge, got {len(fs)}")
@@ -503,6 +521,26 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
         ff.write_text(json.dumps([{"severity": "bogus", "category": "x",
                                     "file": "f", "description": "d"}]), encoding="utf-8")
         run_json(["dedup", "--findings", str(ff), "--json"], EXIT_ERROR)
+
+        # Input contract: inline JSON, stdin, and the compatibility alias all
+        # feed the same parser; argparse rejects ambiguous sources.
+        inline = run_json(
+            ["dedup", "--findings-json", json.dumps(raw), "--json"], EXIT_OK
+        )
+        if inline.get("finding_count") != 3:
+            failures.append("dedup: inline JSON input not loaded")
+        piped = run_json(
+            ["dedup", "--findings-file", "-", "--json"],
+            EXIT_OK,
+            stdin=json.dumps(raw),
+        )
+        if piped.get("finding_count") != 3:
+            failures.append("dedup: stdin input not loaded")
+        run_json(["dedup", "--findings-json", "not-json", "--json"], EXIT_ERROR)
+        run_json(
+            ["dedup", "--findings-file", str(ff), "--findings-json", "[]", "--json"],
+            EXIT_ERROR,
+        )
 
         # — adversarial-verify: both triggers' recall —
         verify_in = [
@@ -550,6 +588,19 @@ def build_parser() -> argparse.ArgumentParser:
     def add_json(p: argparse.ArgumentParser) -> None:
         p.add_argument("--json", action="store_true")
 
+    def add_findings_input(p: argparse.ArgumentParser, noun: str) -> None:
+        group = p.add_mutually_exclusive_group(required=True)
+        group.add_argument(
+            "--findings-file",
+            "--findings",
+            dest="findings_file",
+            help=f"{noun} JSON file, or '-' to read stdin (--findings is a compatibility alias)",
+        )
+        group.add_argument(
+            "--findings-json",
+            help=f"inline {noun} JSON (array or {{findings:[...]}})",
+        )
+
     p_dim = sub.add_parser("dimensions", help="table-lookup the review dimensions for this risk/mode")
     p_dim.add_argument("--scope", default=None, help="git range under review (informational)")
     # No argparse `choices`: cmd_dimensions validates --risk/--mode itself so an
@@ -567,12 +618,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_find.set_defaults(func=cmd_find)
 
     p_av = sub.add_parser("adversarial-verify", help="run the two gate triggers (recall; verdict stays the model's)")
-    p_av.add_argument("--findings", required=True, help="raw findings JSON (array or {findings:[...]})")
+    add_findings_input(p_av, "raw findings")
     add_json(p_av)
     p_av.set_defaults(func=cmd_adversarial_verify)
 
     p_dedup = sub.add_parser("dedup", help="normalize-key dedup + severity sort + R-00x numbering")
-    p_dedup.add_argument("--findings", required=True, help="verified findings JSON (array or {findings:[...]})")
+    add_findings_input(p_dedup, "verified findings")
     add_json(p_dedup)
     p_dedup.set_defaults(func=cmd_dedup)
 
