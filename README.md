@@ -50,7 +50,7 @@
 | `templates/twin-workspace/` | `/twin` workspace 起点模板 |
 | `global/CLAUDE.md` | Claude Code 全局工作宪法 |
 
-Agent 契约变更后运行 `python3 scripts/export_agent_contract.py`，并用 `python3 scripts/export_agent_contract.py --check` 检查漂移；`docs/agent_contract.generated.md` 与 `docs/agent_integration.md` 禁止手工编辑。
+Agent 契约变更后运行 `python3 scripts/export_agent_contract.py`，并用 `python3 scripts/export_agent_contract.py --check` 检查漂移；`docs/agent_integration.md` 禁止手工编辑。
 
 ## 接入与日常使用
 

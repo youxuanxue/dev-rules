@@ -12,7 +12,6 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-GENERATED_PATH = ROOT / "docs" / "agent_contract.generated.md"
 NOTES_PATH = ROOT / "docs" / "agent_contract.notes.md"
 INTEGRATION_PATH = ROOT / "docs" / "agent_integration.md"
 
@@ -153,7 +152,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     generated = render_generated()
     integration = render_integration(generated, NOTES_PATH.read_text(encoding="utf-8"))
-    outputs = ((GENERATED_PATH, generated), (INTEGRATION_PATH, integration))
+    outputs = ((INTEGRATION_PATH, integration),)
     if args.check:
         valid = all([_check(path, text) for path, text in outputs])
         if not valid:

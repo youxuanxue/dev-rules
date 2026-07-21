@@ -11,7 +11,7 @@ from typing import Any
 from urllib.error import URLError
 
 from . import contracts, util
-from .bootstrap import draft_from_files, draft_workspace, write_workspace_draft
+from .bootstrap import draft_from_files, draft_workspace, slugify_goal, write_workspace_draft
 from .claude_runner import ClaudeRunResult
 from .contracts import (
     ACTIVE_WORKSPACE_ENV,
@@ -48,6 +48,8 @@ from .workspace import WorkspaceError, load_plan, load_state, status_summary, wr
 
 
 class FakeRunner:
+    _twin_allow_shared_checkout_for_tests = True
+
     def __init__(
         self,
         *,
@@ -445,6 +447,8 @@ def _runtime_reentry_errors(root: Path) -> list[str]:
 
 def _behavior_helper_errors() -> list[str]:
     errors: list[str] = []
+    if slugify_goal("纯中文目标") != "twin-goal-fc22c137e7":
+        errors.append("Chinese-only goal slugs must be stable across Python processes")
     changed = changed_files_from_status(
         " M docs/agent_integration.md\n"
         " M pyproject.toml\n"

@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -248,7 +248,7 @@ def load_human_response(workspace: Path) -> dict[str, Any] | None:
 def _file_mtime_seconds(path: Path) -> float | None:
     if not path.exists():
         return None
-    return max(0.0, datetime.now(UTC).timestamp() - path.stat().st_mtime)
+    return max(0.0, datetime.now(timezone.utc).timestamp() - path.stat().st_mtime)
 
 
 def _compact_seconds(value: float | None) -> int | None:

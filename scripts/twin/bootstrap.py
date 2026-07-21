@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 from typing import Any
@@ -16,8 +17,8 @@ def slugify_goal(goal: str) -> str:
     words = re.findall(r"[A-Za-z0-9]+", goal.lower())
     if words:
         return "-".join(words[:6])[:48].strip("-") or "twin-goal"
-    digest = abs(hash(goal)) % 100000
-    return f"twin-goal-{digest:05d}"
+    digest = hashlib.sha256(goal.encode("utf-8")).hexdigest()[:10]
+    return f"twin-goal-{digest}"
 
 
 def draft_workspace(goal: str, workspace: Path | None = None) -> dict[str, Any]:

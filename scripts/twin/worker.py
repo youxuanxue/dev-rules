@@ -330,7 +330,13 @@ def start_worker_turn(
     if not instruction:
         raise WorkspaceError("worker-turn requires supervisor-authored --instruction")
     try:
-        work_cwd = worker_cwd(_repo_root(workspace), workspace)
+        work_cwd = worker_cwd(
+            _repo_root(workspace),
+            workspace,
+            allow_shared_checkout_for_tests=bool(
+                getattr(runner, "_twin_allow_shared_checkout_for_tests", False)
+            ),
+        )
     except WorktreeIsolationError as exc:
         raise WorkspaceError(f"worker worktree isolation failed closed: {exc}") from exc
     run_id = f"run-{uuid.uuid4().hex[:10]}"

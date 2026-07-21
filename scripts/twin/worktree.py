@@ -198,9 +198,18 @@ def remove_worktree(repo_root: Path, workspace: Path) -> bool:
     return True
 
 
-def worker_cwd(repo_root: Path, workspace: Path) -> Path:
+def worker_cwd(
+    repo_root: Path,
+    workspace: Path,
+    *,
+    allow_shared_checkout_for_tests: bool = False,
+) -> Path:
     if not isolation_enabled():
-        return repo_root.resolve()
+        if allow_shared_checkout_for_tests:
+            return repo_root.resolve()
+        raise WorktreeIsolationError(
+            "TWIN_WORKTREE_ISOLATION=0 cannot run a writable worker in the shared checkout"
+        )
     return ensure_worktree(repo_root, workspace)
 
 
@@ -222,6 +231,22 @@ def _selftest() -> int:
     for value, expected in [("1", True), ("0", False), ("false", False), ("off", False), ("", True)]:
         os.environ["TWIN_WORKTREE_ISOLATION"] = value
         check(f"isolation_enabled({value!r})", isolation_enabled() == expected)
+    os.environ["TWIN_WORKTREE_ISOLATION"] = "0"
+    try:
+        worker_cwd(Path("/repo"), Path("/workspace"))
+        rejects_writable_shared_checkout = False
+    except WorktreeIsolationError:
+        rejects_writable_shared_checkout = True
+    check("disabled isolation rejects writable workers", rejects_writable_shared_checkout)
+    check(
+        "fixture-only shared checkout bypass is explicit",
+        worker_cwd(
+            Path("/repo"),
+            Path("/workspace"),
+            allow_shared_checkout_for_tests=True,
+        )
+        == Path("/repo"),
+    )
     os.environ.pop("TWIN_WORKTREE_ISOLATION", None)
 
     try:
