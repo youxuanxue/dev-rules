@@ -71,6 +71,19 @@ def validate_plan_semantics(goal: dict[str, Any], plan: dict[str, Any]) -> list[
     if plan.get("goal_id") != goal.get("id"):
         errors.append("plan.goal_id must match goal.id")
 
+    execution = plan.get("execution")
+    if isinstance(execution, dict):
+        backend = execution.get("backend")
+        if backend == "cao":
+            if not str(execution.get("provider") or "").strip():
+                errors.append("plan.execution.provider is required for the cao backend")
+            if not str(execution.get("agent") or "").strip():
+                errors.append("plan.execution.agent is required for the cao backend")
+        elif backend == "claude_headless":
+            for key in ("provider", "agent"):
+                if key in execution:
+                    errors.append(f"plan.execution.{key} is only valid for the cao backend")
+
     known_ac = ac_ids(goal)
     items = plan.get("items", [])
     if not isinstance(items, list):

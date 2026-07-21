@@ -1,6 +1,6 @@
 ---
 approved_by: pending
-status: pending_review
+status: pending
 risk_level: high
 ---
 

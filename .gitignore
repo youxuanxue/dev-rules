@@ -3,6 +3,7 @@
 __pycache__/
 *.pyc
 .reviews/
+.wtree-session.json
 
 # Per-machine project materialization map (git-tracked counterpart is .registered-projects)
 .local-projects

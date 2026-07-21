@@ -6,6 +6,8 @@ $ARGUMENTS
 
 ```text
 /twin "<one-line goal>"
+/twin research "<one-line goal>"
+/twin plan "<one-line goal>" [--research <research.yaml>]
 /twin <workspace>
 /twin status [workspace]
 /twin respond <text>
@@ -21,7 +23,7 @@ $ARGUMENTS
 PYTHONPATH="$DEV_RULES" python3 -m scripts.twin status [--workspace <workspace>] [--json]
 ```
 
-其中 `/twin status <workspace>` 映射为 `status --workspace <workspace>`。禁止读取 `goal.yaml` / `plan.yaml` / `CURRENT.md` / `runs/*` / `reviews/*` 正文，禁止展开证据文件内容，禁止生成额外总结。worker 活性/停滞诊断由 `status_workspace`（`scripts/twin/workspace.py:worker_running_diagnostics`）在 Python 侧确定性算好，作为 `display.worker.{state,note,last_activity_seconds,events_bytes}` 字段随 stdout 返回；status 逐字转发即可，**禁止模型自己从 artifact 的 mtime / 大小重新派生活性**——那是已经机械化的判断，重算只会引入不确定。status 保持只读、不修复状态，是固定短输出，超过 Python stdout 的内容一律不是 status 命令职责。
+其中 `/twin status <workspace>` 映射为 `status --workspace <workspace>`。禁止读取 `research.yaml` / `goal.yaml` / `plan.yaml` / `CURRENT.md` / `runs/*` / `reviews/*` 正文，禁止展开证据文件内容，禁止生成额外总结。worker 活性/停滞诊断由 `status_workspace`（`scripts/twin/workspace.py:worker_running_diagnostics`）在 Python 侧确定性算好，作为 `display.worker.{state,note,last_activity_seconds,events_bytes}` 字段随 stdout 返回；status 逐字转发即可，**禁止模型自己从 artifact 的 mtime / 大小重新派生活性**——那是已经机械化的判断，重算只会引入不确定。status 保持只读、不修复状态，是固定短输出，超过 Python stdout 的内容一律不是 status 命令职责。
 
 如果参数以 `respond` 开头，只执行：
 
@@ -33,7 +35,13 @@ PYTHONPATH="$DEV_RULES" python3 -m scripts.twin respond <text>
 
 ## 主路径
 
-`/twin "<one-line goal>"` 是 bootstrap：当参数不是 `status` / `respond` / 已存在 workspace 路径时，当前 Claude Code supervisor 先按 plan mode 的方式调研 repo facts，并亲自草拟 `goal.yaml + plan.yaml`；然后用 `AskUserQuestion` 请求确认。bootstrap 的 plan 必须在 worker 启动前拆成短交付：多 AC 不得塞进单个 item；每个 item 要写清边界、证据预算、停止/转 review 条件；已知门禁缺口用 `blocked` / `deferred` + `blocked_reason` 表达；最终验收/summary/preflight 项必须依赖前置交付项。确认后调用 `python3 -m scripts.twin bootstrap --workspace <ws> --goal-file <goal.yaml> --plan-file <plan.yaml>` 写入并校验 workspace，再进入执行闭环。`python3 -m scripts.twin scaffold "<goal>" --json` 只作为最小 scaffold fallback，不代表真实 planning。
+`/twin "<one-line goal>"` 是默认 bootstrap。当前 Claude Code supervisor 先判断 repo facts 是否足够：普通目标直接按 plan mode 草拟 `goal.yaml + plan.yaml`；只有跨仓、方向不明、证据面很大或高代价假设较多时，才内部执行下述 research 路径。不要把 research 变成每个任务的必经阶段。
+
+`/twin research "<one-line goal>"` 是可选只读调研入口。supervisor 启动 bounded Dynamic Workflow 做并行调查，只允许 Read / Grep / Glob / WebSearch / WebFetch 等只读动作；禁止编辑代码、创建或切换分支、提交、发布以及外部 mutation。唯一允许的写入是 `.twin/research/<slug>/research.yaml` 研究产物，字段必须包含带来源和置信度的 facts、options、risks、unknowns、recommended_direction，并调用 `python3 -m scripts.twin validate <research.yaml>` 校验。Dynamic Workflow 的规模设置只是建议值，supervisor 必须按问题边界限制 fan-out，并对影响最终范围的关键结论回到原始代码或官方来源二次核验。
+
+`/twin plan "<one-line goal>" --research <research.yaml>` 消费已验证研究产物。research 只提供证据，不直接决定目标；当前 supervisor 负责消歧、取舍、明确 non-goals 和 AC，再亲自草拟 `goal.yaml + plan.yaml`。plan 必须在 worker 启动前拆成短交付：多 AC 不得塞进单个 item；每个 item 要写清边界、证据预算、停止/转 review 条件；已知门禁缺口用 `blocked` / `deferred` + `blocked_reason` 表达；最终验收/summary/preflight 项必须依赖前置交付项。
+
+supervisor 用 `AskUserQuestion` 请求确认 goal、AC、non-goals 和 plan。确认后调用 `python3 -m scripts.twin bootstrap --workspace <ws> --goal-file <goal.yaml> --plan-file <plan.yaml> [--research-file <research.yaml>]` 写入并校验 workspace，再进入执行闭环。`python3 -m scripts.twin scaffold "<goal>" --json` 只作为最小 scaffold fallback，不代表真实 planning。
 
 `/twin <workspace>` 启动或 resume 已准备好的 workspace。进入主路径先调用 `python3 -m scripts.twin next --workspace <ws> --json`，按 artifact state 决定是生成 supervisor instruction、等待 worker、review 当前 run、启动下一轮 worker、询问真人还是结束；不得依赖上一次交互会话的记忆。每轮 supervisor 必须自循环：
 
@@ -55,11 +63,24 @@ PYTHONPATH="$DEV_RULES" python3 -m scripts.twin worker-turn --workspace <ws> --i
 
 ### worker git 隔离（默认开）
 
-每个 workspace 的 worker 默认在一个**独立 git worktree**(`<repo-parent>/<repo>-twin-<workspace-id>` sibling 放置，故 go.mod `replace => ../../new-api` 等相对路径天然解析)里运行，由 `scripts/twin/worktree.py` 按 workspace 稳定创建/复用、`templates/worktree-bootstrap.sh` 一键 bootstrap(submodule init + 项目 `scripts/worktree-bootstrap-hook.sh`)、workspace 达 `accepted_done`/`failed` 时清理。目的：worker 不再与交互 session / 其他 worker 共享主 checkout 的单一可变 HEAD，杜绝并行切分支把提交落到错分支的污染。任何创建/bootstrap 失败都**回退到共享 checkout**，绝不弄垮 worker turn。需要关闭(回到旧的共享 checkout 行为)时设 `TWIN_WORKTREE_ISOLATION=0`。这是 `/twin` 内部 harness，不是普通交互式 Agent 的 worktree 入口；非 `/twin` 场景的新建/切换/销毁 worktree 必须走 `$git-worktree-submodule`，并遵守它的 `session-workdir` / `session-check`。
+每个 workspace 的 worker 默认在一个**独立、带稳定分支的 git worktree** (`<repo-parent>/<repo>-twin-<workspace-id>`) 中运行。`scripts/twin/worktree.py` 只调用 `$git-worktree-submodule` 的 `wtree.py` JSON 契约，以当前已确认 `HEAD` 为 base，复用其 shared-submodule 修复和 `session-check`。创建或校验失败时 worker turn fail closed，不得回退共享 checkout。workspace 到 terminal 状态后只清理没有未保存业务改动的 worktree；有改动则保留。`TWIN_WORKTREE_ISOLATION=0` 仅用于明确的只读调试，禁止用于可写 worker。普通交互式 Agent 仍加载 `$git-worktree-submodule`；人类仍使用 `wts`。
+
+### worker backend
+
+`plan.yaml` 未声明 `execution` 时继续使用 Claude headless。多 provider 通过 CAO 的稳定 HTTP 控制面执行，不从 CAO submodule import 内部模块：
+
+```yaml
+execution:
+  backend: cao
+  provider: codex
+  agent: developer
+```
+
+CAO 地址由 `TWIN_CAO_BASE_URL` 配置，默认 `http://127.0.0.1:9889`；启用 CAO auth 时从本机 `CAO_AUTH_LOCAL_TOKEN` 读取 bearer token，secret 不进入 plan 或 run artifact。CAO 每轮调用 `POST /terminals/run-step`，传入隔离 worktree 的 `working_directory` 并使用 `teardown=true`。`agent` 必须是 `cao profile list` 实际可见的 profile；provider 模型、工具和权限由该 CAO agent profile 管理。CAO `run-step` 当前没有费用预算字段，`--max-budget-usd` / `TWIN_WORKER_MAX_BUDGET_USD` 只适用于 Claude headless，在 CAO backend 下显式设置会 fail closed。
 
 ## workspace 契约
 
-`<workspace>` 必须包含 `goal.yaml` 与 `plan.yaml`。workspace 内禁止出现 `supervisor-persona.md` / `worker-persona.md`；persona 直接读 `$DEV_RULES/personas/*.md`。字段定义见 `docs/twin-design.md`。
+`<workspace>` 必须包含 `goal.yaml` 与 `plan.yaml`，可选包含已验证的 `research.yaml`。workspace 内禁止出现 `supervisor-persona.md` / `worker-persona.md`；persona 直接读 `$DEV_RULES/personas/*.md`。字段定义见 `docs/twin-design.md`。
 
 ## status 展示
 

@@ -259,8 +259,8 @@ fi
 # ── twin worktree isolation self-test ─────────────────────────────────
 # worktree.py runs its assertions when invoked directly (no --self-test
 # flag), so the generic check_*/gen_* loop above does not reach it. Run it
-# explicitly: it exercises deterministic path derivation, the env gate, and
-# real git worktree create/idempotent-reuse/remove against a temp repo.
+# explicitly: it exercises deterministic path/branch derivation, the env gate,
+# shared wtree.py create/reuse, fail-closed resolution, and safe cleanup.
 section "twin worktree isolation self-test"
 if python3 "$SCRIPT_DIR/scripts/twin/worktree.py" > /tmp/dev-rules-twin-worktree.log 2>&1; then
     ok "scripts/twin/worktree.py selftest"

@@ -28,9 +28,11 @@
 | 命令 / 技能 | 用途 |
 | --- | --- |
 | `/xj-review [范围]`（**skill**，三端通用） | 默认对话内精简代码审查；高风险或明确要求时再留 PR comment / 结构化记录。源在 `agent-skills/xj-review/SKILL.md` |
-| `/twin <workspace>|status [workspace]|respond <text>`（命令，Claude-only） | 运行本机 xuejiao persona supervisor，驱动 worker 完成目标工作区 |
+| `/twin`（命令，Claude-only） | xuejiao persona supervisor；live 命令面见 `$DEV_RULES/docs/agent_integration.md` |
 
 任务拆解走 Claude Code 原生 plan mode（默认按风险落到对话 / PR summary / `docs/approved/*`，参见 `rules/product-dev.mdc`）。
+
+Agent-facing CLI 与 artifact 契约以 `docs/agent_integration.md` 为导航入口，由 `scripts/export_agent_contract.py` 从 live code 生成；禁止在 `AGENTS.md` 复制命令清单。
 
 新增命令编辑 `dev-rules/commands/*.md`，运行 `dev-rules/sync.sh` 后立即在所有会话生效（symlink）。
 

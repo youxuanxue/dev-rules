@@ -1,0 +1,28 @@
+name: Agent Contract
+
+on:
+  pull_request:
+    paths:
+      - "commands/**"
+      - "schemas/twin.*.schema.json"
+      - "scripts/twin/**"
+      - "scripts/export_agent_contract.py"
+      - "docs/agent_contract.generated.md"
+      - "docs/agent_integration.md"
+      - "docs/agent_contract.notes.md"
+      - ".github/workflows/*agent-contract*.yml"
+  push:
+    branches: [main]
+    paths:
+      - "commands/**"
+      - "schemas/twin.*.schema.json"
+      - "scripts/twin/**"
+      - "scripts/export_agent_contract.py"
+      - "docs/agent_contract.generated.md"
+      - "docs/agent_integration.md"
+      - "docs/agent_contract.notes.md"
+      - ".github/workflows/*agent-contract*.yml"
+
+jobs:
+  contract:
+    uses: ./.github/workflows/reusable-agent-contract-guard.yml

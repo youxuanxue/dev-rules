@@ -220,7 +220,12 @@ def _cmd_bootstrap(args: argparse.Namespace) -> int:
     try:
         if not args.workspace or not args.goal_file or not args.plan_file:
             raise WorkspaceError("bootstrap requires --workspace, --goal-file, and --plan-file")
-        draft = draft_from_files(Path(args.workspace), Path(args.goal_file), Path(args.plan_file))
+        draft = draft_from_files(
+            Path(args.workspace),
+            Path(args.goal_file),
+            Path(args.plan_file),
+            Path(args.research_file) if args.research_file else None,
+        )
         workspace = remember_active_workspace(write_workspace_draft(draft, overwrite=args.overwrite))
     except WorkspaceError as exc:
         print(str(exc), file=sys.stderr)
@@ -311,6 +316,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_bootstrap.add_argument("--workspace", required=True)
     p_bootstrap.add_argument("--goal-file", required=True)
     p_bootstrap.add_argument("--plan-file", required=True)
+    p_bootstrap.add_argument("--research-file")
     p_bootstrap.add_argument("--overwrite", action="store_true")
     p_bootstrap.add_argument("--json", action="store_true")
     p_bootstrap.set_defaults(func=_cmd_bootstrap)

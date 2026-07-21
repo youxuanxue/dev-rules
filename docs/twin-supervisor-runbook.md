@@ -1,17 +1,17 @@
 # twin supervisor runbook
 
-每轮 supervisor 在当前 Claude Code 交互会话中调用 Python 子命令；用户面只有 `/twin "<goal>"` / `/twin <workspace>` / `/twin status` / `/twin respond`（见 `commands/twin.md`）。Python 只做结构校验和 artifact 应用，事实判断由 supervisor 完成。
+每轮 supervisor 在当前 Claude Code 交互会话中调用 Python 子命令；默认用户面仍是 `/twin "<goal>"`，可选显式使用 `/twin research` / `/twin plan`，运行面是 `/twin <workspace>` / `/twin status` / `/twin respond`（见 `commands/twin.md`）。Python 只做结构校验和 artifact 应用，事实判断由 supervisor 完成。
 
 ## Bootstrap
 
-`/twin "<one-line goal>"` 不是 workspace 路径时，当前 Claude Code supervisor 先按 plan mode 的方式调研 repo facts，并亲自草拟 `goal.yaml + plan.yaml`。Python 不替 supervisor 做规划。
+`/twin "<one-line goal>"` 不是 workspace 路径时，当前 Claude Code supervisor 先判断是否需要并行研究。普通目标直接按 plan mode 调研；跨仓、证据面大或关键方向未知时，可启动只读 Dynamic Workflow 并产出 `research.yaml`。supervisor 对关键结论二次核验后亲自草拟 `goal.yaml + plan.yaml`。Python 不替 supervisor 做规划，Dynamic Workflow 也不拥有最终 YAML。
 
 bootstrap 是防止长跑的主约束面：supervisor 必须先把多 AC 目标拆成多个短交付；每个 item 写清 scope 边界、证据预算、停止/转 review 条件；已知 gate gap 写成 `blocked` / `deferred` + `blocked_reason`；最终验收、summary、preflight 类 item 必须依赖前置交付项。不要把“实现 + 全量迁移 + 浏览器 + preflight + summary”塞给同一个 worker item。
 
 supervisor 用 `AskUserQuestion` 展示 goal、AC、non-goals、plan items，并请求确认；若无法给出上述约束，先问人，不启动 worker。确认后把草稿写到临时文件，再调用：
 
 ```bash
-PYTHONPATH=$DEV_RULES python3 -m scripts.twin bootstrap --workspace <ws> --goal-file <goal.yaml> --plan-file <plan.yaml>
+PYTHONPATH=$DEV_RULES python3 -m scripts.twin bootstrap --workspace <ws> --goal-file <goal.yaml> --plan-file <plan.yaml> [--research-file <research.yaml>]
 ```
 
 这一步只写入并校验 workspace。`python3 -m scripts.twin scaffold "<goal>" --json` 只提供最小 scaffold fallback，用于契约测试或快速起草，不代表真实 planning。
@@ -62,7 +62,7 @@ PYTHONPATH=$DEV_RULES python3 -m scripts.twin supervisor-context --workspace <ws
 PYTHONPATH=$DEV_RULES python3 -m scripts.twin worker-turn --workspace <ws> --instruction "<supervisor-authored>" [--max-budget-usd N] --json
 ```
 
-默认预算 50 USD，可用 `TWIN_WORKER_MAX_BUDGET_USD` 覆盖；超时由 `TWIN_WORKER_TIMEOUT_SECONDS`（默认 10800，3 小时）控制。预算和超时只是安全兜底，不是防止长跑的主设计；主设计是 bootstrap plan item 的边界、证据预算和停止条件。返回 `run` 对象，与 `schemas/twin.run.schema.json` 对齐；`status` 一定是 `review_required` 或 `failed`，绝不是 `accepted_done`。
+默认 `claude_headless` backend 的预算为 50 USD，可用 `TWIN_WORKER_MAX_BUDGET_USD` 覆盖；超时由 `TWIN_WORKER_TIMEOUT_SECONDS` 控制。`plan.yaml.execution.backend: cao` 时，provider 与 agent profile 由 plan 指定，服务地址读 `TWIN_CAO_BASE_URL`，可选 bearer 读本机 `CAO_AUTH_LOCAL_TOKEN`；模型、工具和权限由 CAO profile 管理。CAO `run-step` 当前没有费用预算字段，因此 `--max-budget-usd` / `TWIN_WORKER_MAX_BUDGET_USD` 在 CAO backend 下会被拒绝，不会静默假装生效。返回 `run` 对象，与 `schemas/twin.run.schema.json` 对齐；`worker` 会记录 backend/provider/agent，`status` 一定是 `review_required` 或 `failed`，绝不是 `accepted_done`。
 
 ### `review-context`
 

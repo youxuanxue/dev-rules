@@ -8,6 +8,7 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Any
+from urllib.error import URLError
 
 from . import contracts, util
 from .bootstrap import draft_from_files, draft_workspace, write_workspace_draft
@@ -18,6 +19,8 @@ from .contracts import (
     GOAL_SCHEMA,
     PLAN_SCHEMA,
     PERSONAS_DIR,
+    RESEARCH_FILE,
+    RESEARCH_SCHEMA,
     RUN_SCHEMA,
     SUPERVISOR_REVIEW_SCHEMA,
     SUPERVISOR_STATE_SCHEMA,
@@ -25,6 +28,7 @@ from .contracts import (
 )
 from .loop_harness import run_supervisor_loop_harness
 from .plan import acceptance_evidence, plan_gaps, validate_bootstrap_plan_constraints, validate_plan_semantics
+from .research import load_research
 from .runtime import (
     apply_supervisor_review,
     build_review_context,
@@ -36,9 +40,10 @@ from .runtime import (
     validate_workspace,
 )
 from .schema_contract import validate_artifact, validate_schema
-from .util import read_json, write_json
+from .util import read_json, write_json, write_yaml_like
 from .claude_runner import DEFAULT_WORKER_TIMEOUT_SECONDS, WORKER_TIMEOUT_ENV, default_worker_timeout_seconds, detect_session_lost, is_body_guard_rejection
 from .worker import DEFAULT_WORKER_MAX_BUDGET_USD, assess_run_quality, changed_files_from_status, default_worker_max_budget_usd, should_clear_worker_session
+from .worker_backend import CaoWorkerBackend
 from .workspace import WorkspaceError, load_plan, load_state, status_summary, write_plan, write_state
 
 
@@ -110,6 +115,30 @@ def _goal() -> dict[str, Any]:
         ],
         "non_goals": ["不测试旧命令兼容路径"],
     }
+
+
+def _research() -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "mode": "read_only",
+        "question": "如何交付 fixture 目标？",
+        "facts": [
+            {"claim": "fixture 使用 twin workspace 契约", "source": "scripts/twin/validate.py", "confidence": "high"}
+        ],
+        "options": [
+            {"name": "bounded plan", "summary": "拆成短交付", "tradeoffs": ["需要逐项验收"]}
+        ],
+        "risks": ["研究结论可能过期"],
+        "unknowns": [],
+        "recommended_direction": "由 supervisor 把 repo facts 转成 AC 和 bounded plan。",
+    }
+
+
+def _write_research(root: Path) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    target = root / RESEARCH_FILE
+    write_yaml_like(target, _research())
+    return target
 
 
 def _plan(*, completed: bool = False) -> dict[str, Any]:
@@ -244,6 +273,7 @@ def _schema_errors() -> list[str]:
     for value, schema in [
         (_goal(), GOAL_SCHEMA),
         (_plan(), PLAN_SCHEMA),
+        (_research(), RESEARCH_SCHEMA),
         (_review("continue", actions=["fix_drift", "validate_more", "mark_plan_gap"]), SUPERVISOR_REVIEW_SCHEMA),
     ]:
         errors.extend(validate_schema(value, schema))
@@ -419,6 +449,7 @@ def _behavior_helper_errors() -> list[str]:
         " M docs/agent_integration.md\n"
         " M pyproject.toml\n"
         " M tests/test_entry_runtimes.py\n"
+        "?? .wtree-session.json\n"
         "?? zw_brain/shared/iaf_oidc.py\n"
         "R  old/path.py -> new/path.py\n"
     )
@@ -578,6 +609,118 @@ def _behavior_helper_errors() -> list[str]:
     return errors
 
 
+def _worker_backend_errors(root: Path) -> list[str]:
+    errors: list[str] = []
+    calls: list[tuple[Any, float]] = []
+
+    class FakeResponse:
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps({
+                "terminal_id": "term-fixture",
+                "last_message": "tests: cao fixture pass",
+                "status": "completed",
+            }).encode("utf-8")
+
+    def opener(request: Any, *, timeout: float) -> FakeResponse:
+        calls.append((request, timeout))
+        return FakeResponse()
+
+    backend = CaoWorkerBackend(
+        provider="codex",
+        agent="developer",
+        base_url="http://127.0.0.1:9889",
+        auth_token="fixture-token",
+        opener=opener,
+    )
+    event_path = root / "cao-events.jsonl"
+    result = backend.run_turn(
+        "implement fixture",
+        cwd=root,
+        allowed_tools=["Bash", "Read"],
+        disallowed_tools=[],
+        max_budget_usd=1.0,
+        session_id="ignored-session",
+        timeout_seconds=60,
+        stream_output_path=event_path,
+    )
+    if result.returncode != 0 or result.output_text != "tests: cao fixture pass":
+        errors.append(f"CAO backend should normalize a successful run-step response: {result!r}")
+    if backend.supports_resume or result.session_id != "term-fixture":
+        errors.append("CAO backend should expose the terminal for evidence without persisting resume")
+    if not calls:
+        errors.append("CAO backend should issue one run-step request")
+    else:
+        request, timeout = calls[0]
+        payload = json.loads(request.data.decode("utf-8"))
+        if request.full_url != "http://127.0.0.1:9889/terminals/run-step":
+            errors.append(f"CAO backend used the wrong endpoint: {request.full_url}")
+        if payload.get("provider") != "codex" or payload.get("agent") != "developer":
+            errors.append(f"CAO backend lost provider routing: {payload!r}")
+        if payload.get("working_directory") != str(root) or payload.get("teardown") is not True:
+            errors.append(f"CAO backend should pass isolated cwd and teardown each turn: {payload!r}")
+        if "allowed_tools" in payload:
+            errors.append("CAO backend should let the selected profile resolve CAO tool permissions")
+        if request.get_header("Authorization") != "Bearer fixture-token":
+            errors.append("CAO backend should forward the local bearer token only as a header")
+        if timeout != 90:
+            errors.append(f"CAO backend HTTP timeout should include control-plane grace: {timeout}")
+    if not event_path.exists() or "fixture-token" in event_path.read_text(encoding="utf-8"):
+        errors.append("CAO backend event evidence should exist without leaking the bearer token")
+
+    def failing_opener(_request: Any, *, timeout: float) -> Any:
+        del timeout
+        raise URLError("connection refused")
+
+    failed = CaoWorkerBackend(
+        provider="codex",
+        agent="developer",
+        opener=failing_opener,
+    ).run_turn(
+        "fail fixture",
+        cwd=root,
+        allowed_tools=[],
+        disallowed_tools=[],
+        max_budget_usd=1.0,
+        session_id="",
+        timeout_seconds=1,
+        stream_output_path=root / "failed-events.jsonl",
+    )
+    if failed.returncode == 0 or not failed.session_lost or "unavailable" not in failed.output_text:
+        errors.append(f"CAO transport failure should fail closed with an actionable result: {failed!r}")
+
+    class MalformedResponse(FakeResponse):
+        def read(self) -> bytes:
+            return b'{"terminal_id":"term-fixture","status":"completed"}'
+
+    def malformed_opener(_request: Any, *, timeout: float) -> MalformedResponse:
+        del timeout
+        return MalformedResponse()
+
+    malformed = CaoWorkerBackend(
+        provider="codex",
+        agent="developer",
+        opener=malformed_opener,
+    ).run_turn(
+        "malformed fixture",
+        cwd=root,
+        allowed_tools=[],
+        disallowed_tools=[],
+        max_budget_usd=1.0,
+        session_id="",
+        timeout_seconds=1,
+        stream_output_path=root / "malformed-events.jsonl",
+    )
+    if malformed.returncode == 0 or not malformed.session_lost or "missing: last_message" not in malformed.output_text:
+        errors.append(f"malformed CAO success responses should fail closed: {malformed!r}")
+    return errors
+
+
 def _semantic_errors() -> list[str]:
     errors: list[str] = []
     bad_plan = _plan()
@@ -597,6 +740,26 @@ def _semantic_errors() -> list[str]:
     cyclic["items"][0]["depends_on"] = ["F2"]
     if not validate_plan_semantics(_goal(), cyclic):
         errors.append("dependency cycle should fail")
+    cao_plan = _plan()
+    cao_plan["execution"] = {"backend": "cao", "provider": "codex", "agent": "developer"}
+    if validate_schema(cao_plan, PLAN_SCHEMA) or validate_plan_semantics(_goal(), cao_plan):
+        errors.append("valid CAO execution routing should pass plan contracts")
+    incomplete_cao = _plan()
+    incomplete_cao["execution"] = {"backend": "cao"}
+    if not validate_plan_semantics(_goal(), incomplete_cao):
+        errors.append("CAO execution routing should require provider and agent")
+    claude_plan = _plan()
+    claude_plan["execution"] = {"backend": "claude_headless"}
+    if validate_schema(claude_plan, PLAN_SCHEMA) or validate_plan_semantics(_goal(), claude_plan):
+        errors.append("explicit Claude headless routing should pass plan contracts")
+    ambiguous_claude = _plan()
+    ambiguous_claude["execution"] = {
+        "backend": "claude_headless",
+        "provider": "codex",
+        "agent": "developer",
+    }
+    if not validate_plan_semantics(_goal(), ambiguous_claude):
+        errors.append("Claude headless routing should reject ignored CAO provider fields")
 
     if validate_bootstrap_plan_constraints(_goal(), _plan()):
         errors.append("valid bootstrap plan constraints should pass")
@@ -628,10 +791,26 @@ def _semantic_errors() -> list[str]:
     return errors
 
 
-def run_fixture_validation() -> list[str]:
+def _run_fixture_validation_impl() -> list[str]:
     errors: list[str] = _schema_errors() + _semantic_errors() + _behavior_helper_errors()
     with tempfile.TemporaryDirectory(prefix="twin-greenfield-") as tmp:
         root = Path(tmp)
+        errors.extend(_worker_backend_errors(root))
+        cao_budget_workspace = _write_workspace(root / "cao-budget")
+        cao_budget_plan = load_plan(cao_budget_workspace)
+        cao_budget_plan["execution"] = {"backend": "cao", "provider": "codex", "agent": "developer"}
+        write_plan(cao_budget_workspace, cao_budget_plan)
+        try:
+            start_worker_turn(
+                cao_budget_workspace,
+                "reject unsupported CAO budget",
+                backend=CaoWorkerBackend(provider="codex", agent="developer"),
+                max_budget_usd=1.0,
+            )
+            errors.append("CAO worker turns should reject unsupported explicit cost budgets")
+        except WorkspaceError as exc:
+            if "not supported by the CAO run-step contract" not in str(exc):
+                errors.append(f"CAO budget rejection should be actionable: {exc}")
         bootstrap_draft = draft_workspace("交付 bootstrap fixture", root / "bootstrap-workspace")
         bootstrap_workspace = write_workspace_draft(bootstrap_draft)
         try:
@@ -646,12 +825,24 @@ def run_fixture_validation() -> list[str]:
             root / "supervisor-authored-target",
             authored_source / "goal.yaml",
             authored_source / "plan.yaml",
+            _write_research(root / "supervisor-authored-research"),
         )
         authored_workspace = write_workspace_draft(authored_draft)
         try:
             validate_workspace(authored_workspace)
         except WorkspaceError as exc:
             errors.append(f"supervisor-authored bootstrap artifacts should validate: {exc}")
+        if load_research(authored_workspace / RESEARCH_FILE) != _research():
+            errors.append("bootstrap should preserve the validated research artifact")
+        invalid_research = _research()
+        invalid_research["facts"][0].pop("source")
+        invalid_research_path = root / "invalid-research.yaml"
+        write_yaml_like(invalid_research_path, invalid_research)
+        try:
+            load_research(invalid_research_path)
+            errors.append("research validation should reject facts without provenance")
+        except WorkspaceError:
+            pass
         try:
             write_workspace_draft(authored_draft)
             errors.append("bootstrap should reject existing workspace inputs without overwrite")
@@ -803,6 +994,8 @@ def run_fixture_validation() -> list[str]:
             pass
         run = start_worker_turn(workspace, "推进 plan item F1", runner=runner)
         errors.extend(validate_schema(run, RUN_SCHEMA))
+        if run.get("worker", {}).get("backend") != "claude_headless" or run.get("worker", {}).get("provider") != "claude_code":
+            errors.append("worker run should record backend and provider identity")
         if not run.get("evidence", {}).get("validation"):
             errors.append("worker run should record validation evidence")
         events_text = (workspace / "runs" / run["run_id"] / "events.jsonl").read_text(encoding="utf-8")
@@ -1212,10 +1405,28 @@ def run_fixture_validation() -> list[str]:
     return errors
 
 
+def run_fixture_validation() -> list[str]:
+    original = os.environ.get("TWIN_WORKTREE_ISOLATION")
+    os.environ["TWIN_WORKTREE_ISOLATION"] = "0"
+    try:
+        return _run_fixture_validation_impl()
+    finally:
+        if original is None:
+            os.environ.pop("TWIN_WORKTREE_ISOLATION", None)
+        else:
+            os.environ["TWIN_WORKTREE_ISOLATION"] = original
+
+
 def validate_path(path: Path) -> list[str]:
     if not path:
         return ["path is required unless --fixtures is set"]
     path = path.expanduser().resolve()
+    if path.name == RESEARCH_FILE:
+        try:
+            load_research(path)
+        except WorkspaceError as exc:
+            return [str(exc)]
+        return []
     if path.is_dir() and (path / "goal.yaml").exists():
         try:
             validate_workspace(path)

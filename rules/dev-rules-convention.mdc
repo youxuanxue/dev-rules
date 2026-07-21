@@ -110,7 +110,7 @@ fan-out 使用 `.registered-projects` 与 `.local-projects` 的并集：跨机�
 
 普通交互式 Agent 需要新建、切换、修复或销毁 git worktree 时，必须使用 `$git-worktree-submodule`。尤其仓库含 submodule 时，不手写 `git worktree add` + `git submodule update --init`，不把 submodule 目录做 symlink；`add` / `switch` 后立即按 skill 输出的 `session-workdir` 切换当前 Agent 的 cwd / workdir，并在目标 worktree 内运行 `session-check` 后再读写文件。
 
-`/twin` 的 worker 隔离是例外：它由 `commands/twin.md`、`scripts/twin/worktree.py` 和 `templates/worktree-bootstrap.sh` 作为内部 harness 管理，失败会降级到共享 checkout。不要把 `templates/worktree-bootstrap.sh` 当成通用 worktree 入口；普通会话仍走 `$git-worktree-submodule`。
+`/twin` 的 worker 隔离是程序化调用场景：`scripts/twin/worktree.py` 只消费 `$git-worktree-submodule` 的 `wtree.py` JSON 契约，不另写 worktree/submodule 实现。创建、分支或 `session-check` 不满足契约时必须 fail closed，禁止降级到共享 checkout；`TWIN_WORKTREE_ISOLATION=0` 只允许明确的只读调试。人类仍走 `wts`，普通 Agent 会话仍加载 `$git-worktree-submodule` 并绑定其 `session-workdir`。
 
 ## 编辑与提交规则
 

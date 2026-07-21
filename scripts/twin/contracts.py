@@ -7,6 +7,7 @@ SCHEMA_VERSION = 1
 
 GOAL_SCHEMA = "twin.goal.schema.json"
 PLAN_SCHEMA = "twin.plan.schema.json"
+RESEARCH_SCHEMA = "twin.research.schema.json"
 RUN_SCHEMA = "twin.run.schema.json"
 SUPERVISOR_STATE_SCHEMA = "twin.supervisor_state.schema.json"
 SUPERVISOR_REVIEW_SCHEMA = "twin.supervisor_review.schema.json"
@@ -17,6 +18,7 @@ ITEM_STATUSES = {"pending", "in_progress", "blocked", "completed", "deferred"}
 
 GOAL_FILE = "goal.yaml"
 PLAN_FILE = "plan.yaml"
+RESEARCH_FILE = "research.yaml"
 LEGACY_PLAN_FILES = ("feature_ledger.yaml", "feature_ledger.json")
 SUPERVISOR_PERSONA_FILE = "supervisor-persona.md"
 WORKER_PERSONA_FILE = "worker-persona.md"

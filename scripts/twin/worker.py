@@ -8,12 +8,13 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
-from .claude_runner import ClaudeRunResult, is_body_guard_rejection, run_claude_headless
-from .contracts import DEV_RULES_ROOT, HUMAN_RESPONSE_FILE, PERSONAS_DIR, RUNS_DIR, RUN_SCHEMA, SCHEMA_VERSION, SUPERVISOR_PERSONA_PATH, WORKER_PERSONA_PATH
+from .claude_runner import ClaudeRunResult, default_worker_timeout_seconds, is_body_guard_rejection
+from .contracts import HUMAN_RESPONSE_FILE, PERSONAS_DIR, RUNS_DIR, RUN_SCHEMA, SCHEMA_VERSION, SUPERVISOR_PERSONA_PATH, WORKER_PERSONA_PATH
 from .privacy import PrivacyReport, redact_text, stable_hash
 from .schema_contract import validate_schema
 from .util import now_utc, read_json, write_json
-from .worktree import worker_cwd
+from .worker_backend import WorkerBackend, resolve_worker_backend
+from .worktree import SESSION_STATE_FILE, WorktreeIsolationError, worker_cwd
 from .workspace import (
     WorkspaceError,
     plan_path,
@@ -96,7 +97,10 @@ def _repo_root(workspace: Path) -> Path:
 
 
 def git_status(workspace: Path, root: Path | None = None) -> str:
-    return _run_command(["git", "status", "--short"], root or _repo_root(workspace))
+    return _run_command(
+        ["git", "status", "--short", "--", ".", f":(exclude){SESSION_STATE_FILE}"],
+        root or _repo_root(workspace),
+    )
 
 
 def git_diff_stat(workspace: Path, root: Path | None = None) -> str:
@@ -120,6 +124,8 @@ def changed_files_from_status(status: str) -> list[str]:
         path = text[3:]
         if " -> " in path:
             path = path.split(" -> ", 1)[1]
+        if path == SESSION_STATE_FILE:
+            continue
         if path not in files:
             files.append(path)
     return files
@@ -281,14 +287,28 @@ def start_worker_turn(
     workspace: Path,
     instruction: str = "",
     *,
-    runner: Runner = run_claude_headless,
+    runner: Runner | None = None,
+    backend: WorkerBackend | None = None,
     retry_on_session_lost: bool = True,
     max_budget_usd: float | None = None,
 ) -> dict[str, Any]:
+    budget_override_requested = max_budget_usd is not None or bool(
+        os.environ.get(WORKER_MAX_BUDGET_ENV, "").strip()
+    )
     if max_budget_usd is None:
         max_budget_usd = default_worker_max_budget_usd()
     workspace = workspace.expanduser().resolve()
-    validate_workspace(workspace)
+    _goal, plan = validate_workspace(workspace)
+    try:
+        worker_backend = backend or resolve_worker_backend(plan, runner=runner)
+        timeout_seconds = default_worker_timeout_seconds()
+    except ValueError as exc:
+        raise WorkspaceError(str(exc)) from exc
+    if worker_backend.identity.backend == "cao" and budget_override_requested:
+        raise WorkspaceError(
+            "--max-budget-usd/TWIN_WORKER_MAX_BUDGET_USD is not supported by the CAO run-step contract; "
+            "configure provider cost limits outside twin"
+        )
     state = load_state(workspace)
     if state.get("status") == "needs_human" and state.get("needs_human"):
         raise WorkspaceError("workspace is waiting for human response")
@@ -309,9 +329,15 @@ def start_worker_turn(
     instruction = instruction.strip()
     if not instruction:
         raise WorkspaceError("worker-turn requires supervisor-authored --instruction")
+    try:
+        work_cwd = worker_cwd(_repo_root(workspace), workspace)
+    except WorktreeIsolationError as exc:
+        raise WorkspaceError(f"worker worktree isolation failed closed: {exc}") from exc
     run_id = f"run-{uuid.uuid4().hex[:10]}"
     started_at = now_utc()
-    previous_session_id = str(state.get("worker_session_id") or "")
+    previous_session_id = (
+        str(state.get("worker_session_id") or "") if worker_backend.supports_resume else ""
+    )
     prompt = build_worker_prompt(workspace, instruction)
 
     state["status"] = "worker_running"
@@ -327,27 +353,20 @@ def start_worker_turn(
         "instruction_hash": stable_hash(instruction),
     })
     write_state(workspace, state)
-    # Per-workspace isolated worktree (TWIN_WORKTREE_ISOLATION, default on):
-    # workers no longer share the primary checkout's single mutable HEAD, so a
-    # parallel agent's branch switch can't land this worker's commits on the
-    # wrong branch. Falls back to the shared repo root on any failure. The
-    # pre/post git status used for NO_PROGRESS_DETECTED must observe the SAME
-    # cwd the worker runs in, so thread work_cwd through both.
-    work_cwd = worker_cwd(_repo_root(workspace), workspace)
+    # The pre/post git status used for NO_PROGRESS_DETECTED must observe the
+    # same isolated cwd that the selected backend runs in.
     pre_git_status = git_status(workspace, work_cwd)
     pre_git_diff_stat = git_diff_stat(workspace, work_cwd)
 
     def _invoke(session: str) -> ClaudeRunResult:
-        return runner(
+        return worker_backend.run_turn(
             prompt,
             cwd=work_cwd,
             allowed_tools=WORKER_ALLOWED_TOOLS,
             disallowed_tools=worker_disallowed_tools(),
             max_budget_usd=max_budget_usd,
             session_id=session,
-            permission_mode="bypassPermissions",
-            role="worker",
-            extra_env={"DEV_RULES": str(DEV_RULES_ROOT)},
+            timeout_seconds=timeout_seconds,
             stream_output_path=_events_path(workspace, run_id),
         )
 
@@ -366,7 +385,7 @@ def start_worker_turn(
     first_attempt_body_guard = is_body_guard_rejection(result.output_text, result.raw_events)
     resume_used = bool(previous_session_id)
     worker_session_reset = False
-    if retry_on_session_lost and result.session_lost:
+    if retry_on_session_lost and previous_session_id and result.session_lost:
         result = _reset_session_and_retry_fresh()
         resume_used = False
         worker_session_reset = True
@@ -410,7 +429,11 @@ def start_worker_turn(
     state["round_index"] = int(state.get("round_index") or 0) + 1
     state["current_run_id"] = run_id
     state["status"] = "failed" if result.session_lost else "review_required"
-    state["worker_session_id"] = None if clear_session_after_run else (result.session_id or None)
+    state["worker_session_id"] = (
+        None
+        if clear_session_after_run or not worker_backend.supports_resume
+        else (result.session_id or None)
+    )
     state["next_instruction"] = ""
     write_state(workspace, state)
 
@@ -429,9 +452,12 @@ def start_worker_turn(
         "started_at": started_at,
         "ended_at": now_utc(),
         "worker": {
+            "backend": worker_backend.identity.backend,
+            "provider": worker_backend.identity.provider,
+            "agent": worker_backend.identity.agent,
             "session_hash": stable_hash(result.session_id) if result.session_id else "",
             "resume_used": resume_used,
-            "permission_mode": "bypassPermissions",
+            "permission_mode": worker_backend.identity.permission_mode,
             "returncode": result.returncode,
             "session_lost": result.session_lost,
         },

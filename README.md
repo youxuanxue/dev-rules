@@ -15,9 +15,9 @@
 
 | 命令 | 用法 | 作用 |
 | --- | --- | --- |
-| `commands/twin.md` | `/twin "<goal>"\|<workspace>\|status [workspace]\|respond <text>` | 运行 xuejiao persona supervisor，驱动 Claude Code worker 完成目标 |
+| `commands/twin.md` | `/twin` | 运行 xuejiao persona supervisor；live 命令面见 `docs/agent_integration.md` |
 
-> `/twin` 是 Claude-Code-only 命令（驱动 `claude` CLI worker）。代码审查不再是命令——已重写为三端通用 skill `xj-review`（见下）。
+> `/twin` 是 Claude-Code-only supervisor 命令；worker 默认使用 Claude headless，也可通过 CAO 路由到其他 provider。代码审查不再是命令——已重写为三端通用 skill `xj-review`（见下）。
 
 ## Agent Skills
 
@@ -39,12 +39,18 @@
 | `scripts/preflight.sh` | dev-rules 源仓库自己的提交门禁 |
 | `schemas/review.schema.json` | `/user:xj-review` 输出契约 |
 | `schemas/skill.schema.json` | 跨项目共享的 Skill manifest 规范 |
-| `schemas/twin.*.schema.json` | twin goal、plan、state、review、run 与 human response 契约 |
+| `schemas/twin.*.schema.json` | twin research、goal、plan、state、review、run 与 human response 契约 |
 | `scripts/twin/` | twin supervisor support runtime 与 fixtures |
 | `docs/twin-design.md` | twin 设计单一事实来源 |
 | `docs/twin-supervisor-runbook.md` | supervisor 每轮调用契约 |
+| `docs/twin-cao-operator-guide.md` | CAO/Codex worker 的安装、路由、验证和排障指南 |
+| `docs/twin-universal-command.md` | twin 三端通用 CLI 与 supervisor backend 提案 |
+| `docs/agent-team-playbook.md` | 四层 Agent 团队、七阶段裁剪、能力对比与本轮决策备忘 |
+| `docs/agent_integration.md` | 从 live twin CLI、Claude command surface 与 schemas 生成的 Agent 集成契约 |
 | `templates/twin-workspace/` | `/twin` workspace 起点模板 |
 | `global/CLAUDE.md` | Claude Code 全局工作宪法 |
+
+Agent 契约变更后运行 `python3 scripts/export_agent_contract.py`，并用 `python3 scripts/export_agent_contract.py --check` 检查漂移；`docs/agent_contract.generated.md` 与 `docs/agent_integration.md` 禁止手工编辑。
 
 ## 接入与日常使用
 

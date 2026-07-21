@@ -2,29 +2,34 @@
 
 ## 一句话
 
-`twin` 是运行在 Claude Code 交互模式里的 **xuejiao persona supervisor**：它持有目标、指挥 headless worker 多轮推进、验收证据，并只在真正需要真人判断时停下。
+`twin` 是运行在 Claude Code 交互模式里的 **xuejiao persona supervisor**：它持有目标、通过可插拔 backend 指挥 worker 多轮推进、验收证据，并只在真正需要真人判断时停下。
 
-worker harness 由 dev-rules、项目 `CLAUDE.md`、hooks、preflight、worktree、Claude Code `-p --permission-mode bypassPermissions` 承担；`twin` 不再造 agent 平台。普通 Agent 会话要新建、切换或销毁 worktree 时不复用 twin harness，走 `$git-worktree-submodule`；`twin` 内部 worktree 仍由 `scripts/twin/worktree.py` 管理。
+worker harness 由 dev-rules、项目 `CLAUDE.md`、hooks、preflight、`wtree.py` 与 worker backend 承担；`twin` 不再造 agent 平台。普通 Agent 会话走 `$git-worktree-submodule`，人类走 `wts`；twin 作为程序化调用方也只消费同一个 `wtree.py` 引擎。
 
 ## 核心约束
 
-1. **bootstrap or workspace**：`/twin "<one-line goal>"` 由当前 supervisor 调研并草拟 `goal.yaml + plan.yaml`，Python 只写入和校验；`/twin <workspace>` 直接运行已准备好的 workspace。
+1. **bootstrap or workspace**：`/twin "<one-line goal>"` 由当前 supervisor 判断是否需要可选只读 research，再草拟 `goal.yaml + plan.yaml`；Python 只写入和校验，`/twin <workspace>` 直接运行已准备好的 workspace。
 2. **persona split**：supervisor 使用 `$DEV_RULES/personas/supervisor-persona.md`；worker 只看到 `$DEV_RULES/personas/worker-persona.md`。
 3. **interactive supervisor**：`/twin` 本身就是 supervisor，不另起 supervisor `claude -p`。
-4. **headless worker**：worker 用 Claude Code `-p --permission-mode bypassPermissions` 执行，并可用 `--resume <worker_session_id>` 续跑。
+4. **worker backend**：默认 Claude Code headless 并支持 session resume；可选 CAO `run-step` backend 提供多 provider fresh turn。
 5. **supervisor 验收**：worker stop 不是完成；完成由 supervisor 对照 goal、plan、run evidence、测试、preflight、PR/commit 状态判断。
 6. **single source of truth**：每类事实只有一个权威载体；旧 `feature_ledger.yaml` 是 breaking legacy，不自动迁移。
 
 ## workspace 契约
 
 ```text
+research.yaml # 可选，只读调研事实、来源、置信度与选项
 goal.yaml    # 目标、AC、non-goals
 plan.yaml    # deliverables、AC 覆盖、状态、证据、下一步
 ```
 
+`research.yaml` 不是决策文件。Dynamic Workflow 可以生成它，但最终目标、non-goals、AC 与交付拆分必须由 supervisor 判断。
+
 `goal.yaml` 只放目标和验收；授权和门禁由 Claude Code permissions / settings / hooks / dev-rules / 项目 `CLAUDE.md` 承担。
 
 `plan.yaml` 只引用 AC ID，不重复 AC statement。bootstrap 阶段必须把复杂目标拆成短交付：多 AC 不得只生成单个 item；每个 item 要写清 scope 边界、证据预算、停止/转 review 条件；已知 gate gap 用 `blocked` / `deferred` + `blocked_reason` 表达；最终验收、summary、preflight 类 item 依赖前置交付项。防止长跑优先靠入口 plan 质量，不靠运行期限制 worker 自主性。
+
+`plan.yaml.execution` 是可选的 workspace 级执行路由。缺省为 `claude_headless`；`cao` 必须同时声明 `provider` 与 `agent`。目标与 AC 不得依赖具体 provider 才成立。
 
 目标工作区禁止复制 persona 文件；发现 `supervisor-persona.md` 或 `worker-persona.md` 直接拒绝。
 
@@ -54,6 +59,10 @@ non_goals:
 ```yaml
 schema_version: 1
 goal_id: short-slug
+execution:
+  backend: cao
+  provider: codex
+  agent: developer
 items:
   - id: F1
     deliverable: 一个可验收交付物，不写泛泛任务
@@ -86,11 +95,12 @@ while not terminal:
 
 | 事实 | 权威载体 |
 | --- | --- |
+| 调研事实、来源、置信度与候选方案 | 可选 `research.yaml` |
 | 目标、AC、non-goals | `goal.yaml` |
-| 计划、deliverables、AC 覆盖、状态、实际证据 | `plan.yaml` |
+| 计划、执行路由、deliverables、AC 覆盖、状态、实际证据 | `plan.yaml` |
 | supervisor persona | `$DEV_RULES/personas/supervisor-persona.md` |
 | worker persona | `$DEV_RULES/personas/worker-persona.md` |
-| 当前轮次、next instruction、worker session id、terminal status | `supervisor_state.json` |
+| 当前轮次、next instruction、可续跑 backend session handle、terminal status | `supervisor_state.json` |
 | worker 过程、证据、内联 review | `runs/<run_id>/run.json` / `events.jsonl` |
 | 人类门禁回答 | `human_response.json` |
 | 人类门禁审计 | `workspace_events.jsonl` |
