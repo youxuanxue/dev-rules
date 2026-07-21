@@ -304,9 +304,14 @@ def start_worker_turn(
         timeout_seconds = default_worker_timeout_seconds()
     except ValueError as exc:
         raise WorkspaceError(str(exc)) from exc
-    if worker_backend.identity.backend == "cao" and budget_override_requested:
+    if budget_override_requested and not worker_backend.supports_budget:
+        if worker_backend.identity.backend == "cao":
+            raise WorkspaceError(
+                "--max-budget-usd/TWIN_WORKER_MAX_BUDGET_USD is not supported by the CAO run-step contract; "
+                "configure provider cost limits outside twin"
+            )
         raise WorkspaceError(
-            "--max-budget-usd/TWIN_WORKER_MAX_BUDGET_USD is not supported by the CAO run-step contract; "
+            "--max-budget-usd/TWIN_WORKER_MAX_BUDGET_USD is not supported by the selected worker backend; "
             "configure provider cost limits outside twin"
         )
     state = load_state(workspace)
@@ -445,6 +450,17 @@ def start_worker_turn(
 
     run_dir = _run_dir(workspace, run_id)
     _write_events(workspace, run_id, result.raw_events)
+    worker_identity: dict[str, Any] = {
+        "backend": worker_backend.identity.backend,
+        "provider": worker_backend.identity.provider,
+        "session_hash": stable_hash(result.session_id) if result.session_id else "",
+        "resume_used": resume_used,
+        "permission_mode": worker_backend.identity.permission_mode,
+        "returncode": result.returncode,
+        "session_lost": result.session_lost,
+    }
+    if worker_backend.identity.agent:
+        worker_identity["agent"] = worker_backend.identity.agent
     run = {
         "schema_version": SCHEMA_VERSION,
         "run_id": run_id,
@@ -457,16 +473,7 @@ def start_worker_turn(
         "events_ref": str(_events_path(workspace, run_id)),
         "started_at": started_at,
         "ended_at": now_utc(),
-        "worker": {
-            "backend": worker_backend.identity.backend,
-            "provider": worker_backend.identity.provider,
-            "agent": worker_backend.identity.agent,
-            "session_hash": stable_hash(result.session_id) if result.session_id else "",
-            "resume_used": resume_used,
-            "permission_mode": worker_backend.identity.permission_mode,
-            "returncode": result.returncode,
-            "session_lost": result.session_lost,
-        },
+        "worker": worker_identity,
         "instruction": instruction,
         "evidence": {
             "worker_output": worker_output,

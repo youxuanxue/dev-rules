@@ -10,6 +10,7 @@ from urllib.request import Request, urlopen
 
 from .claude_runner import ClaudeRunResult, run_claude_headless
 from .contracts import DEV_RULES_ROOT
+from .local_cli import local_cli_spec, run_local_cli
 
 
 CAO_BASE_URL_ENV = "TWIN_CAO_BASE_URL"
@@ -28,6 +29,7 @@ class BackendIdentity:
 class WorkerBackend(Protocol):
     identity: BackendIdentity
     supports_resume: bool
+    supports_budget: bool
 
     def run_turn(
         self,
@@ -45,6 +47,7 @@ class WorkerBackend(Protocol):
 
 class ClaudeHeadlessBackend:
     supports_resume = True
+    supports_budget = True
 
     def __init__(self, runner: Callable[..., ClaudeRunResult] = run_claude_headless) -> None:
         self.runner = runner
@@ -86,6 +89,7 @@ class CaoWorkerBackend:
     """Stateless twin turn through CAO's stable run-step HTTP contract."""
 
     supports_resume = False
+    supports_budget = False
 
     def __init__(
         self,
@@ -215,6 +219,81 @@ class CaoWorkerBackend:
             )
 
 
+class LocalCliWorkerBackend:
+    """Run an installed provider CLI directly, without a CAO server."""
+
+    def __init__(
+        self,
+        *,
+        provider: str,
+        claude_runner: Callable[..., ClaudeRunResult] = run_claude_headless,
+        local_runner: Callable[..., ClaudeRunResult] = run_local_cli,
+    ) -> None:
+        spec = local_cli_spec(provider)
+        self.identity = BackendIdentity(
+            backend="local_cli",
+            provider=provider,
+            agent="",
+            permission_mode=spec.permission_mode,
+        )
+        self.supports_resume = spec.supports_resume
+        self.supports_budget = spec.supports_budget
+        self.claude_runner = claude_runner
+        self.local_runner = local_runner
+
+    def run_turn(
+        self,
+        prompt: str,
+        *,
+        cwd: Path,
+        allowed_tools: list[str],
+        disallowed_tools: list[str],
+        max_budget_usd: float,
+        session_id: str,
+        timeout_seconds: int,
+        stream_output_path: Path,
+    ) -> ClaudeRunResult:
+        if self.identity.provider == "claude":
+            return self.claude_runner(
+                prompt,
+                cwd=cwd,
+                allowed_tools=allowed_tools,
+                disallowed_tools=disallowed_tools,
+                max_budget_usd=max_budget_usd,
+                session_id=session_id,
+                timeout_seconds=timeout_seconds,
+                permission_mode=self.identity.permission_mode,
+                role="worker",
+                extra_env={"DEV_RULES": str(DEV_RULES_ROOT)},
+                stream_output_path=stream_output_path,
+            )
+        # Codex and Gemini do not expose Claude's tool allow/deny vocabulary.
+        # Their explicit sandbox/approval modes are part of the adapter command;
+        # the worker persona remains the policy layer for provider-neutral rules.
+        del allowed_tools, disallowed_tools, max_budget_usd
+        result = self.local_runner(
+            self.identity.provider,
+            prompt,
+            cwd=cwd,
+            session_id=session_id,
+            timeout_seconds=timeout_seconds,
+            stream_output_path=stream_output_path,
+            extra_env={"DEV_RULES": str(DEV_RULES_ROOT)},
+        )
+        policy_event = {
+            "type": "local_cli_policy",
+            "provider": self.identity.provider,
+            "permission_mode": self.identity.permission_mode,
+            "tool_filters": "provider_default; twin persona restrictions are prompt-enforced",
+            "budget": "unsupported; explicit twin budget overrides fail closed",
+        }
+        result.raw_events.insert(0, policy_event)
+        stream_output_path.parent.mkdir(parents=True, exist_ok=True)
+        with stream_output_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(policy_event, ensure_ascii=False, sort_keys=True) + "\n")
+        return result
+
+
 def resolve_worker_backend(
     plan: dict[str, Any],
     *,
@@ -228,6 +307,8 @@ def resolve_worker_backend(
     backend = str(execution.get("backend") or "claude_headless")
     if backend == "claude_headless":
         return ClaudeHeadlessBackend()
+    if backend == "local_cli":
+        return LocalCliWorkerBackend(provider=str(execution.get("provider") or ""))
     if backend == "cao":
         return CaoWorkerBackend(
             provider=str(execution.get("provider") or ""),

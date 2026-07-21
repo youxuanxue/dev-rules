@@ -43,7 +43,8 @@ from .schema_contract import validate_artifact, validate_schema
 from .util import read_json, write_json, write_yaml_like
 from .claude_runner import DEFAULT_WORKER_TIMEOUT_SECONDS, WORKER_TIMEOUT_ENV, default_worker_timeout_seconds, detect_session_lost, is_body_guard_rejection
 from .worker import DEFAULT_WORKER_MAX_BUDGET_USD, assess_run_quality, changed_files_from_status, default_worker_max_budget_usd, should_clear_worker_session
-from .worker_backend import CaoWorkerBackend
+from .local_cli import _run_process, build_local_cli_command, parse_local_cli_output
+from .worker_backend import CaoWorkerBackend, LocalCliWorkerBackend
 from .workspace import WorkspaceError, load_plan, load_state, status_summary, write_plan, write_state
 
 
@@ -617,6 +618,98 @@ def _worker_backend_errors(root: Path) -> list[str]:
     errors: list[str] = []
     calls: list[tuple[Any, float]] = []
 
+    codex_command = build_local_cli_command("codex", "fixture prompt", cwd=root)
+    if codex_command[:3] != ["codex", "exec", "--json"] or "--sandbox" not in codex_command:
+        errors.append(f"Codex local CLI command should be explicit and non-interactive: {codex_command!r}")
+    if "--ephemeral" in codex_command or "workspace-write" not in codex_command:
+        errors.append(f"Codex local CLI command should include isolated sandbox controls: {codex_command!r}")
+    resumed_codex = build_local_cli_command("codex", "resume prompt", cwd=root, session_id="thread-1")
+    if resumed_codex[:4] != ["codex", "exec", "resume", "thread-1"] or "--ephemeral" in resumed_codex:
+        errors.append(f"Codex resume command should use exec resume without fresh-session flags: {resumed_codex!r}")
+
+    codex_session, codex_output, codex_events = parse_local_cli_output(
+        "codex",
+        '{"type":"thread.started","thread_id":"thread-1"}\n'
+        '{"type":"item.completed","item":{"type":"agent_message","text":"tests: codex fixture pass"}}\n',
+    )
+    if codex_session != "thread-1" or codex_output != "tests: codex fixture pass" or len(codex_events) != 2:
+        errors.append(f"Codex JSONL should normalize session and assistant output: {codex_session!r}, {codex_output!r}")
+    gemini_session, gemini_output, _ = parse_local_cli_output(
+        "gemini",
+        '{"type":"message","role":"assistant","session_id":"gemini-1","content":"tests: gemini fixture pass"}\n',
+    )
+    if gemini_session != "gemini-1" or gemini_output != "tests: gemini fixture pass":
+        errors.append(f"Gemini JSONL should normalize session and assistant output: {gemini_session!r}, {gemini_output!r}")
+
+    missing = _run_process(
+        ["twin-provider-binary-does-not-exist"],
+        cwd=root,
+        timeout_seconds=1,
+        stream_output_path=root / "missing-cli-events.jsonl",
+        parse=lambda stdout, stderr: parse_local_cli_output("codex", stdout, stderr),
+        session_id="",
+    )
+    if missing.returncode != 127 or "unavailable" not in missing.output_text:
+        errors.append(f"missing local provider should fail closed with an actionable result: {missing!r}")
+
+    malformed_script = root / "fake-malformed-provider.sh"
+    malformed_script.write_text("#!/bin/sh\nprintf '%s\\n' 'not-json'\n", encoding="utf-8")
+    malformed_script.chmod(0o755)
+    malformed = _run_process(
+        [str(malformed_script)],
+        cwd=root,
+        timeout_seconds=1,
+        stream_output_path=root / "malformed-cli-events.jsonl",
+        parse=lambda stdout, stderr: parse_local_cli_output("codex", stdout, stderr),
+        session_id="",
+    )
+    if malformed.returncode != 1 or "not-json" not in malformed.output_text or not any(
+        event.get("type") == "malformed_output" for event in malformed.raw_events
+    ):
+        errors.append(f"malformed local provider output should remain visible and marked: {malformed!r}")
+
+    timeout_script = root / "fake-timeout-provider.sh"
+    timeout_script.write_text("#!/bin/sh\nsleep 2\n", encoding="utf-8")
+    timeout_script.chmod(0o755)
+    timed_out = _run_process(
+        [str(timeout_script)],
+        cwd=root,
+        timeout_seconds=1,
+        stream_output_path=root / "timeout-cli-events.jsonl",
+        parse=lambda stdout, stderr: parse_local_cli_output("codex", stdout, stderr),
+        session_id="",
+    )
+    if timed_out.returncode != 124 or "TIMEOUT after 1s" not in timed_out.output_text:
+        errors.append(f"local provider timeout should return the standard timeout result: {timed_out!r}")
+
+    fake_calls: list[dict[str, Any]] = []
+
+    def fake_local_runner(provider: str, prompt: str, **kwargs: Any) -> ClaudeRunResult:
+        fake_calls.append({"provider": provider, "prompt": prompt, **kwargs})
+        return ClaudeRunResult(
+            session_id="codex-fixture-session",
+            output_text="tests: local cli fixture pass",
+            returncode=0,
+            raw_events=[{"type": "thread.started", "thread_id": "codex-fixture-session"}],
+            cwd=str(root),
+        )
+
+    local_backend = LocalCliWorkerBackend(provider="codex", local_runner=fake_local_runner)
+    local_result = local_backend.run_turn(
+        "local fixture",
+        cwd=root,
+        allowed_tools=["Read"],
+        disallowed_tools=["Write(personas)"],
+        max_budget_usd=1.0,
+        session_id="",
+        timeout_seconds=60,
+        stream_output_path=root / "local-cli-events.jsonl",
+    )
+    if local_backend.identity.backend != "local_cli" or local_backend.identity.provider != "codex":
+        errors.append(f"local backend identity should preserve provider routing: {local_backend.identity!r}")
+    if local_result.returncode != 0 or not fake_calls or fake_calls[0]["provider"] != "codex":
+        errors.append(f"local backend should invoke the selected provider adapter: {local_result!r}")
+
     class FakeResponse:
         def __enter__(self) -> "FakeResponse":
             return self
@@ -764,6 +857,18 @@ def _semantic_errors() -> list[str]:
     }
     if not validate_plan_semantics(_goal(), ambiguous_claude):
         errors.append("Claude headless routing should reject ignored CAO provider fields")
+    local_plan = _plan()
+    local_plan["execution"] = {"backend": "local_cli", "provider": "codex"}
+    if validate_schema(local_plan, PLAN_SCHEMA) or validate_plan_semantics(_goal(), local_plan):
+        errors.append("valid local CLI execution routing should pass plan contracts")
+    invalid_local = _plan()
+    invalid_local["execution"] = {"backend": "local_cli", "provider": "unknown"}
+    if not validate_plan_semantics(_goal(), invalid_local):
+        errors.append("unknown local CLI provider should fail semantic validation")
+    local_with_agent = _plan()
+    local_with_agent["execution"] = {"backend": "local_cli", "provider": "codex", "agent": "developer"}
+    if not validate_plan_semantics(_goal(), local_with_agent):
+        errors.append("local CLI execution should reject CAO-only agent fields")
 
     if validate_bootstrap_plan_constraints(_goal(), _plan()):
         errors.append("valid bootstrap plan constraints should pass")

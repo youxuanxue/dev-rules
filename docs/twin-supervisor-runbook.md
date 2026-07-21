@@ -62,7 +62,7 @@ PYTHONPATH=$DEV_RULES python3 -m scripts.twin supervisor-context --workspace <ws
 PYTHONPATH=$DEV_RULES python3 -m scripts.twin worker-turn --workspace <ws> --instruction "<supervisor-authored>" [--max-budget-usd N] --json
 ```
 
-默认 `claude_headless` backend 的预算为 50 USD，可用 `TWIN_WORKER_MAX_BUDGET_USD` 覆盖；超时由 `TWIN_WORKER_TIMEOUT_SECONDS` 控制。`plan.yaml.execution.backend: cao` 时，provider 与 agent profile 由 plan 指定，服务地址读 `TWIN_CAO_BASE_URL`，可选 bearer 读本机 `CAO_AUTH_LOCAL_TOKEN`；模型、工具和权限由 CAO profile 管理。CAO `run-step` 当前没有费用预算字段，因此 `--max-budget-usd` / `TWIN_WORKER_MAX_BUDGET_USD` 在 CAO backend 下会被拒绝，不会静默假装生效。返回 `run` 对象，与 `schemas/twin.run.schema.json` 对齐；`worker` 会记录 backend/provider/agent，`status` 一定是 `review_required` 或 `failed`，绝不是 `accepted_done`。
+默认 `claude_headless` backend 的预算为 50 USD，可用 `TWIN_WORKER_MAX_BUDGET_USD` 覆盖；超时由 `TWIN_WORKER_TIMEOUT_SECONDS` 控制。`plan.yaml.execution.backend: local_cli` 时，provider 必须是当前机器已安装的 `claude`、`codex` 或 `gemini`，可用性由 `python3 -m scripts.twin doctor --json` 只读报告；Codex/Gemini 不支持 Claude 原生美元预算，显式设置预算会 fail closed。`plan.yaml.execution.backend: cao` 时，provider 与 agent profile 由 plan 指定，服务地址读 `TWIN_CAO_BASE_URL`，可选 bearer 读本机 `CAO_AUTH_LOCAL_TOKEN`；模型、工具和权限由 CAO profile 管理。CAO `run-step` 当前没有费用预算字段，因此预算覆盖在 CAO backend 下同样会被拒绝，不会静默假装生效。返回 `run` 对象，与 `schemas/twin.run.schema.json` 对齐；`worker` 会记录 backend/provider/agent，`status` 一定是 `review_required` 或 `failed`，绝不是 `accepted_done`。
 
 ### `review-context`
 

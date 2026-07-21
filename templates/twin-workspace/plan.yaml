@@ -1,5 +1,10 @@
 schema_version: 1
 goal_id: example-slug
+# Optional execution route. Omit for Claude headless; use local_cli for an
+# installed Claude/Codex/Gemini CLI, or cao for an external CAO control plane.
+# execution:
+#   backend: local_cli
+#   provider: codex
 items:
   - id: F1
     deliverable: 一个可验收的交付物，不写泛泛任务

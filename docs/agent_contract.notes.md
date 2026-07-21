@@ -1,8 +1,8 @@
 # dev-rules Agent Contract Notes
 
 - `/twin` is a Claude-Code-only supervisor command. The Python CLI is its deterministic runtime substrate, not a second user workflow.
-- `plan.yaml.execution` defaults to `claude_headless`. `backend: cao` uses CAO's external `POST /terminals/run-step` contract; CAO provider profiles remain owned by the CAO installation.
-- `plan.yaml.execution.agent` must name a profile returned by `cao profile list`; `developer` is the portable built-in example. CAO permissions are resolved from that profile rather than from Claude-native tool names.
+- `plan.yaml.execution` defaults to `claude_headless`. `backend: local_cli` directly invokes the installed `claude`, `codex`, or `gemini` CLI; `backend: cao` uses CAO's external `POST /terminals/run-step` contract. CAO provider profiles remain owned by the CAO installation.
+- `plan.yaml.execution.agent` is required only for `backend: cao` and must name a profile returned by `cao profile list`; `developer` is the portable built-in example. CAO permissions are resolved from that profile rather than from Claude-native tool names.
 - `TWIN_CAO_BASE_URL` selects the CAO control plane. `CAO_AUTH_LOCAL_TOKEN` is read only for auth-enabled CAO and is never persisted in twin artifacts.
 - `research.yaml` is optional, read-only provenance. The twin supervisor owns final `goal.yaml` and `plan.yaml` decisions.
 - The approved team runtime boundary is `docs/approved/twin-team-runtime-architecture.md`; practical CAO/Codex setup is in `docs/twin-cao-operator-guide.md`.

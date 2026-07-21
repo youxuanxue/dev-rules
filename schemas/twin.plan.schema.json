@@ -13,7 +13,7 @@
       "required": ["backend"],
       "additionalProperties": false,
       "properties": {
-        "backend": { "type": "string", "enum": ["claude_headless", "cao"] },
+        "backend": { "type": "string", "enum": ["claude_headless", "local_cli", "cao"] },
         "provider": { "type": "string", "minLength": 1 },
         "agent": { "type": "string", "minLength": 1 }
       }

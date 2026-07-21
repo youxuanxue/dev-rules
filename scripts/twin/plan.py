@@ -4,6 +4,7 @@ from collections import defaultdict
 from typing import Any
 
 from .contracts import ITEM_STATUSES
+from .local_cli import LOCAL_CLI_PROVIDERS
 
 
 _BOUNDARY_MARKERS = ("只", "仅", "不", "不得", "边界", "范围", "non-goal", "non-goals", "scope")
@@ -79,6 +80,16 @@ def validate_plan_semantics(goal: dict[str, Any], plan: dict[str, Any]) -> list[
                 errors.append("plan.execution.provider is required for the cao backend")
             if not str(execution.get("agent") or "").strip():
                 errors.append("plan.execution.agent is required for the cao backend")
+        elif backend == "local_cli":
+            provider = str(execution.get("provider") or "").strip()
+            if not provider:
+                errors.append("plan.execution.provider is required for the local_cli backend")
+            elif provider not in LOCAL_CLI_PROVIDERS:
+                errors.append(
+                    "plan.execution.provider must be one of: " + ", ".join(LOCAL_CLI_PROVIDERS)
+                )
+            if "agent" in execution:
+                errors.append("plan.execution.agent is only valid for the cao backend")
         elif backend == "claude_headless":
             for key in ("provider", "agent"):
                 if key in execution:

@@ -46,7 +46,7 @@
 执行层只关心“把这一轮做好”：
 
 - 默认 Claude headless，保持现有行为；
-- 需要 Codex、Antigravity 或其他 provider 时，由 CAO `POST /terminals/run-step` 启动 fresh worker；
+- 需要 Codex 或 Gemini 时，优先由 `local_cli` 直接调用当前机器的 provider CLI；需要远程、多 profile 或其他 provider 时再由 CAO `POST /terminals/run-step` 启动 fresh worker；
 - provider、模型、工具和权限归 CAO agent profile；
 - 每个可写 worker 必须在独立 worktree 中运行；
 - worker 提交结果和证据，但没有最终验收权。
@@ -157,7 +157,7 @@ Dynamic Workflow 只读调研
 
 现在有两条不同路径：
 
-1. 已实现：Claude `/twin` 作为 supervisor，通过 CAO 启动一个新的 Codex CLI worker。当前 Codex 会话不会被接管或复用。
+1. 已实现：Claude `/twin` 作为 supervisor，可通过 `local_cli` 直接启动本机 Codex CLI，也可通过 CAO 启动独立 provider worker。当前 Codex 会话不会被接管或复用。
 2. 待实现：把 twin 做成独立 executable 和共享 supervisor skill，让当前 Codex 会话以 host supervisor 身份消费相同 driver protocol。
 
 第二条路线不应复制一份 Codex 专属状态机。目标形态是 Claude、Codex、Antigravity 和 shell 都调用同一个 `twin` CLI；各端适配器只处理宿主交互差异。详细设计见 `docs/twin-universal-command.md`。
@@ -168,7 +168,7 @@ Dynamic Workflow 只读调研
 
 - `research.yaml` schema、校验、bootstrap 和文档；
 - `plan.yaml.execution` worker backend 路由；
-- Claude headless 默认 backend 和 CAO 多 provider backend；
+- Claude headless 默认 backend、主流 provider 的 `local_cli` backend 和 CAO 多 provider backend；
 - CAO URL/token 契约、fresh terminal、teardown 和证据记录；
 - twin 复用 `wtree.py`，worktree 失败 fail closed；
 - live CLI/schema 生成 Agent contract，并由 preflight/CI 检查漂移。

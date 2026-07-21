@@ -19,6 +19,7 @@ from .runtime import (
 )
 from .validate import run_fixture_validation, validate_path
 from .workspace import WorkspaceError, load_active_workspace, remember_active_workspace
+from .local_cli import local_cli_doctor
 
 
 def _print_json(value: object) -> None:
@@ -248,6 +249,18 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    statuses = local_cli_doctor()
+    if args.json:
+        _print_json({"local_cli": statuses})
+        return 0
+    for status in statuses:
+        availability = "installed" if status["available"] else "missing"
+        version = f"; version={status['version']}" if status.get("version") else ""
+        print(f"{status['provider']}: {availability}; executable={status['executable']}{version}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python3 -m scripts.twin")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -325,6 +338,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_validate.add_argument("path", nargs="?", default="")
     p_validate.add_argument("--fixtures", action="store_true")
     p_validate.set_defaults(func=_cmd_validate)
+
+    p_doctor = sub.add_parser("doctor")
+    p_doctor.add_argument("--json", action="store_true")
+    p_doctor.set_defaults(func=_cmd_doctor)
 
     return parser
 

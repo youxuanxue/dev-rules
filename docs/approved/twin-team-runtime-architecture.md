@@ -14,7 +14,7 @@ Build a real Agent team by separating governance, execution, capabilities, and v
 
 - `twin` owns goals, bounded plans, supervisor review, artifact state, and human gates.
 - `wtree.py` is the only worktree implementation. `wts` remains the human wrapper and `git-worktree-submodule` remains the Agent contract.
-- Worker execution is selected through a backend interface. Claude headless remains the default; CAO supplies multi-provider execution through `POST /terminals/run-step`.
+- Worker execution is selected through a backend interface. Claude headless remains the default; `local_cli` directly runs installed Claude/Codex/Gemini CLIs, while CAO supplies remote, profile-managed and long-tail multi-provider execution through `POST /terminals/run-step`.
 - Claude Dynamic Workflow is an optional read-only research accelerator. It produces a sourced `research.yaml`; the twin supervisor remains responsible for the final `goal.yaml` and `plan.yaml`.
 - Skills and MCP tools provide specialist capabilities. Tests, preflight, and independent review remain the evidence-based verification layer.
 
@@ -24,6 +24,7 @@ Build a real Agent team by separating governance, execution, capabilities, and v
 - Automatic cleanup preserves a worktree with unsaved business changes.
 - CAO is consumed through its HTTP contract, not imported as in-process implementation code. A pinned submodule may be added later for bootstrap reproducibility but is not the runtime boundary.
 - CAO worker turns are fresh and request `teardown=true`; cross-turn truth lives in twin artifacts.
+- A local CAO server is not required for the first-party local CLI path. Provider availability is checked read-only by `python3 -m scripts.twin doctor --json`; unsupported provider budget semantics fail closed.
 - Dynamic Workflow may not edit code, branches, commits, external systems, or final planning artifacts during research.
 
 ## User experience

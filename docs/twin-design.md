@@ -11,7 +11,7 @@ worker harness 由 dev-rules、项目 `CLAUDE.md`、hooks、preflight、`wtree.p
 1. **bootstrap or workspace**：`/twin "<one-line goal>"` 由当前 supervisor 判断是否需要可选只读 research，再草拟 `goal.yaml + plan.yaml`；Python 只写入和校验，`/twin <workspace>` 直接运行已准备好的 workspace。
 2. **persona split**：supervisor 使用 `$DEV_RULES/personas/supervisor-persona.md`；worker 只看到 `$DEV_RULES/personas/worker-persona.md`。
 3. **interactive supervisor**：`/twin` 本身就是 supervisor，不另起 supervisor `claude -p`。
-4. **worker backend**：默认 Claude Code headless 并支持 session resume；可选 CAO `run-step` backend 提供多 provider fresh turn。
+4. **worker backend**：默认 Claude Code headless；`local_cli` 直接调用本机 Claude、Codex 或 Gemini；CAO `run-step` 是远程、多 profile 和并发场景的可选 backend。
 5. **supervisor 验收**：worker stop 不是完成；完成由 supervisor 对照 goal、plan、run evidence、测试、preflight、PR/commit 状态判断。
 6. **single source of truth**：每类事实只有一个权威载体；旧 `feature_ledger.yaml` 是 breaking legacy，不自动迁移。
 
@@ -29,7 +29,7 @@ plan.yaml    # deliverables、AC 覆盖、状态、证据、下一步
 
 `plan.yaml` 只引用 AC ID，不重复 AC statement。bootstrap 阶段必须把复杂目标拆成短交付：多 AC 不得只生成单个 item；每个 item 要写清 scope 边界、证据预算、停止/转 review 条件；已知 gate gap 用 `blocked` / `deferred` + `blocked_reason` 表达；最终验收、summary、preflight 类 item 依赖前置交付项。防止长跑优先靠入口 plan 质量，不靠运行期限制 worker 自主性。
 
-`plan.yaml.execution` 是可选的 workspace 级执行路由。缺省为 `claude_headless`；`cao` 必须同时声明 `provider` 与 `agent`。目标与 AC 不得依赖具体 provider 才成立。
+`plan.yaml.execution` 是可选的 workspace 级执行路由。缺省为 `claude_headless`；`local_cli` 必须声明 `provider: claude|codex|gemini`，`cao` 必须同时声明 `provider` 与 `agent`。目标与 AC 不得依赖具体 provider 才成立。
 
 目标工作区禁止复制 persona 文件；发现 `supervisor-persona.md` 或 `worker-persona.md` 直接拒绝。
 

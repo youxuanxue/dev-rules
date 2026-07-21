@@ -17,7 +17,7 @@
 | --- | --- | --- |
 | `commands/twin.md` | `/twin` | 运行 xuejiao persona supervisor；live 命令面见 `docs/agent_integration.md` |
 
-> `/twin` 是 Claude-Code-only supervisor 命令；worker 默认使用 Claude headless，也可通过 CAO 路由到其他 provider。代码审查不再是命令——已重写为三端通用 skill `xj-review`（见下）。
+> `/twin` 是 Claude-Code-only supervisor 命令；worker 默认使用 Claude headless，也可直接路由到本机 `claude` / `codex` / `gemini` CLI，或通过 CAO HTTP 路由到其他 provider。代码审查不再是命令——已重写为三端通用 skill `xj-review`（见下）。
 
 ## Agent Skills
 

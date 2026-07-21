@@ -2,13 +2,13 @@
 
 ## 当前边界
 
-当前 `/twin` supervisor 运行在 Claude Code 交互会话中。worker 默认使用 Claude headless，也可以通过 CAO 启动 Codex、Antigravity 或其他 provider：
+当前 `/twin` supervisor 运行在 Claude Code 交互会话中。worker 默认使用 Claude headless，也可以直接调用本机 `claude` / `codex` / `gemini` CLI；需要远程、多 profile 或其他 CAO provider 时再通过 CAO：
 
 ```text
 Claude /twin supervisor
   -> twin workspace/state engine
-  -> CAO POST /terminals/run-step
-  -> provider CLI worker
+  -> local_cli provider CLI 或 CAO POST /terminals/run-step
+  -> provider worker
   -> twin 隔离 worktree
 ```
 
@@ -18,9 +18,9 @@ CAO 启动的是一个新的 provider CLI 进程，不会接管或复用当前 C
 
 ## 前置条件
 
-1. CAO server 可从 twin 所在机器访问。
-2. 目标 provider CLI 在 CAO server 的 `PATH` 中。
-3. CAO 启动的新 provider 进程可以使用同一用户凭据或 server 环境完成认证。
+1. 直接 CLI 路由：目标 provider CLI 在当前 `PATH` 中，可运行 `python3 -m scripts.twin doctor --json` 检查。
+2. CAO 路由：CAO server 可从 twin 所在机器访问，目标 provider CLI 在 CAO server 的 `PATH` 中。
+3. provider 进程可以使用同一用户凭据或 server 环境完成认证。
 4. CAO terminal backend 的依赖已安装；默认 tmux backend 需要可用的 `tmux`。
 5. `cao profile list` 能看到 plan 将使用的 agent profile。
 
@@ -63,7 +63,15 @@ export CAO_AUTH_LOCAL_TOKEN='<local-token>'
 
 ## 选择 provider 和 profile
 
-在 workspace 的 `plan.yaml` 中声明 worker 路由：
+在 workspace 的 `plan.yaml` 中声明直接 CLI 路由：
+
+```yaml
+execution:
+  backend: local_cli
+  provider: codex
+```
+
+本机 CLI provider 为 `claude`、`codex`、`gemini`。需要 CAO profile 时使用：
 
 ```yaml
 execution:
@@ -94,7 +102,7 @@ CAO agent profile 与 Codex 原生 config profile 不是同一件事：
 CAO 的 Codex provider 在没有可用 `codexProfile` 时可能走非交互 unrestricted 路径。生产 profile 应明确配置非交互 sandbox/approval 策略，并用当前安装的 Codex CLI 单独验证：
 
 ```bash
-codex --profile <name> --sandbox workspace-write --ask-for-approval never
+codex exec --sandbox workspace-write -c 'approval_policy="never"' "Reply exactly CODEX_PROFILE_OK. Do not edit files."
 ```
 
 Codex profile 的存储格式随 CLI 版本演进，必须以本机 `codex --help` 和实际 smoke test 为准，不要只凭旧 CAO 示例假设配置位置。CAO 当前对 Codex 的 allowed-tools 限制主要是 prompt-level；真正的硬边界仍是 Codex sandbox、外部 worktree 和审批门禁。

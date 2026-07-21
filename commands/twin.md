@@ -67,7 +67,23 @@ PYTHONPATH="$DEV_RULES" python3 -m scripts.twin worker-turn --workspace <ws> --i
 
 ### worker backend
 
-`plan.yaml` 未声明 `execution` 时继续使用 Claude headless。多 provider 通过 CAO 的稳定 HTTP 控制面执行，不从 CAO submodule import 内部模块：
+`plan.yaml` 未声明 `execution` 时继续使用 Claude headless。需要直接使用本机已安装的 provider CLI 时选择 `local_cli`；CAO HTTP 仍保留为远程、多 profile 和并发场景，不要求本机启动 CAO server：
+
+```yaml
+execution:
+  backend: local_cli
+  provider: codex # claude | codex | gemini
+```
+
+`local_cli` 运行器直接调用本机 `claude`、`codex` 或 `gemini` 的非交互模式；Codex 使用 `workspace-write` + `approval_policy=never`，Gemini 使用 `approval-mode=yolo`，每轮仍在 twin 隔离 worktree 中运行。Claude 的 `local_cli` provider 复用现有 headless stream/budget/resume 语义。provider 可用性只读诊断：
+
+```bash
+PYTHONPATH="$DEV_RULES" python3 -m scripts.twin doctor --json
+```
+
+直接 CLI 不支持 Claude 原生美元预算的 provider，在显式设置 `--max-budget-usd` 或 `TWIN_WORKER_MAX_BUDGET_USD` 时会 fail closed；不要把未支持的预算语义当作已生效。
+
+CAO backend 继续通过稳定 HTTP 控制面执行，不从 CAO submodule import 内部模块：
 
 ```yaml
 execution:

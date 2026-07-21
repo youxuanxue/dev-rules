@@ -8,7 +8,7 @@ scope: twin universal command and supervisor runtime
 
 ## 一句话
 
-把 `twin` 建成与 Claude、Codex、Antigravity 无关的独立 CLI 和状态协议；各 Agent 端只保留薄适配器，CAO 继续负责多 provider 进程执行，twin 只负责目标、计划、监督、验收和人类门禁。
+把 `twin` 建成与 Claude、Codex、Antigravity 无关的独立 CLI 和状态协议；各 Agent 端只保留薄适配器，`local_cli` 负责当前机器的主流 provider，CAO 负责远程、多 profile 和长尾 provider，twin 只负责目标、计划、监督、验收和人类门禁。
 
 ## 背景
 
