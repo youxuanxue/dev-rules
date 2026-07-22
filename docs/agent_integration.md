@@ -22,19 +22,13 @@ Source: `global/bin/twin` and `scripts/twin/__main__.py::build_parser`.
 | --- | --- | --- |
 | `twin bootstrap` | - | --workspace (required), --goal-file (required), --plan-file (required), --research-file, --overwrite, --json |
 | `twin doctor` | - | --json |
-| `twin next` | - | --workspace (required), --json |
+| `twin handoff` | workspace | --supervisor (required), --json |
 | `twin respond` | text_pos [*] | --workspace, --text |
-| `twin review` | - | --workspace (required), --run-id (required), --review-file (required), --json |
-| `twin review-context` | - | --workspace (required), --run-id (required), --json |
 | `twin run` | workspace | --supervisor (required), --max-budget-usd, --json |
 | `twin scaffold` | goal | --workspace, --json |
 | `twin status` | workspace_pos [?] | --workspace, --json |
 | `twin submit-instruction` | - | --workspace (required), --supervisor (required), --state-revision (required), --action-token (required), --instruction (one required), --instruction-file (one required), --json |
 | `twin submit-review` | - | --workspace (required), --supervisor (required), --state-revision (required), --action-token (required), --run-id (required), --review-json (one required), --review-file (one required), --json |
-| `twin supervisor-context` | - | --workspace (required), --run-id |
-| `twin validate` | path [?] | --fixtures |
-| `twin watch` | - | --workspace (required), --max-wait-seconds, --poll-interval-seconds, --json |
-| `twin worker-turn` | - | --workspace (required), --instruction (required), --max-budget-usd, --json |
 
 ## Twin Artifact Schemas
 
@@ -52,7 +46,8 @@ Source: `global/bin/twin` and `scripts/twin/__main__.py::build_parser`.
 
 - `twin` is the provider-neutral supervisor CLI. Use `twin run <workspace> --supervisor host/codex|host/claude|host/antigravity --json`; Claude `/twin` is a thin adapter over the same action protocol.
 - Host actions are self-describing: `supervisor_instruction` and `review_run` carry bounded context, expected output, a state revision, a one-time token, and the exact stdin submit command. Python owns worker execution and artifact mutation.
-- A workspace binds lazily to its first host route. Stale revisions, duplicate tokens, wrong action/run/workspace, and route drift fail closed. Existing schema-version-1 workspaces remain readable.
+- A workspace binds lazily to its first host route. Transfer ownership only with `twin handoff <workspace> --supervisor host/<provider>` when no action is pending; handoff advances the revision and records an audit event. Stale revisions, duplicate tokens, wrong action/run/workspace, and old routes fail closed.
+- Public and token-bound action commands are exported from explicit live-parser visibility metadata. Internal compatibility commands remain callable but are omitted from public help and this generated contract; route-bound workspaces reject their low-level worker/review mutation paths.
 - `plan.yaml.execution` defaults to `claude_headless`. `backend: local_cli` directly invokes the installed `claude`, `codex`, or `gemini` CLI; `backend: cao` uses CAO's external `POST /terminals/run-step` contract. CAO provider profiles remain owned by the CAO installation.
 - Local Codex fresh/resume turns enforce `workspace-write` plus `approval_policy=never`; local Gemini turns enforce its OS sandbox plus yolo approvals. A provider timeout terminates the spawned process group before the turn is finalized.
 - `plan.yaml.execution.agent` is required only for `backend: cao` and must name a profile returned by `cao profile list`; `developer` is the portable built-in example. CAO permissions are resolved from that profile rather than from Claude-native tool names.

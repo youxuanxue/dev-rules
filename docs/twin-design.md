@@ -15,6 +15,8 @@ worker harness 由 dev-rules、项目 `CLAUDE.md`、hooks、preflight、`wtree.p
 5. **supervisor 验收**：worker stop 不是完成；完成由 supervisor 对照 goal、plan、run evidence、测试、preflight、PR/commit 状态判断。
 6. **single source of truth**：每类事实只有一个权威载体；旧 `feature_ledger.yaml` 是 breaking legacy，不自动迁移。
 
+Supervisor route 首次 `run` 时绑定；不同 host 只能在无 pending action 时通过 `twin handoff` 显式交接。交接持 workspace driver lock、递增 revision 并写审计事件，旧 route/token 继续拒绝。Route-bound workspace 的 worker/review mutation 只能由 driver 的 token-bound 协议触发。
+
 ## workspace 契约
 
 ```text
@@ -126,7 +128,7 @@ worker session memory 只是续跑辅助；事实源始终是 workspace artifact
 
 `CURRENT.md` 和 `twin status` 是人类状态面：从 `goal.yaml`、`plan.yaml`、`supervisor_state.json` 与 run artifact 派生，不驱动状态变化。它们展示可读状态、当前 item、轮次、下一条命令和必要证据路径；`worker_running` 时只用 artifact metadata 派生 compact worker 诊断，不展开日志。机器消费继续使用 `status --json` 的原始字段。
 
-`workspace_events.jsonl` 记录 workspace 级 mutation 审计。`twin respond` 不写回答正文，只记录状态迁移、artifact 引用和回答长度；host instruction submission 也只记录 route、revision、长度和 hash，不记录 instruction 正文。
+`workspace_events.jsonl` 记录 workspace 级 mutation 审计。`twin respond` 不写回答正文，只记录状态迁移、artifact 引用和回答长度；host instruction submission 也只记录 route、revision、长度和 hash，不记录 instruction 正文；`twin handoff` 记录新旧 route 和新旧 revision。
 
 ## review artifact
 

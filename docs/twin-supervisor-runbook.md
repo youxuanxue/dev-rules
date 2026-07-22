@@ -10,6 +10,15 @@ twin run <workspace> --supervisor host/codex --json
 
 Claude 和 Antigravity 分别把 route 换成 `host/claude`、`host/antigravity`。同一 workspace 首次运行后绑定 route；中途静默换宿主会 fail closed。
 
+需要换宿主时，先提交当前 pending action，再显式交接并用新 route 重入：
+
+```bash
+twin handoff <workspace> --supervisor host/claude --json
+twin run <workspace> --supervisor host/claude --json
+```
+
+Pending action 存在时交接会被拒绝。成功交接会递增 state revision 并写 `supervisor_route_handoff` 审计事件；相同 route 重复交接不改状态。
+
 ## 宿主循环
 
 1. 调用 `twin run ... --json`。
@@ -52,9 +61,9 @@ Active workspace 指针按当前项目 cwd 隔离，主路径为 `~/.twin/active
 
 `watch_worker` 是 bounded stop，不杀 worker、不删除 artifact。稍后从 `resume_command` 重入，Python 会根据当前 artifact 判断继续 watch、review 或 recovery。
 
-## 兼容入口
+## 内部兼容入口
 
-`twin next`、`worker-turn`、`review-context`、`review` 等低层命令保留给测试和旧调用方；新 host 不应手工编排它们。`python3 -m scripts.twin` 仍可调用同一 parser，但生成契约和用户文档以 `twin` executable 为主。
+`twin next`、`worker-turn`、`review-context`、`review` 等低层命令只保留给测试和未绑定的旧流程，不出现在公开 help 或生成契约里。Workspace 一旦绑定 route，低层 worker/review mutation 会 fail closed；host 只能走 `run` 返回的 token-bound submit command。
 
 ## 验证
 

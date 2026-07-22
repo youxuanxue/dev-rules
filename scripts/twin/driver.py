@@ -17,7 +17,14 @@ from .runtime import continuation_action
 from .supervisor_review import apply_supervisor_review, build_review_context, build_supervisor_context
 from .util import now_utc
 from .worker import start_worker_turn
-from .workspace import WorkspaceError, append_workspace_event, load_state, render_current, validate_workspace, write_state
+from .workspace import (
+    WorkspaceError,
+    append_workspace_event,
+    load_state,
+    render_current,
+    validate_workspace,
+    write_state,
+)
 
 
 DRIVER_PROTOCOL_VERSION = 1
@@ -220,6 +227,60 @@ def _bind_route(workspace: Path, state: dict[str, Any], route: str) -> dict[str,
     return state
 
 
+def handoff_supervisor_route(
+    workspace: Path | str,
+    supervisor_route: str,
+) -> dict[str, Any]:
+    workspace_path = Path(workspace).expanduser().resolve()
+    route = _resolve_route(supervisor_route)
+    with workspace_driver_lock(workspace_path):
+        goal, plan = validate_workspace(workspace_path)
+        state = load_state(workspace_path)
+        pending = state.get("pending_action")
+        if isinstance(pending, dict):
+            raise WorkspaceError(
+                "supervisor handoff requires no pending action; finish or submit "
+                f"the pending {pending.get('kind')!r} first"
+            )
+        previous_route = state.get("supervisor_route")
+        if previous_route == route:
+            return {
+                "driver_protocol_version": DRIVER_PROTOCOL_VERSION,
+                "action": "supervisor_route_unchanged",
+                "workspace": str(workspace_path),
+                "previous_supervisor_route": previous_route,
+                "supervisor_route": route,
+                "state_revision": state.get("state_revision"),
+            }
+
+        previous_revision = int(state.get("state_revision") or 0)
+        state["supervisor_route"] = route
+        write_state(workspace_path, state)
+        stored = load_state(workspace_path)
+        render_current(workspace_path, goal, plan, stored)
+        append_workspace_event(
+            workspace_path,
+            {
+                "event": "supervisor_route_handoff",
+                "previous_supervisor_route": previous_route,
+                "supervisor_route": route,
+                "previous_state_revision": previous_revision,
+                "stored_state_revision": stored.get("state_revision"),
+            },
+        )
+        return {
+            "driver_protocol_version": DRIVER_PROTOCOL_VERSION,
+            "action": "supervisor_route_handoff",
+            "workspace": str(workspace_path),
+            "previous_supervisor_route": previous_route,
+            "supervisor_route": route,
+            "state_revision": stored.get("state_revision"),
+            "next_command": shlex.join(
+                ["twin", "run", str(workspace_path), "--supervisor", route, "--json"]
+            ),
+        }
+
+
 def _issue_pending_action(
     workspace: Path,
     state: dict[str, Any],
@@ -299,7 +360,12 @@ def run_driver(
                 instruction = str(action.get("next_instruction") or "").strip()
                 if not instruction:
                     raise WorkspaceError(f"{kind} requires a persisted next_instruction")
-                worker_turn_fn(workspace_path, instruction, max_budget_usd=max_budget_usd)
+                worker_turn_fn(
+                    workspace_path,
+                    instruction,
+                    max_budget_usd=max_budget_usd,
+                    driver_authorized=True,
+                )
                 continue
             if kind in {"watch_worker", "ask_human", "done", "failed"}:
                 return _non_judgment_payload(workspace_path, state, route, action)

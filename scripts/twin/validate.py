@@ -29,7 +29,13 @@ from .contracts import (
     WORKER_PERSONA_PATH,
 )
 from .loop_harness import run_supervisor_loop_harness
-from .driver import run_driver, submit_instruction, submit_review, workspace_driver_lock
+from .driver import (
+    handoff_supervisor_route,
+    run_driver,
+    submit_instruction,
+    submit_review,
+    workspace_driver_lock,
+)
 from .plan import acceptance_evidence, plan_gaps, validate_bootstrap_plan_constraints, validate_plan_semantics
 from .research import load_research
 from .runtime import (
@@ -471,7 +477,12 @@ def _driver_protocol_errors(root: Path) -> list[str]:
     runner = FakeRunner()
 
     def fake_worker_turn(workspace: Path, instruction: str, **_kwargs: Any) -> dict[str, Any]:
-        return start_worker_turn(workspace, instruction, runner=runner)
+        return start_worker_turn(
+            workspace,
+            instruction,
+            runner=runner,
+            driver_authorized=bool(_kwargs.get("driver_authorized")),
+        )
 
     legacy = _write_workspace(root / "driver-legacy")
     legacy_state = load_state(legacy)
@@ -567,6 +578,66 @@ def _driver_protocol_errors(root: Path) -> list[str]:
     except WorkspaceError:
         pass
 
+    handoff_workspace = _write_workspace(root / "driver-handoff")
+    handoff_action = run_driver(handoff_workspace, "host/codex", worker_turn_fn=fake_worker_turn)
+    try:
+        handoff_supervisor_route(handoff_workspace, "host/claude")
+        errors.append("supervisor handoff must reject a workspace with a pending action")
+    except WorkspaceError:
+        pass
+    submit_instruction(
+        handoff_workspace,
+        "host/codex",
+        state_revision=int(handoff_action["state_revision"]),
+        action_token=str(handoff_action["action_token"]),
+        instruction="prepare handoff fixture",
+    )
+    before_handoff = load_state(handoff_workspace)
+    try:
+        start_worker_turn(handoff_workspace, "bypass route-bound driver", runner=runner)
+        errors.append("route-bound worker-turn must fail closed without driver authorization")
+    except WorkspaceError:
+        pass
+    handed_off = handoff_supervisor_route(handoff_workspace, "host/claude")
+    handed_off_state = load_state(handoff_workspace)
+    if handed_off.get("action") != "supervisor_route_handoff":
+        errors.append(f"explicit supervisor handoff should report the transition: {handed_off!r}")
+    if handed_off_state.get("supervisor_route") != "host/claude":
+        errors.append("explicit supervisor handoff should persist the new route")
+    if int(handed_off_state.get("state_revision") or 0) <= int(before_handoff.get("state_revision") or 0):
+        errors.append("explicit supervisor handoff should advance the state revision")
+    handoff_events = (handoff_workspace / "workspace_events.jsonl").read_text(encoding="utf-8")
+    if '"event": "supervisor_route_handoff"' not in handoff_events:
+        errors.append("explicit supervisor handoff should append an audit event")
+    unchanged = handoff_supervisor_route(handoff_workspace, "host/claude")
+    if unchanged.get("action") != "supervisor_route_unchanged":
+        errors.append("same-route supervisor handoff should be idempotent")
+    if load_state(handoff_workspace).get("state_revision") != handed_off_state.get("state_revision"):
+        errors.append("same-route supervisor handoff should not advance the revision")
+    try:
+        run_driver(handoff_workspace, "host/codex", worker_turn_fn=fake_worker_turn)
+        errors.append("the previous supervisor route must be rejected after handoff")
+    except WorkspaceError:
+        pass
+    try:
+        submit_instruction(
+            handoff_workspace,
+            "host/codex",
+            state_revision=int(handoff_action["state_revision"]),
+            action_token=str(handoff_action["action_token"]),
+            instruction="stale route and token",
+        )
+        errors.append("the previous supervisor route and token must stay invalid after handoff")
+    except WorkspaceError:
+        pass
+    post_handoff_review = run_driver(
+        handoff_workspace,
+        "host/claude",
+        worker_turn_fn=fake_worker_turn,
+    )
+    if post_handoff_review.get("action") != "review_run":
+        errors.append("the new supervisor route should resume the existing workspace")
+
     submitted = submit_instruction(
         legacy,
         "host/codex",
@@ -637,6 +708,11 @@ def _driver_protocol_errors(root: Path) -> list[str]:
         run_id=run_id,
         review=_review("continue"),
     )
+    try:
+        apply_supervisor_review(legacy, run_id, _review("continue"))
+        errors.append("route-bound low-level review must fail closed without a pending action")
+    except WorkspaceError:
+        pass
     try:
         submit_review(
             legacy,
@@ -738,6 +814,40 @@ def _driver_protocol_errors(root: Path) -> list[str]:
     )
     if launcher_result.returncode != 0 or str(needs_workspace) not in launcher_result.stdout:
         errors.append(f"real twin launcher smoke failed: {launcher_result.stderr.strip()}")
+    help_result = subprocess.run(
+        [str(launcher), "--help"],
+        cwd=Path(__file__).resolve().parents[2],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=launcher_env,
+    )
+    help_lines = help_result.stdout.splitlines()
+    for visible_command in ("run", "handoff", "status", "respond", "submit-instruction"):
+        if not any(line.startswith(f"    {visible_command}") for line in help_lines):
+            errors.append(f"twin help should expose {visible_command!r}")
+    for internal_command in ("next", "watch", "supervisor-context", "worker-turn", "review-context", "validate"):
+        if any(line.startswith(f"    {internal_command}") for line in help_lines):
+            errors.append(f"twin help must hide internal command {internal_command!r}")
+    from scripts.export_agent_contract import _twin_cli_rows
+
+    contract_commands = {row[0] for row in _twin_cli_rows()}
+    expected_contract_commands = {
+        "twin bootstrap",
+        "twin doctor",
+        "twin handoff",
+        "twin respond",
+        "twin run",
+        "twin scaffold",
+        "twin status",
+        "twin submit-instruction",
+        "twin submit-review",
+    }
+    if contract_commands != expected_contract_commands:
+        errors.append(
+            "generated Agent contract command surface drifted: "
+            f"expected={sorted(expected_contract_commands)!r} actual={sorted(contract_commands)!r}"
+        )
     return errors
 
 

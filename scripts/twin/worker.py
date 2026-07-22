@@ -291,6 +291,7 @@ def start_worker_turn(
     backend: WorkerBackend | None = None,
     retry_on_session_lost: bool = True,
     max_budget_usd: float | None = None,
+    driver_authorized: bool = False,
 ) -> dict[str, Any]:
     budget_override_requested = max_budget_usd is not None or bool(
         os.environ.get(WORKER_MAX_BUDGET_ENV, "").strip()
@@ -315,6 +316,10 @@ def start_worker_turn(
             "configure provider cost limits outside twin"
         )
     state = load_state(workspace)
+    if state.get("supervisor_route") is not None and not driver_authorized:
+        raise WorkspaceError(
+            "route-bound workspaces must start worker turns through twin run"
+        )
     if state.get("pending_action") is not None:
         raise WorkspaceError(
             "workspace has a pending supervisor action; submit it through twin submit-instruction or submit-review"

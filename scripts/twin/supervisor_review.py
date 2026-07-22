@@ -142,6 +142,10 @@ def apply_supervisor_review(
     goal = load_goal(workspace)
     plan = load_plan(workspace)
     state = load_state(workspace)
+    if state.get("supervisor_route") is not None and not clear_pending_action:
+        raise WorkspaceError(
+            "route-bound workspaces must submit reviews through twin submit-review"
+        )
     if state.get("pending_action") is not None and not clear_pending_action:
         raise WorkspaceError(
             "workspace has a pending supervisor review; submit it through twin submit-review"

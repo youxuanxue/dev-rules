@@ -35,7 +35,7 @@ def _action_label(action: argparse.Action, *, one_required: bool = False) -> str
 def _twin_cli_rows() -> list[tuple[str, str, str]]:
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
-    from scripts.twin.__main__ import build_parser
+    from scripts.twin.__main__ import EXPORTED_COMMAND_VISIBILITIES, build_parser
 
     parser = build_parser()
     subparsers = next(
@@ -43,6 +43,11 @@ def _twin_cli_rows() -> list[tuple[str, str, str]]:
     )
     rows: list[tuple[str, str, str]] = []
     for name, command_parser in sorted(subparsers.choices.items()):
+        visibility = getattr(command_parser, "twin_visibility", None)
+        if visibility is None:
+            raise ValueError(f"twin command {name!r} is missing explicit visibility")
+        if visibility not in EXPORTED_COMMAND_VISIBILITIES:
+            continue
         positionals: list[str] = []
         options: list[str] = []
         one_required = {

@@ -10,7 +10,13 @@ from pathlib import Path
 
 from .bootstrap import draft_from_files, draft_workspace, write_workspace_draft
 from .contracts import DEV_RULES_ROOT, SUPERVISOR_PERSONA_PATH, WORKER_PERSONA_PATH
-from .driver import ALLOWED_SUPERVISOR_ROUTES, run_driver, submit_instruction, submit_review
+from .driver import (
+    ALLOWED_SUPERVISOR_ROUTES,
+    handoff_supervisor_route,
+    run_driver,
+    submit_instruction,
+    submit_review,
+)
 from .worker import DEFAULT_WORKER_MAX_BUDGET_USD, WORKER_MAX_BUDGET_ENV
 from .runtime import (
     apply_supervisor_review,
@@ -25,6 +31,14 @@ from .validate import run_fixture_validation, validate_path
 from .workspace import WorkspaceError, load_active_workspace, remember_active_workspace
 from .local_cli import local_cli_doctor
 from .worktree import WorktreeIsolationError, resolve_wtree_script
+
+
+COMMAND_VISIBILITY_PUBLIC = "public"
+COMMAND_VISIBILITY_ACTION = "action-only"
+COMMAND_VISIBILITY_INTERNAL = "internal"
+EXPORTED_COMMAND_VISIBILITIES = frozenset(
+    {COMMAND_VISIBILITY_PUBLIC, COMMAND_VISIBILITY_ACTION}
+)
 
 
 def _print_json(value: object) -> None:
@@ -256,6 +270,19 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_handoff(args: argparse.Namespace) -> int:
+    try:
+        result = handoff_supervisor_route(
+            _workspace_arg(args, remember=True),
+            args.supervisor,
+        )
+    except WorkspaceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    _print_driver_result(result, as_json=args.json)
+    return 0
+
+
 def _cmd_submit_instruction(args: argparse.Namespace) -> int:
     try:
         instruction = _read_input(args.instruction, args.instruction_file, label="instruction")
@@ -397,7 +424,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="twin")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_run = sub.add_parser("run")
+    def add_command(
+        name: str,
+        *,
+        visibility: str,
+        help_text: str,
+    ) -> argparse.ArgumentParser:
+        help_kwargs = (
+            {"help": help_text}
+            if visibility in EXPORTED_COMMAND_VISIBILITIES
+            else {}
+        )
+        command_parser = sub.add_parser(name, **help_kwargs)
+        setattr(command_parser, "twin_visibility", visibility)
+        return command_parser
+
+    p_run = add_command(
+        "run",
+        visibility=COMMAND_VISIBILITY_PUBLIC,
+        help_text="Advance a workspace through the bound host-supervisor loop",
+    )
     p_run.add_argument("workspace")
     p_run.add_argument("--supervisor", choices=ALLOWED_SUPERVISOR_ROUTES, required=True)
     p_run.add_argument(
@@ -409,7 +455,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--json", action="store_true")
     p_run.set_defaults(func=_cmd_run)
 
-    p_submit_instruction = sub.add_parser("submit-instruction")
+    p_handoff = add_command(
+        "handoff",
+        visibility=COMMAND_VISIBILITY_PUBLIC,
+        help_text="Explicitly transfer a workspace to another host supervisor",
+    )
+    p_handoff.add_argument("workspace")
+    p_handoff.add_argument("--supervisor", choices=ALLOWED_SUPERVISOR_ROUTES, required=True)
+    p_handoff.add_argument("--json", action="store_true")
+    p_handoff.set_defaults(func=_cmd_handoff)
+
+    p_submit_instruction = add_command(
+        "submit-instruction",
+        visibility=COMMAND_VISIBILITY_ACTION,
+        help_text="Submit a token-bound supervisor instruction action",
+    )
     p_submit_instruction.add_argument("--workspace", required=True)
     p_submit_instruction.add_argument("--supervisor", choices=ALLOWED_SUPERVISOR_ROUTES, required=True)
     p_submit_instruction.add_argument("--state-revision", type=int, required=True)
@@ -420,7 +480,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_submit_instruction.add_argument("--json", action="store_true")
     p_submit_instruction.set_defaults(func=_cmd_submit_instruction)
 
-    p_submit_review = sub.add_parser("submit-review")
+    p_submit_review = add_command(
+        "submit-review",
+        visibility=COMMAND_VISIBILITY_ACTION,
+        help_text="Submit a token-bound supervisor review action",
+    )
     p_submit_review.add_argument("--workspace", required=True)
     p_submit_review.add_argument("--supervisor", choices=ALLOWED_SUPERVISOR_ROUTES, required=True)
     p_submit_review.add_argument("--state-revision", type=int, required=True)
@@ -432,36 +496,60 @@ def build_parser() -> argparse.ArgumentParser:
     p_submit_review.add_argument("--json", action="store_true")
     p_submit_review.set_defaults(func=_cmd_submit_review)
 
-    p_status = sub.add_parser("status")
+    p_status = add_command(
+        "status",
+        visibility=COMMAND_VISIBILITY_PUBLIC,
+        help_text="Show workspace status and the next user action",
+    )
     p_status.add_argument("workspace_pos", nargs="?")
     p_status.add_argument("--workspace", dest="workspace")
     p_status.add_argument("--json", action="store_true")
     p_status.set_defaults(func=lambda args: _cmd_status(_merge_workspace(args)))
 
-    p_next = sub.add_parser("next")
+    p_next = add_command(
+        "next",
+        visibility=COMMAND_VISIBILITY_INTERNAL,
+        help_text="Compatibility action derivation",
+    )
     p_next.add_argument("--workspace", required=True)
     p_next.add_argument("--json", action="store_true")
     p_next.set_defaults(func=_cmd_next)
 
-    p_watch = sub.add_parser("watch")
+    p_watch = add_command(
+        "watch",
+        visibility=COMMAND_VISIBILITY_INTERNAL,
+        help_text="Compatibility worker watcher",
+    )
     p_watch.add_argument("--workspace", required=True)
     p_watch.add_argument("--max-wait-seconds", type=float, default=900.0)
     p_watch.add_argument("--poll-interval-seconds", type=float, default=10.0)
     p_watch.add_argument("--json", action="store_true")
     p_watch.set_defaults(func=_cmd_watch)
 
-    p_respond = sub.add_parser("respond")
+    p_respond = add_command(
+        "respond",
+        visibility=COMMAND_VISIBILITY_PUBLIC,
+        help_text="Record the answer to a human decision gate",
+    )
     p_respond.add_argument("text_pos", nargs="*")
     p_respond.add_argument("--workspace")
     p_respond.add_argument("--text", default="")
     p_respond.set_defaults(func=lambda args: _cmd_respond(_merge_text(args)))
 
-    p_context = sub.add_parser("supervisor-context")
+    p_context = add_command(
+        "supervisor-context",
+        visibility=COMMAND_VISIBILITY_INTERNAL,
+        help_text="Compatibility supervisor context export",
+    )
     p_context.add_argument("--workspace", required=True)
     p_context.add_argument("--run-id")
     p_context.set_defaults(func=_cmd_supervisor_context)
 
-    p_worker = sub.add_parser("worker-turn")
+    p_worker = add_command(
+        "worker-turn",
+        visibility=COMMAND_VISIBILITY_INTERNAL,
+        help_text="Compatibility low-level worker mutation",
+    )
     p_worker.add_argument("--workspace", required=True)
     p_worker.add_argument("--instruction", required=True)
     p_worker.add_argument(
@@ -473,26 +561,42 @@ def build_parser() -> argparse.ArgumentParser:
     p_worker.add_argument("--json", action="store_true")
     p_worker.set_defaults(func=_cmd_worker_turn)
 
-    p_review_context = sub.add_parser("review-context")
+    p_review_context = add_command(
+        "review-context",
+        visibility=COMMAND_VISIBILITY_INTERNAL,
+        help_text="Compatibility review context export",
+    )
     p_review_context.add_argument("--workspace", required=True)
     p_review_context.add_argument("--run-id", required=True)
     p_review_context.add_argument("--json", action="store_true")
     p_review_context.set_defaults(func=_cmd_review_context)
 
-    p_review = sub.add_parser("review")
+    p_review = add_command(
+        "review",
+        visibility=COMMAND_VISIBILITY_INTERNAL,
+        help_text="Compatibility low-level review mutation",
+    )
     p_review.add_argument("--workspace", required=True)
     p_review.add_argument("--run-id", required=True)
     p_review.add_argument("--review-file", required=True)
     p_review.add_argument("--json", action="store_true")
     p_review.set_defaults(func=_cmd_review)
 
-    p_scaffold = sub.add_parser("scaffold")
+    p_scaffold = add_command(
+        "scaffold",
+        visibility=COMMAND_VISIBILITY_PUBLIC,
+        help_text="Create editable goal and plan drafts",
+    )
     p_scaffold.add_argument("goal")
     p_scaffold.add_argument("--workspace")
     p_scaffold.add_argument("--json", action="store_true")
     p_scaffold.set_defaults(func=_cmd_scaffold)
 
-    p_bootstrap = sub.add_parser("bootstrap")
+    p_bootstrap = add_command(
+        "bootstrap",
+        visibility=COMMAND_VISIBILITY_PUBLIC,
+        help_text="Initialize a workspace from approved goal and plan files",
+    )
     p_bootstrap.add_argument("--workspace", required=True)
     p_bootstrap.add_argument("--goal-file", required=True)
     p_bootstrap.add_argument("--plan-file", required=True)
@@ -501,15 +605,29 @@ def build_parser() -> argparse.ArgumentParser:
     p_bootstrap.add_argument("--json", action="store_true")
     p_bootstrap.set_defaults(func=_cmd_bootstrap)
 
-    p_validate = sub.add_parser("validate")
+    p_validate = add_command(
+        "validate",
+        visibility=COMMAND_VISIBILITY_INTERNAL,
+        help_text="Internal contract and fixture validation",
+    )
     p_validate.add_argument("path", nargs="?", default="")
     p_validate.add_argument("--fixtures", action="store_true")
     p_validate.set_defaults(func=_cmd_validate)
 
-    p_doctor = sub.add_parser("doctor")
+    p_doctor = add_command(
+        "doctor",
+        visibility=COMMAND_VISIBILITY_PUBLIC,
+        help_text="Check twin runtime and local provider availability",
+    )
     p_doctor.add_argument("--json", action="store_true")
     p_doctor.set_defaults(func=_cmd_doctor)
 
+    visible_commands = [
+        name
+        for name, command_parser in sub.choices.items()
+        if getattr(command_parser, "twin_visibility", None) in EXPORTED_COMMAND_VISIBILITIES
+    ]
+    sub.metavar = "{" + ",".join(visible_commands) + "}"
     return parser
 
 
