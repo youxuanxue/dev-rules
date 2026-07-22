@@ -4,6 +4,7 @@ import builtins
 import hashlib
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -31,6 +32,7 @@ from .contracts import (
 )
 from .loop_harness import run_supervisor_loop_harness
 from .driver import (
+    ALLOWED_SUPERVISOR_ROUTES,
     handoff_supervisor_route,
     run_driver,
     submit_instruction,
@@ -53,8 +55,8 @@ from .schema_contract import validate_artifact, validate_schema
 from .util import read_json, write_json, write_yaml_like
 from .claude_runner import DEFAULT_WORKER_TIMEOUT_SECONDS, WORKER_TIMEOUT_ENV, default_worker_timeout_seconds, detect_session_lost, is_body_guard_rejection, run_claude_headless
 from .worker import DEFAULT_WORKER_MAX_BUDGET_USD, assess_run_quality, changed_files_from_status, default_worker_max_budget_usd, should_clear_worker_session
-from .local_cli import _run_process, build_local_cli_command, parse_local_cli_output
-from .worker_backend import CaoWorkerBackend, LocalCliWorkerBackend, _RejectCaoRedirects
+from .local_cli import LOCAL_CLI_PROVIDERS, _run_process, build_local_cli_command, parse_local_cli_output
+from .worker_backend import CaoWorkerBackend, LocalCliWorkerBackend, _RejectCaoRedirects, resolve_worker_backend
 from .workspace import WorkspaceError, load_plan, load_state, status_summary, write_plan, write_state
 
 
@@ -485,6 +487,27 @@ def _driver_protocol_errors(root: Path) -> list[str]:
             driver_authorized=bool(_kwargs.get("driver_authorized")),
         )
 
+    for route in ALLOWED_SUPERVISOR_ROUTES:
+        route_name = route.removeprefix("host/")
+        route_workspace = _write_workspace(root / f"driver route {route_name}")
+        route_action = run_driver(route_workspace, route, worker_turn_fn=fake_worker_turn)
+        route_state = load_state(route_workspace)
+        if (
+            route_action.get("action") != "supervisor_instruction"
+            or route_action.get("supervisor_route") != route
+            or route_state.get("supervisor_route") != route
+        ):
+            errors.append(f"{route} should bind through the shared supervisor protocol: {route_action!r}")
+        status_command = status_summary(route_workspace).get("display", {}).get("next_command", "")
+        if shlex.split(str(status_command)) != [
+            "twin",
+            "run",
+            str(route_workspace.resolve()),
+            "--supervisor",
+            route,
+        ]:
+            errors.append(f"status should shell-quote the bound {route} workspace command: {status_command!r}")
+
     legacy = _write_workspace(root / "driver-legacy")
     legacy_state = load_state(legacy)
     for key in ("state_revision", "supervisor_route", "pending_action"):
@@ -631,9 +654,20 @@ def _driver_protocol_errors(root: Path) -> list[str]:
         errors.append("the previous supervisor route and token must stay invalid after handoff")
     except WorkspaceError:
         pass
+    antigravity_handoff = handoff_supervisor_route(handoff_workspace, "host/antigravity")
+    if (
+        antigravity_handoff.get("previous_supervisor_route") != "host/claude"
+        or antigravity_handoff.get("supervisor_route") != "host/antigravity"
+    ):
+        errors.append(f"Antigravity should take over the same handed-off workspace: {antigravity_handoff!r}")
+    try:
+        run_driver(handoff_workspace, "host/claude", worker_turn_fn=fake_worker_turn)
+        errors.append("the Claude supervisor route must be rejected after handoff to Antigravity")
+    except WorkspaceError:
+        pass
     post_handoff_review = run_driver(
         handoff_workspace,
-        "host/claude",
+        "host/antigravity",
         worker_turn_fn=fake_worker_turn,
     )
     if post_handoff_review.get("action") != "review_run":
@@ -1277,6 +1311,51 @@ def _worker_backend_errors(root: Path) -> list[str]:
     if local_result.returncode != 0 or not fake_calls or fake_calls[0]["provider"] != "codex":
         errors.append(f"local backend should invoke the selected provider adapter: {local_result!r}")
 
+    for provider in LOCAL_CLI_PROVIDERS:
+        provider_workspace = _write_workspace(root / f"local-cli-worker-{provider}")
+        provider_plan = load_plan(provider_workspace)
+        provider_plan["execution"] = {"backend": "local_cli", "provider": provider}
+        write_plan(provider_workspace, provider_plan)
+        selected_backend = resolve_worker_backend(provider_plan)
+        provider_calls: list[str] = []
+        if not isinstance(selected_backend, LocalCliWorkerBackend):
+            errors.append(f"plan-selected {provider} backend should resolve to LocalCliWorkerBackend")
+            continue
+        if provider == "claude":
+            claude_adapter = FakeRunner(output_text="tests: claude local cli fixture pass")
+            selected_backend.claude_runner = claude_adapter
+        else:
+            def fake_provider_runner(
+                selected_provider: str,
+                _prompt: str,
+                **_kwargs: Any,
+            ) -> ClaudeRunResult:
+                provider_calls.append(selected_provider)
+                return ClaudeRunResult(
+                    session_id=f"{selected_provider}-fixture-session",
+                    output_text=f"tests: {selected_provider} local cli fixture pass",
+                    returncode=0,
+                    raw_events=[{"type": "fixture", "provider": selected_provider}],
+                    cwd=str(root),
+                )
+
+            selected_backend.local_runner = fake_provider_runner
+        provider_run = start_worker_turn(
+            provider_workspace,
+            f"run {provider} local cli fixture",
+            runner=FakeRunner(),
+            backend=selected_backend,
+        )
+        worker_identity = provider_run.get("worker", {})
+        adapter_called = bool(claude_adapter.calls) if provider == "claude" else provider_calls == [provider]
+        if (
+            worker_identity.get("backend") != "local_cli"
+            or worker_identity.get("provider") != provider
+            or provider_run.get("status") != "review_required"
+            or not adapter_called
+        ):
+            errors.append(f"plan-selected {provider} local CLI worker should persist its route: {provider_run!r}")
+
     class FakeResponse:
         def __enter__(self) -> "FakeResponse":
             return self
@@ -1630,8 +1709,9 @@ def _run_fixture_validation_impl() -> list[str]:
         try:
             validate_workspace(missing)
             errors.append("missing inputs should fail")
-        except WorkspaceError:
-            pass
+        except WorkspaceError as exc:
+            if "current host plan mode or twin scaffold/bootstrap" not in str(exc):
+                errors.append(f"missing goal guidance should stay provider-neutral: {exc}")
 
         workspace_persona = _write_workspace(root / "workspace-persona")
         (workspace_persona / "worker-persona.md").write_text("goal-specific worker persona", encoding="utf-8")

@@ -4,6 +4,7 @@ import fcntl
 import hashlib
 import json
 import os
+import shlex
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -135,7 +136,9 @@ def plan_path(workspace: Path) -> Path:
 def load_goal(workspace: Path) -> dict[str, Any]:
     path = workspace / GOAL_FILE
     if not path.exists():
-        raise WorkspaceError("missing goal.yaml; run Claude Code plan mode first to prepare goal.yaml and plan")
+        raise WorkspaceError(
+            "missing goal.yaml; prepare it with the current host plan mode or twin scaffold/bootstrap"
+        )
     goal = read_yaml_like(path)
     errors = validate_schema(goal, GOAL_SCHEMA)
     if errors:
@@ -367,7 +370,10 @@ def status_display(workspace: Path, goal: dict[str, Any], plan: dict[str, Any], 
     workspace = resolve_workspace(workspace)
     status = str(state.get("status") or "unknown")
     supervisor_route = state.get("supervisor_route") or "<host/provider>"
-    run_command = f"twin run {workspace} --supervisor {supervisor_route}"
+    run_command = shlex.join(
+        ["twin", "run", str(workspace), "--supervisor", str(supervisor_route)]
+    )
+    status_command = shlex.join(["twin", "status", str(workspace)])
     next_item = choose_next_item(plan)
     current_item_id = state.get("current_item_id") or (next_item.get("id") if next_item else None)
     labels = {
@@ -390,7 +396,7 @@ def status_display(workspace: Path, goal: dict[str, Any], plan: dict[str, Any], 
     }
     next_commands = {
         "idle": run_command,
-        "worker_running": f"twin status {workspace}",
+        "worker_running": status_command,
         "review_required": run_command,
         "continue": run_command,
         "needs_human": "twin respond <answer>",
@@ -406,7 +412,7 @@ def status_display(workspace: Path, goal: dict[str, Any], plan: dict[str, Any], 
     display = {
         "label": labels.get(status, status),
         "summary": summary,
-        "next_command": next_commands.get(status, f"twin status {workspace}"),
+        "next_command": next_commands.get(status, status_command),
         "current_item_id": current_item_id,
         "evidence_paths": {
             "current": str(workspace / CURRENT_FILE),

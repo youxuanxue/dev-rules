@@ -74,4 +74,4 @@ python3 scripts/export_agent_contract.py --check
 PREFLIGHT_BASE=origin/main bash scripts/preflight.sh
 ```
 
-Fixtures 覆盖 legacy workspace、stable/duplicate token、stale revision、wrong action/run/workspace/route、Codex host 完整闭环、`needs_human` 重入、provider-neutral active pointer 和真实 launcher。
+Fixtures 覆盖 legacy workspace、stable/duplicate token、stale revision、wrong action/run/workspace/route、三种 host route、Codex→Claude→Antigravity handoff、三种 `local_cli` worker route、Codex host 完整闭环、`needs_human` 重入、provider-neutral active pointer 和真实 launcher。

@@ -4,7 +4,9 @@ on:
   pull_request:
     paths:
       - "commands/**"
+      - "global/bin/twin"
       - "schemas/twin.*.schema.json"
+      - "scripts/gen_codex_agents.py"
       - "scripts/twin/**"
       - "scripts/preflight.sh"
       - "verify-rules.sh"
@@ -16,7 +18,9 @@ on:
     branches: [main]
     paths:
       - "commands/**"
+      - "global/bin/twin"
       - "schemas/twin.*.schema.json"
+      - "scripts/gen_codex_agents.py"
       - "scripts/twin/**"
       - "scripts/preflight.sh"
       - "verify-rules.sh"
