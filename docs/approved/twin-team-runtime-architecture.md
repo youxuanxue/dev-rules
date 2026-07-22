@@ -25,6 +25,9 @@ Build a real Agent team by separating governance, execution, capabilities, and v
 - CAO is consumed through its HTTP contract, not imported as in-process implementation code. A pinned submodule may be added later for bootstrap reproducibility but is not the runtime boundary.
 - CAO worker turns are fresh and request `teardown=true`; cross-turn truth lives in twin artifacts.
 - A local CAO server is not required for the first-party local CLI path. Provider availability is checked read-only by `python3 -m scripts.twin doctor --json`; unsupported provider budget semantics fail closed.
+- Local Codex turns always use `workspace-write` with `approval_policy=never`, including resume; local Gemini combines its OS sandbox with `approval-mode=yolo`. Provider timeouts terminate the whole spawned process group before twin records the turn as finished.
+- CAO bearer authentication is allowed over loopback HTTP or HTTPS; it fails closed on non-loopback plaintext HTTP and never follows HTTP redirects.
+- Terminal worktree cleanup runs after terminal state is persisted and records removed, preserved, or failed outcomes in workspace evidence.
 - Dynamic Workflow may not edit code, branches, commits, external systems, or final planning artifacts during research.
 
 ## User experience

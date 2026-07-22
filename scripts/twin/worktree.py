@@ -169,14 +169,18 @@ def ensure_worktree(repo_root: Path, workspace: Path) -> Path:
 
 
 def _has_unsaved_changes(target: Path) -> bool:
-    completed = subprocess.run(
-        ["git", "-C", str(target), "status", "--porcelain=v1", "--untracked-files=all", "-z"],
-        capture_output=True,
-        check=False,
-        timeout=30,
-    )
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(target), "status", "--porcelain=v1", "--untracked-files=all", "-z"],
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise WorktreeIsolationError(f"cannot inspect twin worktree before cleanup: {exc}") from exc
     if completed.returncode != 0:
-        return True
+        detail = completed.stderr.decode("utf-8", errors="replace").strip() or "git status failed"
+        raise WorktreeIsolationError(f"cannot inspect twin worktree before cleanup: {detail}")
     entries = [entry for entry in completed.stdout.decode("utf-8", errors="replace").split("\0") if entry]
     for entry in entries:
         path = entry[3:] if len(entry) >= 4 else entry

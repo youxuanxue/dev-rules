@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import shutil
 import subprocess
 import threading
@@ -27,7 +28,7 @@ class LocalCliSpec:
 LOCAL_CLI_SPECS: dict[str, LocalCliSpec] = {
     "claude": LocalCliSpec("claude", "claude", True, True, "bypassPermissions"),
     "codex": LocalCliSpec("codex", "codex", True, False, "workspace-write/no-approval"),
-    "gemini": LocalCliSpec("gemini", "gemini", True, False, "yolo"),
+    "gemini": LocalCliSpec("gemini", "gemini", True, False, "sandbox/yolo"),
 }
 
 
@@ -68,10 +69,18 @@ def build_local_cli_command(
     if provider == "codex":
         command = [spec.executable]
         if session_id:
-            command.extend(["exec", "resume", session_id])
+            command.extend([
+                "exec",
+                "resume",
+                session_id,
+                "-c",
+                'sandbox_mode="workspace-write"',
+                "-c",
+                'approval_policy="never"',
+            ])
         else:
             command.extend(["exec"])
-        command.extend(["--json"])
+        command.append("--json")
         if not session_id:
             command.extend([
                 "--sandbox",
@@ -91,6 +100,7 @@ def build_local_cli_command(
         "stream-json",
         "--approval-mode",
         "yolo",
+        "--sandbox",
         "--skip-trust",
         "--include-directories",
         str(cwd),
@@ -116,6 +126,8 @@ def _event_text(event: dict[str, Any]) -> list[str]:
             for key in ("text", "result", "content", "message"):
                 value = event.get(key)
                 parts.extend(_value_text(value))
+    if _is_terminal_error(event):
+        parts.extend(_value_text(event.get("error")))
     return parts
 
 
@@ -126,7 +138,7 @@ def _value_text(value: Any) -> list[str]:
         return _content_text(value)
     if isinstance(value, dict):
         parts: list[str] = []
-        for key in ("text", "parts", "content"):
+        for key in ("text", "message", "parts", "content"):
             if key in value:
                 parts.extend(_value_text(value[key]))
         return parts
@@ -145,6 +157,13 @@ def _content_text(value: list[Any]) -> list[str]:
             elif not item_type:
                 parts.extend(_value_text(item))
     return parts
+
+
+def _is_terminal_error(event: dict[str, Any]) -> bool:
+    event_type = str(event.get("type") or "")
+    if event_type == "result":
+        return str(event.get("status") or "").lower() in {"error", "failed"}
+    return event_type in {"turn.failed", "turn_failed"}
 
 
 def parse_local_cli_output(provider: str, stdout_text: str, stderr_text: str = "") -> tuple[str, str, list[dict[str, Any]]]:
@@ -181,6 +200,39 @@ def parse_local_cli_output(provider: str, stdout_text: str, stderr_text: str = "
     return session_id, "\n".join(part.strip() for part in output if part.strip()).strip(), events
 
 
+def _terminate_process_group(process: subprocess.Popen[str], *, grace_seconds: int = 5) -> None:
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                capture_output=True,
+                check=False,
+                timeout=grace_seconds,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        process.wait(timeout=grace_seconds)
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    if process.poll() is None:
+        process.wait()
+
+
 def _run_process(
     command: list[str],
     *,
@@ -198,6 +250,9 @@ def _run_process(
         environment = os.environ.copy()
         if extra_env:
             environment.update(extra_env)
+        popen_options: dict[str, Any] = {}
+        if os.name == "posix":
+            popen_options["start_new_session"] = True
         process = subprocess.Popen(
             command,
             cwd=cwd,
@@ -207,6 +262,7 @@ def _run_process(
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
+            **popen_options,
         )
     except FileNotFoundError as exc:
         message = f"local_cli provider executable unavailable: {command[0]} ({exc})"
@@ -239,32 +295,41 @@ def _run_process(
         try:
             process.wait(timeout=timeout_seconds)
         except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
+            _terminate_process_group(process)
             stdout_thread.join(timeout=5)
             stderr_thread.join(timeout=5)
-            output = ("".join(stdout_parts) + "".join(stderr_parts)).strip()
+            parsed_session, output, events = parse("".join(stdout_parts), "".join(stderr_parts))
+            timeout_event = {"type": "process_timeout", "timeout_seconds": timeout_seconds}
+            events.append(timeout_event)
+            stream_file.write(json.dumps(timeout_event, ensure_ascii=False, sort_keys=True) + "\n")
+            stream_file.flush()
             return ClaudeRunResult(
-                session_id=session_id,
+                session_id=parsed_session or session_id,
                 output_text=(output + f"\nTIMEOUT after {timeout_seconds}s").strip(),
                 returncode=124,
-                raw_events=[],
+                raw_events=events,
                 cwd=str(cwd),
             )
         stdout_thread.join(timeout=5)
         stderr_thread.join(timeout=5)
     parsed_session, output, events = parse("".join(stdout_parts), "".join(stderr_parts))
     malformed_output = any(event.get("type") == "malformed_output" for event in events)
+    terminal_error = any(_is_terminal_error(event) for event in events)
     if malformed_output and process.returncode == 0:
         output = (output + "\nlocal_cli provider emitted malformed JSONL").strip()
+    if terminal_error and process.returncode == 0 and not output:
+        output = "local_cli provider reported a terminal error"
     session_lost = False
     if session_id:
-        extracted_turn = any(_event_text(event) for event in events)
+        extracted_turn = any(_event_text(event) for event in events if not _is_terminal_error(event))
         session_lost = bool((parsed_session and parsed_session != session_id) or not extracted_turn)
+    normalized_returncode = process.returncode
+    if normalized_returncode == 0 and (malformed_output or terminal_error):
+        normalized_returncode = 1
     return ClaudeRunResult(
         session_id=parsed_session or session_id,
         output_text=output,
-        returncode=1 if malformed_output and process.returncode == 0 else process.returncode,
+        returncode=normalized_returncode,
         raw_events=events,
         cwd=str(cwd),
         session_lost=session_lost,

@@ -59,7 +59,7 @@ export TWIN_CAO_BASE_URL=http://127.0.0.1:9889
 export CAO_AUTH_LOCAL_TOKEN='<local-token>'
 ```
 
-`CAO_AUTH_LOCAL_TOKEN` 只作为 HTTP bearer header 使用，不写入 goal、plan、state、run 或 events。未启用认证时保持该变量未设置。
+`CAO_AUTH_LOCAL_TOKEN` 只作为 HTTP bearer header 使用，不写入 goal、plan、state、run 或 events。未启用认证时保持该变量未设置。带 bearer 的 loopback 地址可使用本地 HTTP；非 loopback CAO 必须配置 HTTPS，否则 twin 在发送请求前 fail closed。CAO `run-step` 不跟随 HTTP redirect；迁移 endpoint 时直接更新 `TWIN_CAO_BASE_URL`，不要依赖 30x。
 
 ## 选择 provider 和 profile
 
@@ -71,7 +71,7 @@ execution:
   provider: codex
 ```
 
-本机 CLI provider 为 `claude`、`codex`、`gemini`。需要 CAO profile 时使用：
+本机 CLI provider 为 `claude`、`codex`、`gemini`。Codex fresh/resume 每轮都显式固定 `workspace-write` + `approval_policy=never`；Gemini 固定 OS sandbox + `approval-mode=yolo`。这两层硬边界不依赖用户全局 CLI 配置，provider timeout 也会终止同一进程组中的 tool 子进程。需要 CAO profile 时使用：
 
 ```yaml
 execution:
@@ -148,7 +148,7 @@ twin 每轮创建 fresh CAO terminal，使用 `teardown=true`，并在 `run.json
 - 普通 Agent 会话加载 `git-worktree-submodule` skill，并调用共享 `wtree.py`。
 - twin worker 内部只调用同一个 `wtree.py` JSON contract，不调用 `wts` shell wrapper。
 - worktree 创建或 session check 失败时 fail closed，不回退共享 checkout。
-- terminal cleanup 只移除没有未保存业务改动的 twin worktree。
+- terminal cleanup 只移除没有未保存业务改动的 twin worktree，并把 removed / preserved / failed 结果写入 `workspace_events.jsonl`。
 
 `.wtree-session.json` 是本机 session binding metadata，不是业务改动，也不进入 git。
 
@@ -158,6 +158,7 @@ twin 每轮创建 fresh CAO terminal，使用 `teardown=true`，并在 `run.json
 | --- | --- |
 | connection refused | CAO server 是否运行，`TWIN_CAO_BASE_URL` 是否正确 |
 | 401/403 | CAO 是否启用 auth，server 与 twin 是否使用正确的 `CAO_AUTH_LOCAL_TOKEN` |
+| bearer auth requires HTTPS | 非 loopback `TWIN_CAO_BASE_URL` 是否使用 HTTPS；本地开发改用 `127.0.0.1` / `localhost` |
 | provider not installed | 从 CAO server 环境运行 `command -v <provider-cli>` |
 | profile not found | 运行 `cao profile list`，修正 `plan.yaml.execution.agent` |
 | provider 启动后超时 | 检查认证、approval 是否等待人工输入、terminal backend 和 profile init timeout |

@@ -46,7 +46,7 @@
 执行层只关心“把这一轮做好”：
 
 - 默认 Claude headless，保持现有行为；
-- 需要 Codex 或 Gemini 时，优先由 `local_cli` 直接调用当前机器的 provider CLI；需要远程、多 profile 或其他 provider 时再由 CAO `POST /terminals/run-step` 启动 fresh worker；
+- 需要 Codex 或 Gemini 时，优先由 `local_cli` 直接调用当前机器的 provider CLI，并由 adapter 每轮固定 sandbox / approval policy；需要远程、多 profile 或其他 provider 时再由 CAO `POST /terminals/run-step` 启动 fresh worker；
 - provider、模型、工具和权限归 CAO agent profile；
 - 每个可写 worker 必须在独立 worktree 中运行；
 - worker 提交结果和证据，但没有最终验收权。

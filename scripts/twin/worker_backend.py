@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Protocol
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.parse import urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .claude_runner import ClaudeRunResult, run_claude_headless
 from .contracts import DEV_RULES_ROOT
@@ -16,6 +18,46 @@ from .local_cli import local_cli_spec, run_local_cli
 CAO_BASE_URL_ENV = "TWIN_CAO_BASE_URL"
 CAO_AUTH_TOKEN_ENV = "CAO_AUTH_LOCAL_TOKEN"
 DEFAULT_CAO_BASE_URL = "http://127.0.0.1:9889"
+
+
+class _RejectCaoRedirects(HTTPRedirectHandler):
+    def redirect_request(
+        self,
+        request: Request,
+        file_pointer: Any,
+        code: int,
+        _message: str,
+        headers: Any,
+        _new_url: str,
+    ) -> Request:
+        raise HTTPError(
+            request.full_url,
+            code,
+            "CAO run-step redirects are not allowed",
+            headers,
+            file_pointer,
+        )
+
+
+def _cao_base_url(value: str, *, auth_token: str) -> str:
+    base_url = value.strip().rstrip("/")
+    parsed = urlsplit(base_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("CAO base URL must be an absolute http or https URL")
+    if parsed.username or parsed.password:
+        raise ValueError("CAO base URL must not contain userinfo")
+    if parsed.query or parsed.fragment:
+        raise ValueError("CAO base URL must not contain a query or fragment")
+    hostname = parsed.hostname.rstrip(".").lower()
+    loopback = hostname == "localhost"
+    if not loopback:
+        try:
+            loopback = ipaddress.ip_address(hostname).is_loopback
+        except ValueError:
+            loopback = False
+    if auth_token and parsed.scheme != "https" and not loopback:
+        raise ValueError("CAO bearer authentication requires HTTPS outside loopback")
+    return base_url
 
 
 @dataclass(frozen=True)
@@ -98,7 +140,7 @@ class CaoWorkerBackend:
         agent: str,
         base_url: str | None = None,
         auth_token: str | None = None,
-        opener: Callable[..., Any] = urlopen,
+        opener: Callable[..., Any] | None = None,
     ) -> None:
         self.identity = BackendIdentity(
             backend="cao",
@@ -106,9 +148,14 @@ class CaoWorkerBackend:
             agent=agent,
             permission_mode="cao_profile",
         )
-        self.base_url = (base_url or os.environ.get(CAO_BASE_URL_ENV) or DEFAULT_CAO_BASE_URL).rstrip("/")
-        self.auth_token = auth_token if auth_token is not None else os.environ.get(CAO_AUTH_TOKEN_ENV, "").strip()
-        self.opener = opener
+        self.auth_token = (
+            auth_token if auth_token is not None else os.environ.get(CAO_AUTH_TOKEN_ENV, "")
+        ).strip()
+        self.base_url = _cao_base_url(
+            base_url or os.environ.get(CAO_BASE_URL_ENV) or DEFAULT_CAO_BASE_URL,
+            auth_token=self.auth_token,
+        )
+        self.opener = opener if opener is not None else build_opener(_RejectCaoRedirects()).open
 
     def _request(self, payload: dict[str, Any], *, timeout_seconds: int) -> dict[str, Any]:
         headers = {"Content-Type": "application/json", "Accept": "application/json"}

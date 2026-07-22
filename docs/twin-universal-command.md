@@ -242,7 +242,7 @@ Codex plugin 可作为后续安装和分发容器，但不是第一阶段前置�
 2. 高风险信号必须进入 `needs_human` 和既有 PR/`docs/approved` 审批通道。
 3. CAO 继续通过 HTTP contract 使用，不 import 内部模块；submodule 只能服务于安装复现，不能成为运行时耦合。
 4. 所有可写 worker 必须运行在 twin 隔离 worktree；创建或检查失败时 fail closed。
-5. CAO 地址读取 `TWIN_CAO_BASE_URL`；启用认证时 token 只读取 `CAO_AUTH_LOCAL_TOKEN`，不得写入 plan、state、run 或日志。
+5. CAO 地址读取 `TWIN_CAO_BASE_URL`；启用认证时 token 只读取 `CAO_AUTH_LOCAL_TOKEN`，不得写入 plan、state、run 或日志，且非 loopback 地址必须使用 HTTPS。
 6. 非交互 provider profile 不得配置会等待人工终端输入的 approval 模式。
 7. skill 约束不是硬权限。真正的权限边界来自 provider sandbox、permissions、hooks、worktree 和外部审批。
 8. 任一 backend 返回的自由文本都不能直接改变状态，必须转成 schema 化 decision 并通过校验。

@@ -42,6 +42,13 @@ def continuation_action(workspace: Path | str) -> dict[str, Any]:
             "next": f"/twin {workspace_path}",
         }
     if status == "continue":
+        if not base["next_instruction"]:
+            return {
+                **base,
+                "action": "supervisor_instruction",
+                "command": f"python3 -m scripts.twin supervisor-context --workspace {workspace_path}",
+                "next": f"/twin {workspace_path}",
+            }
         return {
             **base,
             "action": "worker_turn",

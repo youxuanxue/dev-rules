@@ -2,8 +2,9 @@
 
 - `/twin` is a Claude-Code-only supervisor command. The Python CLI is its deterministic runtime substrate, not a second user workflow.
 - `plan.yaml.execution` defaults to `claude_headless`. `backend: local_cli` directly invokes the installed `claude`, `codex`, or `gemini` CLI; `backend: cao` uses CAO's external `POST /terminals/run-step` contract. CAO provider profiles remain owned by the CAO installation.
+- Local Codex fresh/resume turns enforce `workspace-write` plus `approval_policy=never`; local Gemini turns enforce its OS sandbox plus yolo approvals. A provider timeout terminates the spawned process group before the turn is finalized.
 - `plan.yaml.execution.agent` is required only for `backend: cao` and must name a profile returned by `cao profile list`; `developer` is the portable built-in example. CAO permissions are resolved from that profile rather than from Claude-native tool names.
-- `TWIN_CAO_BASE_URL` selects the CAO control plane. `CAO_AUTH_LOCAL_TOKEN` is read only for auth-enabled CAO and is never persisted in twin artifacts.
+- `TWIN_CAO_BASE_URL` selects the CAO control plane. `CAO_AUTH_LOCAL_TOKEN` is read only for auth-enabled CAO, is never persisted in twin artifacts, requires HTTPS outside loopback, and is never forwarded through HTTP redirects.
 - `research.yaml` is optional, read-only provenance. The twin supervisor owns final `goal.yaml` and `plan.yaml` decisions.
 - The approved team runtime boundary is `docs/approved/twin-team-runtime-architecture.md`; practical CAO/Codex setup is in `docs/twin-cao-operator-guide.md`.
 - The cross-system comparison and operating decisions are summarized in `docs/agent-team-playbook.md`; the provider-neutral twin roadmap is in `docs/twin-universal-command.md`.

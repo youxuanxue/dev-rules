@@ -75,7 +75,7 @@ execution:
   provider: codex # claude | codex | gemini
 ```
 
-`local_cli` 运行器直接调用本机 `claude`、`codex` 或 `gemini` 的非交互模式；Codex 使用 `workspace-write` + `approval_policy=never`，Gemini 使用 `approval-mode=yolo`，每轮仍在 twin 隔离 worktree 中运行。Claude 的 `local_cli` provider 复用现有 headless stream/budget/resume 语义。provider 可用性只读诊断：
+`local_cli` 运行器直接调用本机 `claude`、`codex` 或 `gemini` 的非交互模式；Codex 的 fresh/resume 每轮都固定 `workspace-write` + `approval_policy=never`，Gemini 使用 OS sandbox + `approval-mode=yolo`，并在 twin 隔离 worktree 中运行。provider timeout 会终止整组 CLI/tool 子进程后再落 turn 结果。Claude 的 `local_cli` provider 复用现有 headless stream/budget/resume 语义。provider 可用性只读诊断：
 
 ```bash
 PYTHONPATH="$DEV_RULES" python3 -m scripts.twin doctor --json
@@ -92,7 +92,7 @@ execution:
   agent: developer
 ```
 
-CAO 地址由 `TWIN_CAO_BASE_URL` 配置，默认 `http://127.0.0.1:9889`；启用 CAO auth 时从本机 `CAO_AUTH_LOCAL_TOKEN` 读取 bearer token，secret 不进入 plan 或 run artifact。CAO 每轮调用 `POST /terminals/run-step`，传入隔离 worktree 的 `working_directory` 并使用 `teardown=true`。`agent` 必须是 `cao profile list` 实际可见的 profile；provider 模型、工具和权限由该 CAO agent profile 管理。CAO `run-step` 当前没有费用预算字段，`--max-budget-usd` / `TWIN_WORKER_MAX_BUDGET_USD` 只适用于 Claude headless，在 CAO backend 下显式设置会 fail closed。
+CAO 地址由 `TWIN_CAO_BASE_URL` 配置，默认 `http://127.0.0.1:9889`；启用 CAO auth 时从本机 `CAO_AUTH_LOCAL_TOKEN` 读取 bearer token，secret 不进入 plan 或 run artifact。带 bearer 的非 loopback 地址必须使用 HTTPS，明文 HTTP 会 fail closed；CAO 请求不跟随 HTTP redirect，避免跨 origin 转发认证头。CAO 每轮调用 `POST /terminals/run-step`，传入隔离 worktree 的 `working_directory` 并使用 `teardown=true`。`agent` 必须是 `cao profile list` 实际可见的 profile；provider 模型、工具和权限由该 CAO agent profile 管理。CAO `run-step` 当前没有费用预算字段，`--max-budget-usd` / `TWIN_WORKER_MAX_BUDGET_USD` 只适用于 Claude headless，在 CAO backend 下显式设置会 fail closed。
 
 ## workspace 契约
 
@@ -104,7 +104,7 @@ CAO 地址由 `TWIN_CAO_BASE_URL` 配置，默认 `http://127.0.0.1:9889`；启�
 
 ## needs_human 展示
 
-state 或 review 落到 `needs_human` 时，优先用 `AskUserQuestion` inline 问一个具体问题，给一段背景和推荐选项。证据路径只作为辅助：`CURRENT.md` / `supervisor_state.json` / `runs/<run_id>/run.json::review`。不要要求用户读 JSON 才能回答。`/twin respond <text>` 是唯一解除该门禁的用户命令，成功后会写入 `human_response.json` 并在 `workspace_events.jsonl` 记录不含回答正文的审计事件。
+state 或 review 落到 `needs_human` 时，优先用 `AskUserQuestion` inline 问一个具体问题，给一段背景和推荐选项。证据路径只作为辅助：`CURRENT.md` / `supervisor_state.json` / `runs/<run_id>/run.json::review`。不要要求用户读 JSON 才能回答。`/twin respond <text>` 是唯一解除该门禁的用户命令，成功后会写入 `human_response.json` 并在 `workspace_events.jsonl` 记录不含回答正文的审计事件；若 state 没有现成 `next_instruction`，下一步先回到 `supervisor-context` 消费回答并生成 instruction，不直接启动空 worker turn。
 
 ## 输出风格
 

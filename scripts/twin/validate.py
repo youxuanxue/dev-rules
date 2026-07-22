@@ -6,11 +6,12 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 
-from . import contracts, util
+from . import contracts, supervisor_review, util
 from .bootstrap import draft_from_files, draft_workspace, slugify_goal, write_workspace_draft
 from .claude_runner import ClaudeRunResult
 from .contracts import (
@@ -44,7 +45,7 @@ from .util import read_json, write_json, write_yaml_like
 from .claude_runner import DEFAULT_WORKER_TIMEOUT_SECONDS, WORKER_TIMEOUT_ENV, default_worker_timeout_seconds, detect_session_lost, is_body_guard_rejection
 from .worker import DEFAULT_WORKER_MAX_BUDGET_USD, assess_run_quality, changed_files_from_status, default_worker_max_budget_usd, should_clear_worker_session
 from .local_cli import _run_process, build_local_cli_command, parse_local_cli_output
-from .worker_backend import CaoWorkerBackend, LocalCliWorkerBackend
+from .worker_backend import CaoWorkerBackend, LocalCliWorkerBackend, _RejectCaoRedirects
 from .workspace import WorkspaceError, load_plan, load_state, status_summary, write_plan, write_state
 
 
@@ -388,6 +389,23 @@ def _runtime_reentry_errors(root: Path) -> list[str]:
         if action.get("action") != expected_action:
             errors.append(f"{expected_status} continuation action should be {expected_action}: {action!r}")
 
+    respond_ws = _write_workspace(root / "next-after-human-response")
+    respond_state = load_state(respond_ws)
+    respond_state["status"] = "needs_human"
+    respond_state["needs_human"] = {
+        "question": "继续吗？",
+        "context": "fixture",
+        "created_at": "2026-01-01T00:00:00Z",
+    }
+    write_state(respond_ws, respond_state)
+    record_human_response(respond_ws, "继续")
+    respond_action = continuation_action(respond_ws)
+    if respond_action.get("action") != "supervisor_instruction":
+        errors.append(f"human response should reenter the supervisor before another worker turn: {respond_action!r}")
+    respond_context = build_supervisor_context(respond_ws)
+    if respond_context.get("human_response", {}).get("text") != "继续":
+        errors.append("supervisor reentry should receive the unconsumed human response artifact")
+
     review_ws = _write_workspace(root / "loop-review-required")
     review_run = start_worker_turn(review_ws, "生成待 review run", runner=FakeRunner())
     if load_state(review_ws).get("status") != "review_required":
@@ -443,6 +461,41 @@ def _runtime_reentry_errors(root: Path) -> list[str]:
     )
     if quiet_result.get("status") != "worker_quiet_timeout":
         errors.append(f"loop harness should return explicit worker_quiet_timeout: {quiet_result!r}")
+    return errors
+
+
+def _worktree_cleanup_errors(root: Path) -> list[str]:
+    errors: list[str] = []
+    workspace = _write_workspace(root / "cleanup-evidence")
+    target = root / "fixture-worktree"
+    target.mkdir()
+    original_path = supervisor_review.worktree_path
+    original_remove = supervisor_review.remove_worktree
+    supervisor_review.worktree_path = lambda _repo, _workspace: target
+    try:
+        supervisor_review.remove_worktree = lambda _repo, _workspace: False
+        supervisor_review._cleanup_terminal_worktree(workspace)
+        events = [
+            json.loads(line)
+            for line in (workspace / "workspace_events.jsonl").read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        if not events or events[-1].get("outcome") != "preserved":
+            errors.append("terminal cleanup should record preserved worktrees with unsaved changes")
+
+        def fail_cleanup(_repo: Path, _workspace: Path) -> bool:
+            raise supervisor_review.WorktreeIsolationError("fixture cleanup failure")
+
+        supervisor_review.remove_worktree = fail_cleanup
+        supervisor_review._cleanup_terminal_worktree(workspace)
+        failed_event = json.loads(
+            (workspace / "workspace_events.jsonl").read_text(encoding="utf-8").splitlines()[-1]
+        )
+        if failed_event.get("outcome") != "failed" or "fixture cleanup failure" not in failed_event.get("error", ""):
+            errors.append("terminal cleanup failures should remain nonfatal and observable in workspace evidence")
+    finally:
+        supervisor_review.worktree_path = original_path
+        supervisor_review.remove_worktree = original_remove
     return errors
 
 
@@ -626,6 +679,11 @@ def _worker_backend_errors(root: Path) -> list[str]:
     resumed_codex = build_local_cli_command("codex", "resume prompt", cwd=root, session_id="thread-1")
     if resumed_codex[:4] != ["codex", "exec", "resume", "thread-1"] or "--ephemeral" in resumed_codex:
         errors.append(f"Codex resume command should use exec resume without fresh-session flags: {resumed_codex!r}")
+    if 'sandbox_mode="workspace-write"' not in resumed_codex or 'approval_policy="never"' not in resumed_codex:
+        errors.append(f"Codex resume should reassert sandbox and approval policy: {resumed_codex!r}")
+    gemini_command = build_local_cli_command("gemini", "fixture prompt", cwd=root)
+    if "--sandbox" not in gemini_command or gemini_command[gemini_command.index("--approval-mode") + 1] != "yolo":
+        errors.append(f"Gemini local CLI command should combine sandbox isolation with yolo approvals: {gemini_command!r}")
 
     codex_session, codex_output, codex_events = parse_local_cli_output(
         "codex",
@@ -640,6 +698,12 @@ def _worker_backend_errors(root: Path) -> list[str]:
     )
     if gemini_session != "gemini-1" or gemini_output != "tests: gemini fixture pass":
         errors.append(f"Gemini JSONL should normalize session and assistant output: {gemini_session!r}, {gemini_output!r}")
+    _error_session, gemini_error, gemini_error_events = parse_local_cli_output(
+        "gemini",
+        '{"type":"result","status":"error","error":{"type":"FatalError","message":"fixture terminal failure"}}\n',
+    )
+    if gemini_error != "fixture terminal failure" or len(gemini_error_events) != 1:
+        errors.append(f"Gemini terminal errors should preserve their actionable message: {gemini_error!r}")
 
     missing = _run_process(
         ["twin-provider-binary-does-not-exist"],
@@ -668,11 +732,33 @@ def _worker_backend_errors(root: Path) -> list[str]:
     ):
         errors.append(f"malformed local provider output should remain visible and marked: {malformed!r}")
 
+    terminal_error_script = root / "fake-terminal-error-provider.sh"
+    terminal_error_script.write_text(
+        "#!/bin/sh\nprintf '%s\\n' "
+        "'{\"type\":\"result\",\"status\":\"error\",\"error\":{\"message\":\"fixture terminal failure\"}}'\n",
+        encoding="utf-8",
+    )
+    terminal_error_script.chmod(0o755)
+    terminal_error = _run_process(
+        [str(terminal_error_script)],
+        cwd=root,
+        timeout_seconds=1,
+        stream_output_path=root / "terminal-error-cli-events.jsonl",
+        parse=lambda stdout, stderr: parse_local_cli_output("gemini", stdout, stderr),
+        session_id="",
+    )
+    if terminal_error.returncode != 1 or "fixture terminal failure" not in terminal_error.output_text:
+        errors.append(f"provider terminal errors should fail closed even after a zero process exit: {terminal_error!r}")
+
     timeout_script = root / "fake-timeout-provider.sh"
-    timeout_script.write_text("#!/bin/sh\nsleep 2\n", encoding="utf-8")
+    timeout_script.write_text(
+        "#!/bin/sh\n(sleep 2; printf 'orphaned' > \"$1\") &\nwait\n",
+        encoding="utf-8",
+    )
     timeout_script.chmod(0o755)
+    orphan_marker = root / "orphan-marker"
     timed_out = _run_process(
-        [str(timeout_script)],
+        [str(timeout_script), str(orphan_marker)],
         cwd=root,
         timeout_seconds=1,
         stream_output_path=root / "timeout-cli-events.jsonl",
@@ -681,6 +767,11 @@ def _worker_backend_errors(root: Path) -> list[str]:
     )
     if timed_out.returncode != 124 or "TIMEOUT after 1s" not in timed_out.output_text:
         errors.append(f"local provider timeout should return the standard timeout result: {timed_out!r}")
+    if not any(event.get("type") == "process_timeout" for event in timed_out.raw_events):
+        errors.append("local provider timeout should persist a structured terminal event")
+    time.sleep(2.2)
+    if orphan_marker.exists():
+        errors.append("local provider timeout should terminate tool subprocesses in the provider process group")
 
     fake_calls: list[dict[str, Any]] = []
 
@@ -769,6 +860,50 @@ def _worker_backend_errors(root: Path) -> list[str]:
             errors.append(f"CAO backend HTTP timeout should include control-plane grace: {timeout}")
     if not event_path.exists() or "fixture-token" in event_path.read_text(encoding="utf-8"):
         errors.append("CAO backend event evidence should exist without leaking the bearer token")
+    try:
+        CaoWorkerBackend(
+            provider="codex",
+            agent="developer",
+            base_url="http://cao.example.invalid",
+            auth_token="fixture-token",
+        )
+        errors.append("CAO bearer auth should reject plaintext HTTP outside loopback")
+    except ValueError as exc:
+        if "requires HTTPS outside loopback" not in str(exc):
+            errors.append(f"CAO plaintext auth rejection should be actionable: {exc}")
+    try:
+        CaoWorkerBackend(
+            provider="codex",
+            agent="developer",
+            base_url="file:///tmp/cao",
+            auth_token="",
+        )
+        errors.append("CAO base URL should reject non-HTTP schemes")
+    except ValueError:
+        pass
+    try:
+        _RejectCaoRedirects().redirect_request(
+            request=type("RedirectRequest", (), {"full_url": "https://cao.example.invalid/terminals/run-step"})(),
+            file_pointer=None,
+            code=302,
+            _message="found",
+            headers={},
+            _new_url="https://attacker.example.invalid/collect",
+        )
+        errors.append("CAO HTTP client should reject redirects before forwarding bearer headers")
+    except HTTPError:
+        pass
+    except Exception as exc:
+        errors.append(f"CAO redirect rejection should raise HTTPError: {exc}")
+    default_cao = CaoWorkerBackend(
+        provider="codex",
+        agent="developer",
+        base_url="http://127.0.0.1:9889",
+        auth_token="fixture-token",
+    )
+    opener_owner = getattr(default_cao.opener, "__self__", None)
+    if not any(isinstance(handler, _RejectCaoRedirects) for handler in getattr(opener_owner, "handlers", [])):
+        errors.append("CAO default HTTP opener should install the redirect-rejection handler")
 
     def failing_opener(_request: Any, *, timeout: float) -> Any:
         del timeout
@@ -929,6 +1064,7 @@ def _run_fixture_validation_impl() -> list[str]:
         if not (bootstrap_workspace / "goal.yaml").exists() or not (bootstrap_workspace / "plan.yaml").exists():
             errors.append("bootstrap should write goal.yaml and plan.yaml")
         errors.extend(_runtime_reentry_errors(root))
+        errors.extend(_worktree_cleanup_errors(root))
         authored_source = _write_workspace(root / "supervisor-authored-source")
         authored_draft = draft_from_files(
             root / "supervisor-authored-target",

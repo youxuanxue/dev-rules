@@ -8,9 +8,10 @@ from .plan import acceptance_evidence, acceptance_focus, apply_plan_updates, cho
 from .schema_contract import validate_schema
 from .util import now_utc, read_json, write_json
 from .worker import _repo_root
-from .worktree import remove_worktree
+from .worktree import WorktreeIsolationError, remove_worktree, worktree_path
 from .workspace import (
     WorkspaceError,
+    append_workspace_event,
     load_goal,
     load_human_response,
     load_plan,
@@ -21,6 +22,35 @@ from .workspace import (
     write_plan,
     write_state,
 )
+
+
+def _cleanup_terminal_worktree(workspace: Path) -> None:
+    repo_root = _repo_root(workspace)
+    target = worktree_path(repo_root, workspace)
+    if not target.exists():
+        return
+    try:
+        removed = remove_worktree(repo_root, workspace)
+    except WorktreeIsolationError as exc:
+        append_workspace_event(
+            workspace,
+            {
+                "event": "twin_worktree_cleanup",
+                "outcome": "failed",
+                "worktree_ref": str(target),
+                "error": str(exc),
+            },
+        )
+        return
+    append_workspace_event(
+        workspace,
+        {
+            "event": "twin_worktree_cleanup",
+            "outcome": "removed" if removed else "preserved",
+            "worktree_ref": str(target),
+            "reason": "" if removed else "unsaved_changes",
+        },
+    )
 
 
 def _run_path(workspace: Path, run_id: str) -> Path:
@@ -152,14 +182,6 @@ def apply_supervisor_review(workspace: Path, run_id: str, review: dict[str, Any]
     else:
         raise WorkspaceError(f"unknown review status: {status}")
 
-    # Terminal status → tear down this workspace's isolated worker worktree
-    # (best-effort; no-op when isolation was disabled or never created one).
-    if status in {"accepted_done", "failed"}:
-        try:
-            remove_worktree(_repo_root(workspace), workspace)
-        except Exception:  # cleanup must never break review application
-            pass
-
     state["last_review_status"] = status
     state["current_run_id"] = run_id
     next_item = choose_next_item(plan)
@@ -172,4 +194,6 @@ def apply_supervisor_review(workspace: Path, run_id: str, review: dict[str, Any]
     write_plan(workspace, plan)
     write_state(workspace, state)
     render_current(workspace, goal, plan, state)
+    if status in {"accepted_done", "failed"}:
+        _cleanup_terminal_worktree(workspace)
     return state

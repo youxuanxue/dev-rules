@@ -91,9 +91,10 @@ def validate_plan_semantics(goal: dict[str, Any], plan: dict[str, Any]) -> list[
             if "agent" in execution:
                 errors.append("plan.execution.agent is only valid for the cao backend")
         elif backend == "claude_headless":
-            for key in ("provider", "agent"):
-                if key in execution:
-                    errors.append(f"plan.execution.{key} is only valid for the cao backend")
+            if "provider" in execution:
+                errors.append("plan.execution.provider is only valid for local_cli or cao backends")
+            if "agent" in execution:
+                errors.append("plan.execution.agent is only valid for the cao backend")
 
     known_ac = ac_ids(goal)
     items = plan.get("items", [])
