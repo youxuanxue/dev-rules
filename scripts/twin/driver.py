@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-import fcntl
-import hashlib
 import hmac
 import json
-import os
 import secrets
 import shlex
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable
 
 from .contracts import DEV_RULES_ROOT
 from .privacy import stable_hash
@@ -23,13 +19,13 @@ from .workspace import (
     load_state,
     render_current,
     validate_workspace,
+    workspace_driver_lock,
     write_state,
 )
 
 
 DRIVER_PROTOCOL_VERSION = 1
 ALLOWED_SUPERVISOR_ROUTES = ("host/claude", "host/codex", "host/antigravity")
-LOCK_DIR_ENV = "TWIN_DRIVER_LOCK_DIR"
 MAX_DRIVER_STEPS = 8
 MAX_CONTEXT_STRING_CHARS = 12_000
 MAX_CONTEXT_LIST_ITEMS = 50
@@ -42,30 +38,6 @@ def _resolve_route(route: str) -> str:
         supported = ", ".join(ALLOWED_SUPERVISOR_ROUTES)
         raise WorkspaceError(f"unsupported supervisor route {value!r}; supported routes: {supported}")
     return value
-
-
-def _lock_path(workspace: Path) -> Path:
-    lock_root = Path(os.environ.get(LOCK_DIR_ENV) or Path.home() / ".twin" / "locks").expanduser().resolve()
-    lock_root.mkdir(parents=True, exist_ok=True)
-    workspace_hash = hashlib.sha256(str(workspace).encode("utf-8")).hexdigest()
-    return lock_root / f"{workspace_hash}.lock"
-
-
-@contextmanager
-def workspace_driver_lock(workspace: Path) -> Iterator[None]:
-    target = _lock_path(workspace)
-    descriptor = os.open(target, os.O_CREAT | os.O_RDWR, 0o600)
-    try:
-        try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise WorkspaceError(f"another twin driver is already active for {workspace}") from exc
-        yield
-    finally:
-        try:
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
-        finally:
-            os.close(descriptor)
 
 
 def _bounded_value(value: Any, budget: list[int] | None = None) -> Any:

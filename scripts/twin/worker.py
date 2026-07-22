@@ -445,18 +445,6 @@ def start_worker_turn(
         quality_flags.append("WORKER_SESSION_RESET")
     evidence_validation = validation or [VALIDATION_NOT_REPORTED]
 
-    state = load_state(workspace)
-    state["round_index"] = int(state.get("round_index") or 0) + 1
-    state["current_run_id"] = run_id
-    state["status"] = "failed" if result.session_lost else "review_required"
-    state["worker_session_id"] = (
-        None
-        if clear_session_after_run or not worker_backend.supports_resume
-        else (result.session_id or None)
-    )
-    state["next_instruction"] = ""
-    write_state(workspace, state)
-
     run_dir = _run_dir(workspace, run_id)
     _write_events(workspace, run_id, result.raw_events)
     worker_identity: dict[str, Any] = {
@@ -502,6 +490,18 @@ def start_worker_turn(
     pending_path = _pending_path(workspace, run_id)
     if pending_path.exists():
         pending_path.unlink()
-    render_current(workspace, load_goal(workspace), load_plan(workspace), state)
     _consume_human_response(workspace, run_id)
+
+    state = load_state(workspace)
+    state["round_index"] = int(state.get("round_index") or 0) + 1
+    state["current_run_id"] = run_id
+    state["status"] = "failed" if result.session_lost else "review_required"
+    state["worker_session_id"] = (
+        None
+        if clear_session_after_run or not worker_backend.supports_resume
+        else (result.session_id or None)
+    )
+    state["next_instruction"] = ""
+    write_state(workspace, state)
+    render_current(workspace, load_goal(workspace), load_plan(workspace), state)
     return run

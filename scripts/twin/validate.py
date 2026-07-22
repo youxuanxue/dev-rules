@@ -7,12 +7,13 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 
-from . import contracts, supervisor_review, util
+from . import contracts, runtime as twin_runtime, supervisor_review, util, worker as twin_worker
 from .bootstrap import draft_from_files, draft_workspace, slugify_goal, write_workspace_draft
 from .claude_runner import ClaudeRunResult
 from .contracts import (
@@ -1621,6 +1622,34 @@ def _run_fixture_validation_impl() -> list[str]:
         except WorkspaceError:
             pass
 
+        artifact_failure_workspace = _write_workspace(root / "run-artifact-failure")
+        original_worker_write_json = twin_worker.write_json
+
+        def fail_run_artifact(path: Path, value: Any) -> None:
+            if path.name == "run.json":
+                raise OSError("fixture run artifact write failure")
+            original_worker_write_json(path, value)
+
+        twin_worker.write_json = fail_run_artifact
+        try:
+            try:
+                start_worker_turn(
+                    artifact_failure_workspace,
+                    "触发 run artifact 写失败 fixture",
+                    runner=FakeRunner(),
+                )
+                errors.append("run artifact write failure should fail the worker turn")
+            except OSError:
+                pass
+        finally:
+            twin_worker.write_json = original_worker_write_json
+        artifact_failure_state = load_state(artifact_failure_workspace)
+        if artifact_failure_state.get("status") != "worker_running":
+            errors.append("run artifact failure must not publish review_required before evidence exists")
+        failed_run_id = str(artifact_failure_state.get("current_run_id") or "")
+        if not failed_run_id or (artifact_failure_workspace / "runs" / failed_run_id / "run.json").exists():
+            errors.append("run artifact failure fixture should retain only the in-progress run state")
+
         stale_workspace = _write_workspace(root / "stale-running")
         stale_state = load_state(stale_workspace)
         stale_state["status"] = "worker_running"
@@ -1950,6 +1979,64 @@ def _run_fixture_validation_impl() -> list[str]:
                 errors.append(f"respond should not write workspace events for {blocked_status} state")
             if load_state(blocked_workspace).get("status") != blocked_status:
                 errors.append(f"respond should not mutate {blocked_status} state")
+
+        concurrent_respond_workspace = _write_workspace(root / "concurrent-respond")
+        concurrent_respond_state = load_state(concurrent_respond_workspace)
+        concurrent_respond_state["status"] = "needs_human"
+        concurrent_respond_state["needs_human"] = {
+            "question": "请选择唯一答案",
+            "context": "concurrent respond fixture",
+            "created_at": "2026-07-22T00:00:00Z",
+        }
+        write_state(concurrent_respond_workspace, concurrent_respond_state)
+        response_write_started = threading.Event()
+        release_response_write = threading.Event()
+        first_response_errors: list[BaseException] = []
+        original_write_human_response = twin_runtime.write_human_response
+
+        def block_first_response(workspace_path: Path, text: str) -> Path:
+            target = original_write_human_response(workspace_path, text)
+            if text == "first-answer":
+                response_write_started.set()
+                if not release_response_write.wait(timeout=5):
+                    raise RuntimeError("concurrent respond fixture timed out")
+            return target
+
+        def record_first_response() -> None:
+            try:
+                record_human_response(concurrent_respond_workspace, "first-answer")
+            except BaseException as exc:
+                first_response_errors.append(exc)
+
+        twin_runtime.write_human_response = block_first_response
+        first_response_thread = threading.Thread(target=record_first_response)
+        first_response_thread.start()
+        try:
+            if not response_write_started.wait(timeout=5):
+                errors.append("concurrent respond fixture did not enter the first mutation")
+            else:
+                try:
+                    record_human_response(concurrent_respond_workspace, "second-answer")
+                    errors.append("concurrent respond calls must not both succeed")
+                except WorkspaceError as exc:
+                    if "another twin driver is already active" not in str(exc):
+                        errors.append(f"concurrent respond should fail on the workspace lock: {exc}")
+        finally:
+            release_response_write.set()
+            first_response_thread.join(timeout=5)
+            twin_runtime.write_human_response = original_write_human_response
+        if first_response_thread.is_alive():
+            errors.append("concurrent respond fixture did not release the first mutation")
+        if first_response_errors:
+            errors.append(f"first concurrent respond should succeed: {first_response_errors[0]}")
+        concurrent_response = read_json(concurrent_respond_workspace / "human_response.json")
+        if concurrent_response.get("text") != "first-answer":
+            errors.append("rejected concurrent respond must not overwrite the accepted response")
+        concurrent_events_path = concurrent_respond_workspace / "workspace_events.jsonl"
+        concurrent_events = concurrent_events_path.read_text(encoding="utf-8").splitlines()
+        if len(concurrent_events) != 1:
+            errors.append("concurrent respond should append exactly one audit event")
+
         try:
             start_worker_turn(workspace, "不应启动", runner=runner)
             errors.append("worker should not start while needs_human pending")

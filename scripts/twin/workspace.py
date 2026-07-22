@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from .contracts import (
     ACTIVE_WORKSPACE_ENV,
@@ -34,6 +36,33 @@ from .util import now_utc, read_json, read_yaml_like, write_json, write_yaml_lik
 
 class WorkspaceError(ValueError):
     pass
+
+
+LOCK_DIR_ENV = "TWIN_DRIVER_LOCK_DIR"
+
+
+def _lock_path(workspace: Path) -> Path:
+    lock_root = Path(os.environ.get(LOCK_DIR_ENV) or Path.home() / ".twin" / "locks").expanduser().resolve()
+    lock_root.mkdir(parents=True, exist_ok=True)
+    workspace_hash = hashlib.sha256(str(workspace).encode("utf-8")).hexdigest()
+    return lock_root / f"{workspace_hash}.lock"
+
+
+@contextmanager
+def workspace_driver_lock(workspace: Path) -> Iterator[None]:
+    target = _lock_path(workspace)
+    descriptor = os.open(target, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise WorkspaceError(f"another twin driver is already active for {workspace}") from exc
+        yield
+    finally:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
 
 
 def active_workspace_file() -> Path:
