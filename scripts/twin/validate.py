@@ -42,7 +42,7 @@ from .runtime import (
 )
 from .schema_contract import validate_artifact, validate_schema
 from .util import read_json, write_json, write_yaml_like
-from .claude_runner import DEFAULT_WORKER_TIMEOUT_SECONDS, WORKER_TIMEOUT_ENV, default_worker_timeout_seconds, detect_session_lost, is_body_guard_rejection
+from .claude_runner import DEFAULT_WORKER_TIMEOUT_SECONDS, WORKER_TIMEOUT_ENV, default_worker_timeout_seconds, detect_session_lost, is_body_guard_rejection, run_claude_headless
 from .worker import DEFAULT_WORKER_MAX_BUDGET_USD, assess_run_quality, changed_files_from_status, default_worker_max_budget_usd, should_clear_worker_session
 from .local_cli import _run_process, build_local_cli_command, parse_local_cli_output
 from .worker_backend import CaoWorkerBackend, LocalCliWorkerBackend, _RejectCaoRedirects
@@ -772,6 +772,38 @@ def _worker_backend_errors(root: Path) -> list[str]:
     time.sleep(2.2)
     if orphan_marker.exists():
         errors.append("local provider timeout should terminate tool subprocesses in the provider process group")
+
+    fake_bin = root / "fake-claude-bin"
+    fake_bin.mkdir()
+    fake_claude = fake_bin / "claude"
+    fake_claude.write_text(
+        "#!/bin/sh\n(sleep 1; printf 'orphaned' > \"$2\") &\nwait\n",
+        encoding="utf-8",
+    )
+    fake_claude.chmod(0o755)
+    stream_marker = root / "claude-stream-orphan-marker"
+    captured_marker = root / "claude-captured-orphan-marker"
+    original_path = os.environ.get("PATH", "")
+    os.environ["PATH"] = str(fake_bin) + os.pathsep + original_path
+    try:
+        stream_timeout = run_claude_headless(
+            str(stream_marker),
+            cwd=root,
+            timeout_seconds=0.2,
+            stream_output_path=root / "claude-timeout-events.jsonl",
+        )
+        captured_timeout = run_claude_headless(
+            str(captured_marker),
+            cwd=root,
+            timeout_seconds=0.2,
+        )
+    finally:
+        os.environ["PATH"] = original_path
+    if stream_timeout.returncode != 124 or captured_timeout.returncode != 124:
+        errors.append("Claude provider timeout should return the standard timeout result")
+    time.sleep(1.1)
+    if stream_marker.exists() or captured_marker.exists():
+        errors.append("Claude provider timeout should terminate tool subprocesses in every runner mode")
 
     fake_calls: list[dict[str, Any]] = []
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import subprocess
 import threading
 from dataclasses import dataclass
@@ -42,6 +43,38 @@ class ClaudeRunResult:
     raw_events: list[dict[str, Any]]
     cwd: str = ""
     session_lost: bool = False
+
+
+def terminate_process_group(process: subprocess.Popen[str], *, grace_seconds: int = 5) -> None:
+    """Terminate a provider and every tool process spawned beneath it."""
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                capture_output=True,
+                check=False,
+                timeout=grace_seconds,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        process.wait(timeout=grace_seconds)
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    if process.poll() is None:
+        process.wait()
 
 
 def parse_stream_json(text: str) -> tuple[str, str, list[dict[str, Any]]]:
@@ -191,27 +224,39 @@ def run_claude_headless(
         env["TWIN_ROLE"] = role
     if extra_env:
         env.update(extra_env)
+    popen_options: dict[str, Any] = {}
+    if os.name == "posix":
+        popen_options["start_new_session"] = True
     if stream_output_path is None:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            **popen_options,
+        )
         try:
-            proc = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout_seconds, stdin=subprocess.DEVNULL)
-        except subprocess.TimeoutExpired as exc:
-            output = (exc.stdout or "") + (exc.stderr or "")
-            if isinstance(output, bytes):
-                output = output.decode(errors="replace")
+            stdout_text, stderr_text = proc.communicate(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            terminate_process_group(proc)
+            stdout_text, stderr_text = proc.communicate()
+            output = (stdout_text + stderr_text).strip()
             return ClaudeRunResult(
                 session_id=session_id,
-                output_text=(str(output).strip() + f"\nTIMEOUT after {timeout_seconds}s").strip(),
+                output_text=(output + f"\nTIMEOUT after {timeout_seconds}s").strip(),
                 returncode=124,
                 raw_events=[],
                 cwd=str(cwd),
             )
-        stdout_text = proc.stdout
-        stderr_text = proc.stderr
     else:
         stream_output_path.parent.mkdir(parents=True, exist_ok=True)
         stdout_parts: list[str] = []
         stderr_parts: list[str] = []
         with stream_output_path.open("w", encoding="utf-8") as stream_file:
+            stream_lock = threading.Lock()
             proc = subprocess.Popen(
                 cmd,
                 cwd=cwd,
@@ -221,21 +266,24 @@ def run_claude_headless(
                 stderr=subprocess.PIPE,
                 text=True,
                 bufsize=1,
+                **popen_options,
             )
 
             def drain_stdout() -> None:
                 assert proc.stdout is not None
                 for line in proc.stdout:
                     stdout_parts.append(line)
-                    stream_file.write(line)
-                    stream_file.flush()
+                    with stream_lock:
+                        stream_file.write(line)
+                        stream_file.flush()
 
             def drain_stderr() -> None:
                 assert proc.stderr is not None
                 for line in proc.stderr:
                     stderr_parts.append(line)
-                    stream_file.write(json.dumps({"type": "stderr", "text": line.rstrip("\n")}, ensure_ascii=False, sort_keys=True) + "\n")
-                    stream_file.flush()
+                    with stream_lock:
+                        stream_file.write(json.dumps({"type": "stderr", "text": line.rstrip("\n")}, ensure_ascii=False, sort_keys=True) + "\n")
+                        stream_file.flush()
 
             stdout_thread = threading.Thread(target=drain_stdout, daemon=True)
             stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
@@ -244,8 +292,7 @@ def run_claude_headless(
             try:
                 proc.wait(timeout=timeout_seconds)
             except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
+                terminate_process_group(proc)
                 stdout_thread.join(timeout=5)
                 stderr_thread.join(timeout=5)
                 output = ("".join(stdout_parts) + "".join(stderr_parts)).strip()

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import signal
 import shutil
 import subprocess
 import threading
@@ -10,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from .claude_runner import ClaudeRunResult
+from .claude_runner import ClaudeRunResult, terminate_process_group
 
 
 LOCAL_CLI_PROVIDERS = ("claude", "codex", "gemini")
@@ -200,39 +199,6 @@ def parse_local_cli_output(provider: str, stdout_text: str, stderr_text: str = "
     return session_id, "\n".join(part.strip() for part in output if part.strip()).strip(), events
 
 
-def _terminate_process_group(process: subprocess.Popen[str], *, grace_seconds: int = 5) -> None:
-    if process.poll() is not None:
-        return
-    if os.name == "nt":
-        try:
-            subprocess.run(
-                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                capture_output=True,
-                check=False,
-                timeout=grace_seconds,
-            )
-        except (OSError, subprocess.SubprocessError):
-            pass
-        if process.poll() is None:
-            process.kill()
-            process.wait()
-        return
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        return
-    try:
-        process.wait(timeout=grace_seconds)
-    except subprocess.TimeoutExpired:
-        pass
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        return
-    if process.poll() is None:
-        process.wait()
-
-
 def _run_process(
     command: list[str],
     *,
@@ -276,17 +242,20 @@ def _run_process(
     assert process.stdout is not None
     assert process.stderr is not None
     with stream_output_path.open("w", encoding="utf-8") as stream_file:
+        stream_lock = threading.Lock()
         def drain_stdout() -> None:
             for line in process.stdout:
                 stdout_parts.append(line)
-                stream_file.write(line)
-                stream_file.flush()
+                with stream_lock:
+                    stream_file.write(line)
+                    stream_file.flush()
 
         def drain_stderr() -> None:
             for line in process.stderr:
                 stderr_parts.append(line)
-                stream_file.write(json.dumps({"type": "stderr", "text": line.rstrip("\n")}, ensure_ascii=False, sort_keys=True) + "\n")
-                stream_file.flush()
+                with stream_lock:
+                    stream_file.write(json.dumps({"type": "stderr", "text": line.rstrip("\n")}, ensure_ascii=False, sort_keys=True) + "\n")
+                    stream_file.flush()
 
         stdout_thread = threading.Thread(target=drain_stdout, daemon=True)
         stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
@@ -295,7 +264,7 @@ def _run_process(
         try:
             process.wait(timeout=timeout_seconds)
         except subprocess.TimeoutExpired:
-            _terminate_process_group(process)
+            terminate_process_group(process)
             stdout_thread.join(timeout=5)
             stderr_thread.join(timeout=5)
             parsed_session, output, events = parse("".join(stdout_parts), "".join(stderr_parts))
