@@ -28,6 +28,8 @@ def continuation_action(workspace: Path | str) -> dict[str, Any]:
     validate_workspace(workspace_path)
     state = load_state(workspace_path)
     status = str(state.get("status") or "")
+    supervisor_route = state.get("supervisor_route") or "<host/provider>"
+    run_command = f"twin run {workspace_path} --supervisor {supervisor_route}"
     base = {
         "workspace": str(workspace_path),
         "status": status,
@@ -38,22 +40,22 @@ def continuation_action(workspace: Path | str) -> dict[str, Any]:
         return {
             **base,
             "action": "supervisor_instruction",
-            "command": f"python3 -m scripts.twin supervisor-context --workspace {workspace_path}",
-            "next": f"/twin {workspace_path}",
+            "command": f"twin supervisor-context --workspace {workspace_path}",
+            "next": run_command,
         }
     if status == "continue":
         if not base["next_instruction"]:
             return {
                 **base,
                 "action": "supervisor_instruction",
-                "command": f"python3 -m scripts.twin supervisor-context --workspace {workspace_path}",
-                "next": f"/twin {workspace_path}",
+                "command": f"twin supervisor-context --workspace {workspace_path}",
+                "next": run_command,
             }
         return {
             **base,
             "action": "worker_turn",
-            "command": f"python3 -m scripts.twin worker-turn --workspace {workspace_path} --instruction <next_instruction>",
-            "next": f"/twin {workspace_path}",
+            "command": f"twin worker-turn --workspace {workspace_path} --instruction <next_instruction>",
+            "next": run_command,
         }
     if status == "worker_running":
         worker = worker_running_diagnostics(workspace_path, state) or {}
@@ -64,39 +66,39 @@ def continuation_action(workspace: Path | str) -> dict[str, Any]:
                 **base,
                 "action": "review_run",
                 "worker": worker,
-                "command": f"python3 -m scripts.twin review-context --workspace {workspace_path} --run-id {run_id} --json",
-                "next": f"/twin {workspace_path}",
+                "command": f"twin review-context --workspace {workspace_path} --run-id {run_id} --json",
+                "next": run_command,
             }
         if worker_action == "recover_worker_turn":
             return {
                 **base,
                 "action": "recover_worker_turn",
                 "worker": worker,
-                "command": f"python3 -m scripts.twin worker-turn --workspace {workspace_path} --instruction <next_instruction>",
-                "next": f"/twin {workspace_path}",
+                "command": f"twin worker-turn --workspace {workspace_path} --instruction <next_instruction>",
+                "next": run_command,
             }
         return {
             **base,
             "action": "watch_worker",
             "worker": worker,
-            "command": f"python3 -m scripts.twin watch --workspace {workspace_path} --json",
-            "next": f"/twin status {workspace_path}",
+            "command": f"twin watch --workspace {workspace_path} --json",
+            "next": f"twin status {workspace_path}",
         }
     if status == "review_required":
         run_id = str(state.get("current_run_id") or "")
         return {
             **base,
             "action": "review_run",
-            "command": f"python3 -m scripts.twin review-context --workspace {workspace_path} --run-id {run_id} --json",
-            "next": f"/twin {workspace_path}",
+            "command": f"twin review-context --workspace {workspace_path} --run-id {run_id} --json",
+            "next": run_command,
         }
     if status == "needs_human":
-        return {**base, "action": "ask_human", "needs_human": state.get("needs_human"), "next": "/twin respond <answer>"}
+        return {**base, "action": "ask_human", "needs_human": state.get("needs_human"), "next": "twin respond <answer>"}
     if status == "accepted_done":
         return {**base, "action": "done", "next": "none"}
     if status == "failed":
         return {**base, "action": "failed", "next": "inspect CURRENT.md and latest run evidence"}
-    return {**base, "action": "unknown", "next": f"/twin status {workspace_path}"}
+    return {**base, "action": "unknown", "next": f"twin status {workspace_path}"}
 
 
 def record_human_response(workspace: Path | str, text: str) -> Path:

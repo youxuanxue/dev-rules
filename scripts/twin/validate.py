@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import builtins
+import hashlib
 import json
 import os
 import subprocess
@@ -28,6 +29,7 @@ from .contracts import (
     WORKER_PERSONA_PATH,
 )
 from .loop_harness import run_supervisor_loop_harness
+from .driver import run_driver, submit_instruction, submit_review, workspace_driver_lock
 from .plan import acceptance_evidence, plan_gaps, validate_bootstrap_plan_constraints, validate_plan_semantics
 from .research import load_research
 from .runtime import (
@@ -464,6 +466,281 @@ def _runtime_reentry_errors(root: Path) -> list[str]:
     return errors
 
 
+def _driver_protocol_errors(root: Path) -> list[str]:
+    errors: list[str] = []
+    runner = FakeRunner()
+
+    def fake_worker_turn(workspace: Path, instruction: str, **_kwargs: Any) -> dict[str, Any]:
+        return start_worker_turn(workspace, instruction, runner=runner)
+
+    legacy = _write_workspace(root / "driver-legacy")
+    legacy_state = load_state(legacy)
+    for key in ("state_revision", "supervisor_route", "pending_action"):
+        legacy_state.pop(key, None)
+    write_json(legacy / "supervisor_state.json", legacy_state)
+    normalized = load_state(legacy)
+    if normalized.get("state_revision") != 0 or normalized.get("supervisor_route") is not None:
+        errors.append("legacy supervisor state should normalize additively in memory")
+    if "state_revision" in read_json(legacy / "supervisor_state.json"):
+        errors.append("legacy supervisor state should not mutate during a read")
+
+    first = run_driver(legacy, "host/codex", worker_turn_fn=fake_worker_turn)
+    repeated = run_driver(legacy, "host/codex", worker_turn_fn=fake_worker_turn)
+    if first.get("action") != "supervisor_instruction":
+        errors.append(f"Codex host should first request a supervisor instruction: {first!r}")
+        return errors
+    if first.get("action_token") != repeated.get("action_token"):
+        errors.append("repeated twin run should return the same pending action token")
+    stored = load_state(legacy)
+    if stored.get("supervisor_route") != "host/codex" or not isinstance(stored.get("state_revision"), int):
+        errors.append("legacy workspace should lazily bind route and revision on first universal run")
+    if first.get("state_revision") != stored.get("state_revision"):
+        errors.append("driver action revision should match persisted state revision")
+    submit_command = first.get("submit", {}).get("command", "")
+    if "twin submit-instruction" not in submit_command or "--instruction-file -" not in submit_command:
+        errors.append("instruction action should expose an exact stdin submit command")
+    try:
+        start_worker_turn(legacy, "bypass pending instruction", runner=runner)
+        errors.append("low-level worker-turn must not bypass a pending supervisor action")
+    except WorkspaceError:
+        pass
+
+    revision = int(first["state_revision"])
+    token = str(first["action_token"])
+    try:
+        submit_instruction(
+            legacy,
+            "host/codex",
+            state_revision=revision + 1,
+            action_token=token,
+            instruction="stale instruction",
+        )
+        errors.append("stale instruction revision should be rejected")
+    except WorkspaceError:
+        pass
+    try:
+        submit_instruction(
+            legacy,
+            "host/claude",
+            state_revision=revision,
+            action_token=token,
+            instruction="wrong route",
+        )
+        errors.append("supervisor route drift should be rejected")
+    except WorkspaceError:
+        pass
+    try:
+        submit_instruction(
+            legacy,
+            "host/codex",
+            state_revision=revision,
+            action_token="wrong-token",
+            instruction="wrong token",
+        )
+        errors.append("wrong instruction token should be rejected")
+    except WorkspaceError:
+        pass
+    try:
+        submit_review(
+            legacy,
+            "host/codex",
+            state_revision=revision,
+            action_token=token,
+            run_id="run-wrong-action",
+            review=_review("continue"),
+        )
+        errors.append("review submission against an instruction action should be rejected")
+    except WorkspaceError:
+        pass
+
+    other = _write_workspace(root / "driver-wrong-workspace")
+    other_action = run_driver(other, "host/codex", worker_turn_fn=fake_worker_turn)
+    try:
+        submit_instruction(
+            other,
+            "host/codex",
+            state_revision=int(other_action["state_revision"]),
+            action_token=token,
+            instruction="cross workspace",
+        )
+        errors.append("cross-workspace action token should be rejected")
+    except WorkspaceError:
+        pass
+
+    submitted = submit_instruction(
+        legacy,
+        "host/codex",
+        state_revision=revision,
+        action_token=token,
+        instruction="实现 Codex host fixture",
+    )
+    if submitted.get("status") != "continue" or load_state(legacy).get("pending_action") is not None:
+        errors.append("instruction submission should atomically clear pending action and continue")
+    try:
+        submit_instruction(
+            legacy,
+            "host/codex",
+            state_revision=revision,
+            action_token=token,
+            instruction="duplicate",
+        )
+        errors.append("duplicate instruction token should be rejected")
+    except WorkspaceError:
+        pass
+    event_text = (legacy / "workspace_events.jsonl").read_text(encoding="utf-8")
+    if "实现 Codex host fixture" in event_text:
+        errors.append("supervisor instruction event must not persist instruction text")
+
+    review_action = run_driver(legacy, "host/codex", worker_turn_fn=fake_worker_turn)
+    if review_action.get("action") != "review_run" or not review_action.get("run_id"):
+        errors.append(f"Codex host should auto-run worker then request review: {review_action!r}")
+        return errors
+    review_revision = int(review_action["state_revision"])
+    review_token = str(review_action["action_token"])
+    run_id = str(review_action["run_id"])
+    if "twin submit-review" not in review_action.get("submit", {}).get("command", ""):
+        errors.append("review action should expose an exact submit command")
+    try:
+        apply_supervisor_review(legacy, run_id, _review("continue"))
+        errors.append("low-level review must not bypass a pending review token")
+    except WorkspaceError:
+        pass
+    try:
+        submit_review(
+            legacy,
+            "host/codex",
+            state_revision=review_revision,
+            action_token=review_token,
+            run_id="run-wrong",
+            review=_review("continue"),
+        )
+        errors.append("review submission for the wrong run should be rejected")
+    except WorkspaceError:
+        pass
+    try:
+        submit_instruction(
+            legacy,
+            "host/codex",
+            state_revision=review_revision,
+            action_token=review_token,
+            instruction="wrong action",
+        )
+        errors.append("instruction submission against a review action should be rejected")
+    except WorkspaceError:
+        pass
+
+    submit_review(
+        legacy,
+        "host/codex",
+        state_revision=review_revision,
+        action_token=review_token,
+        run_id=run_id,
+        review=_review("continue"),
+    )
+    try:
+        submit_review(
+            legacy,
+            "host/codex",
+            state_revision=review_revision,
+            action_token=review_token,
+            run_id=run_id,
+            review=_review("continue"),
+        )
+        errors.append("duplicate review token should be rejected")
+    except WorkspaceError:
+        pass
+    final_review_action = run_driver(legacy, "host/codex", worker_turn_fn=fake_worker_turn)
+    final_review = _review("accepted_done")
+    submit_review(
+        legacy,
+        "host/codex",
+        state_revision=int(final_review_action["state_revision"]),
+        action_token=str(final_review_action["action_token"]),
+        run_id=str(final_review_action["run_id"]),
+        review=final_review,
+    )
+    terminal = run_driver(legacy, "host/codex", worker_turn_fn=fake_worker_turn)
+    if terminal.get("action") != "done" or terminal.get("status") != "accepted_done":
+        errors.append("Codex host protocol should reach accepted_done end to end")
+    if terminal.get("resume_command"):
+        errors.append("terminal driver actions must not expose a contradictory resume command")
+
+    needs_workspace = _write_workspace(root / "driver-needs-human")
+    needs_action = run_driver(needs_workspace, "host/codex", worker_turn_fn=fake_worker_turn)
+    submit_instruction(
+        needs_workspace,
+        "host/codex",
+        state_revision=int(needs_action["state_revision"]),
+        action_token=str(needs_action["action_token"]),
+        instruction="run needs_human fixture",
+    )
+    needs_review_action = run_driver(needs_workspace, "host/codex", worker_turn_fn=fake_worker_turn)
+    submit_review(
+        needs_workspace,
+        "host/codex",
+        state_revision=int(needs_review_action["state_revision"]),
+        action_token=str(needs_review_action["action_token"]),
+        run_id=str(needs_review_action["run_id"]),
+        review=_review("needs_human", question="请确认 driver fixture"),
+    )
+    human_gate = run_driver(needs_workspace, "host/codex", worker_turn_fn=fake_worker_turn)
+    if human_gate.get("action") != "ask_human":
+        errors.append("driver should stop identically at needs_human")
+    record_human_response(needs_workspace, "继续")
+    resumed_action = run_driver(needs_workspace, "host/codex", worker_turn_fn=fake_worker_turn)
+    if resumed_action.get("action") != "supervisor_instruction":
+        errors.append("driver should resume with supervisor instruction after twin respond")
+
+    lock_workspace = _write_workspace(root / "driver-lock")
+    lock_holder = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; from pathlib import Path; "
+                "from scripts.twin.driver import workspace_driver_lock; "
+                "lock=workspace_driver_lock(Path(sys.argv[1])); lock.__enter__(); "
+                "print('locked', flush=True); sys.stdin.read(1); lock.__exit__(None, None, None)"
+            ),
+            str(lock_workspace),
+        ],
+        cwd=Path(__file__).resolve().parents[2],
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2])},
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert lock_holder.stdout is not None
+    assert lock_holder.stdin is not None
+    if lock_holder.stdout.readline().strip() != "locked":
+        errors.append("driver lock fixture failed to acquire child-process lock")
+    else:
+        try:
+            with workspace_driver_lock(lock_workspace):
+                pass
+            errors.append("concurrent twin driver acquisition should fail closed")
+        except WorkspaceError:
+            pass
+    lock_holder.stdin.write("x")
+    lock_holder.stdin.flush()
+    lock_holder.wait(timeout=10)
+
+    launcher = Path(__file__).resolve().parents[2] / "global" / "bin" / "twin"
+    launcher_env = {**os.environ, ACTIVE_WORKSPACE_ENV: str(root / "driver-launcher-active")}
+    launcher_result = subprocess.run(
+        [str(launcher), "status", str(needs_workspace), "--json"],
+        cwd=Path(__file__).resolve().parents[2],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=launcher_env,
+    )
+    if launcher_result.returncode != 0 or str(needs_workspace) not in launcher_result.stdout:
+        errors.append(f"real twin launcher smoke failed: {launcher_result.stderr.strip()}")
+    return errors
+
+
 def _worktree_cleanup_errors(root: Path) -> list[str]:
     errors: list[str] = []
     workspace = _write_workspace(root / "cleanup-evidence")
@@ -523,6 +800,9 @@ def _behavior_helper_errors() -> list[str]:
     first_unstaged = changed_files_from_status(" M scripts/preflight_common.sh\n")[0]
     if first_unstaged != "scripts/preflight_common.sh":
         errors.append(f"changed_files_from_status should preserve first unstaged path: {first_unstaged!r}")
+    non_git_status = "fatal: not a git repository (or any of the parent directories): .git\n"
+    if changed_files_from_status(non_git_status):
+        errors.append("git diagnostics must not be misreported as changed files")
     # A resume with no real model turn is a lost session regardless of exit
     # code: a body-guard / oversized-request rejection emits only an error
     # event, and re-resuming it would replay the doomed 10MB request forever.
@@ -708,7 +988,7 @@ def _worker_backend_errors(root: Path) -> list[str]:
     missing = _run_process(
         ["twin-provider-binary-does-not-exist"],
         cwd=root,
-        timeout_seconds=1,
+        timeout_seconds=5,
         stream_output_path=root / "missing-cli-events.jsonl",
         parse=lambda stdout, stderr: parse_local_cli_output("codex", stdout, stderr),
         session_id="",
@@ -722,7 +1002,7 @@ def _worker_backend_errors(root: Path) -> list[str]:
     malformed = _run_process(
         [str(malformed_script)],
         cwd=root,
-        timeout_seconds=1,
+        timeout_seconds=5,
         stream_output_path=root / "malformed-cli-events.jsonl",
         parse=lambda stdout, stderr: parse_local_cli_output("codex", stdout, stderr),
         session_id="",
@@ -742,7 +1022,7 @@ def _worker_backend_errors(root: Path) -> list[str]:
     terminal_error = _run_process(
         [str(terminal_error_script)],
         cwd=root,
-        timeout_seconds=1,
+        timeout_seconds=5,
         stream_output_path=root / "terminal-error-cli-events.jsonl",
         parse=lambda stdout, stderr: parse_local_cli_output("gemini", stdout, stderr),
         session_id="",
@@ -1095,6 +1375,7 @@ def _run_fixture_validation_impl() -> list[str]:
             errors.append(f"bootstrap workspace failed validation: {exc}")
         if not (bootstrap_workspace / "goal.yaml").exists() or not (bootstrap_workspace / "plan.yaml").exists():
             errors.append("bootstrap should write goal.yaml and plan.yaml")
+        errors.extend(_driver_protocol_errors(root))
         errors.extend(_runtime_reentry_errors(root))
         errors.extend(_worktree_cleanup_errors(root))
         authored_source = _write_workspace(root / "supervisor-authored-source")
@@ -1436,7 +1717,7 @@ def _run_fixture_validation_impl() -> list[str]:
         display = status.get("display", {})
         if not status.get("needs_human") or status.get("current_run_id") != needs_run["run_id"]:
             errors.append("status should expose needs_human and the latest run")
-        if display.get("label") != "waiting for you" or display.get("next_command") != "/twin respond <answer>":
+        if display.get("label") != "waiting for you" or display.get("next_command") != "twin respond <answer>":
             errors.append("status display should make needs_human actionable for humans")
         if not isinstance(display.get("evidence_paths"), dict) or not display["evidence_paths"].get("workspace_events"):
             errors.append("status display should expose workspace event evidence path")
@@ -1451,10 +1732,10 @@ def _run_fixture_validation_impl() -> list[str]:
         )
         if len(needs_cli.stdout.encode("utf-8")) > 4096:
             errors.append("needs_human status CLI should stay compact and not expand workspace artifacts")
-        if "Status: waiting for you (needs_human)" not in needs_cli.stdout or "Next command: /twin respond <answer>" not in needs_cli.stdout:
+        if "Status: waiting for you (needs_human)" not in needs_cli.stdout or "Next command: twin respond <answer>" not in needs_cli.stdout:
             errors.append("needs_human CLI should lead with human-friendly status and next command")
-        if "respond=/twin respond <answer>" not in needs_cli.stdout or "evidence_review=" not in needs_cli.stdout:
-            errors.append("needs_human CLI should still include the question and /twin respond path")
+        if "respond=twin respond <answer>" not in needs_cli.stdout or "evidence_review=" not in needs_cli.stdout:
+            errors.append("needs_human CLI should still include the question and twin respond path")
         isolated_env = {key: value for key, value in os.environ.items() if key != ACTIVE_WORKSPACE_ENV}
         isolated_env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
         isolated_project = root / "active-workspace-isolated-project"
@@ -1501,6 +1782,9 @@ def _run_fixture_validation_impl() -> list[str]:
         )
         if seed_b.returncode != 0:
             errors.append(f"multi-project B seed status failed: {seed_b.stderr.strip()}")
+        neutral_pointer_dir = multi_home / ".twin" / "active-workspaces"
+        if not neutral_pointer_dir.is_dir() or len(list(neutral_pointer_dir.iterdir())) != 2:
+            errors.append("active workspace pointers should use the provider-neutral ~/.twin path")
         multi_a = subprocess.run(
             [sys.executable, "-m", "scripts.twin", "status", "--json"],
             cwd=project_a, capture_output=True, text=True, timeout=30, env=multi_env,
@@ -1511,6 +1795,20 @@ def _run_fixture_validation_impl() -> list[str]:
             errors.append("multi-project A active workspace did not resolve to workspace_a")
         elif str(workspace_b) in multi_a.stdout:
             errors.append("multi-project A leaked workspace_b — cwd-scoping is not isolating projects")
+        legacy_project = root / "legacy-active-project"
+        legacy_project.mkdir()
+        legacy_workspace = _write_workspace(root / "legacy-active-workspace")
+        validate_workspace(legacy_workspace)
+        legacy_id = hashlib.sha256(str(legacy_project.resolve()).encode("utf-8")).hexdigest()[:16]
+        legacy_pointer = multi_home / ".claude" / "twin-active-workspaces" / legacy_id
+        legacy_pointer.parent.mkdir(parents=True, exist_ok=True)
+        legacy_pointer.write_text(str(legacy_workspace) + "\n", encoding="utf-8")
+        legacy_active = subprocess.run(
+            [sys.executable, "-m", "scripts.twin", "status", "--json"],
+            cwd=legacy_project, capture_output=True, text=True, timeout=30, env=multi_env,
+        )
+        if legacy_active.returncode != 0 or str(legacy_workspace) not in legacy_active.stdout:
+            errors.append("provider-neutral active workspace lookup should retain legacy ~/.claude fallback")
         # Stale pointer: workspace_a's pointer still resolves, but the
         # workspace itself is gone. The user-visible error must name the
         # path AND the recovery action, not bubble up a schema failure

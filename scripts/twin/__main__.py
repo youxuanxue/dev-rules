@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
 import sys
 import time
 from pathlib import Path
 
 from .bootstrap import draft_from_files, draft_workspace, write_workspace_draft
+from .contracts import DEV_RULES_ROOT, SUPERVISOR_PERSONA_PATH, WORKER_PERSONA_PATH
+from .driver import ALLOWED_SUPERVISOR_ROUTES, run_driver, submit_instruction, submit_review
 from .worker import DEFAULT_WORKER_MAX_BUDGET_USD, WORKER_MAX_BUDGET_ENV
 from .runtime import (
     apply_supervisor_review,
@@ -20,6 +24,7 @@ from .runtime import (
 from .validate import run_fixture_validation, validate_path
 from .workspace import WorkspaceError, load_active_workspace, remember_active_workspace
 from .local_cli import local_cli_doctor
+from .worktree import WorktreeIsolationError, resolve_wtree_script
 
 
 def _print_json(value: object) -> None:
@@ -43,7 +48,7 @@ def _print_needs_human(status: dict[str, object]) -> None:
     context = str(needs_human.get('context') or '')
     if context:
         print(f"context={context}")
-    print(f"respond=/twin respond <answer>")
+    print(f"respond=twin respond <answer>")
     print(f"evidence_current={workspace / 'CURRENT.md'}")
     print(f"evidence_state={workspace / 'supervisor_state.json'}")
     print(f"evidence_run={workspace / 'runs' / str(run_id) / 'run.json'}")
@@ -66,6 +71,11 @@ def _cmd_status(args: argparse.Namespace) -> int:
         print(f"Summary: {display.get('summary') or ''}")
         print(f"Current item: {status['current_item_id'] or 'none'}")
         print(f"Round: {status['round_index']}")
+        print(f"Supervisor route: {status.get('supervisor_route') or 'unbound'}")
+        print(f"State revision: {status.get('state_revision', 0)}")
+        pending = status.get("pending_action")
+        if isinstance(pending, dict):
+            print(f"Pending action: {pending.get('kind')}; revision={pending.get('state_revision')}")
         print(f"Next command: {display.get('next_command') or 'none'}")
         worker = display.get("worker") if isinstance(display.get("worker"), dict) else None
         if worker:
@@ -125,7 +135,7 @@ def _cmd_watch(args: argparse.Namespace) -> int:
             return 0
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            timeout = {**latest, "action": "worker_quiet_timeout", "next": f"/twin status {Path(workspace).expanduser().resolve()}"}
+            timeout = {**latest, "action": "worker_quiet_timeout", "next": f"twin status {Path(workspace).expanduser().resolve()}"}
             if args.json:
                 _print_json(timeout)
             else:
@@ -143,7 +153,7 @@ def _cmd_respond(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 2
     print(f"human_response_written={target}")
-    print("next=/twin <workspace> resumes the supervisor loop")
+    print("next=twin run <workspace> --supervisor <host/provider> resumes the supervisor loop")
     return 0
 
 
@@ -170,7 +180,7 @@ def _cmd_worker_turn(args: argparse.Namespace) -> int:
         print(f"run_id={run['run_id']} status={run['status']} resume_used={run['worker']['resume_used']}")
         print(f"run={workspace / 'runs' / run['run_id'] / 'run.json'}")
         if run["status"] == "review_required":
-            print(f"next=/twin {workspace}")
+            print(f"next=twin run {workspace}")
     return 0 if run["status"] == "review_required" else 1
 
 
@@ -198,6 +208,89 @@ def _cmd_review(args: argparse.Namespace) -> int:
         print(f"status={state['status']}")
         print(f"next_instruction={state.get('next_instruction') or 'none'}")
         _print_needs_human(status)
+    return 0
+
+
+def _read_input(inline: str | None, file_name: str | None, *, label: str) -> str:
+    if inline is not None:
+        return inline
+    if file_name == "-":
+        return sys.stdin.read()
+    if file_name:
+        return Path(file_name).read_text(encoding="utf-8")
+    raise WorkspaceError(f"{label} is required")
+
+
+def _print_driver_result(result: dict[str, object], *, as_json: bool) -> None:
+    if as_json:
+        _print_json(result)
+        return
+    print(f"action={result.get('action') or 'submitted'}")
+    print(f"status={result.get('status')}")
+    print(f"workspace={result.get('workspace')}")
+    print(f"supervisor_route={result.get('supervisor_route')}")
+    print(f"state_revision={result.get('state_revision')}")
+    submit = result.get("submit")
+    if isinstance(submit, dict):
+        print(f"submit={submit.get('command')}")
+    if result.get("next_command"):
+        print(f"next={result.get('next_command')}")
+    elif result.get("resume_command"):
+        print(f"next={result.get('resume_command')}")
+    elif result.get("next") is not None:
+        print(f"next={result.get('next')}")
+
+
+def _cmd_run(args: argparse.Namespace) -> int:
+    try:
+        workspace = _workspace_arg(args, remember=True)
+        result = run_driver(
+            workspace,
+            args.supervisor,
+            max_budget_usd=args.max_budget_usd,
+        )
+    except WorkspaceError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    _print_driver_result(result, as_json=args.json)
+    return 0
+
+
+def _cmd_submit_instruction(args: argparse.Namespace) -> int:
+    try:
+        instruction = _read_input(args.instruction, args.instruction_file, label="instruction")
+        result = submit_instruction(
+            _workspace_arg(args, remember=True),
+            args.supervisor,
+            state_revision=args.state_revision,
+            action_token=args.action_token,
+            instruction=instruction,
+        )
+    except (OSError, WorkspaceError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    _print_driver_result(result, as_json=args.json)
+    return 0
+
+
+def _cmd_submit_review(args: argparse.Namespace) -> int:
+    try:
+        review_text = _read_input(args.review_json, args.review_file, label="review")
+        review = json.loads(review_text)
+        if not isinstance(review, dict):
+            raise WorkspaceError("review must be a JSON object")
+        result = submit_review(
+            _workspace_arg(args, remember=True),
+            args.supervisor,
+            state_revision=args.state_revision,
+            action_token=args.action_token,
+            run_id=args.run_id,
+            review=review,
+        )
+    except (OSError, json.JSONDecodeError, WorkspaceError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    _print_driver_result(result, as_json=args.json)
     return 0
 
 
@@ -250,20 +343,94 @@ def _cmd_validate(args: argparse.Namespace) -> int:
 
 
 def _cmd_doctor(args: argparse.Namespace) -> int:
+    required: list[dict[str, object]] = []
+    required.append({
+        "name": "python",
+        "available": sys.version_info >= (3, 9),
+        "detail": sys.version.split()[0],
+    })
+    required.append({
+        "name": "dev_rules",
+        "available": DEV_RULES_ROOT.is_dir(),
+        "path": str(DEV_RULES_ROOT),
+    })
+    for name, path in (
+        ("supervisor_persona", SUPERVISOR_PERSONA_PATH),
+        ("worker_persona", WORKER_PERSONA_PATH),
+    ):
+        required.append({"name": name, "available": path.is_file(), "path": str(path)})
+    canonical_launcher = DEV_RULES_ROOT / "global" / "bin" / "twin"
+    required.append({
+        "name": "twin_launcher",
+        "available": canonical_launcher.is_file() and os.access(canonical_launcher, os.X_OK),
+        "path": str(canonical_launcher),
+        "installed_path": shutil.which("twin") or "",
+    })
+    try:
+        wtree = resolve_wtree_script()
+    except WorktreeIsolationError as exc:
+        required.append({"name": "wtree", "available": False, "detail": str(exc)})
+    else:
+        required.append({"name": "wtree", "available": True, "path": str(wtree)})
     statuses = local_cli_doctor()
+    report = {
+        "ok": all(bool(check.get("available")) for check in required),
+        "required": required,
+        "local_cli": statuses,
+        "supervisor_routes": list(ALLOWED_SUPERVISOR_ROUTES),
+    }
     if args.json:
-        _print_json({"local_cli": statuses})
-        return 0
+        _print_json(report)
+        return 0 if report["ok"] else 1
+    for check in required:
+        availability = "ok" if check["available"] else "missing"
+        detail = check.get("path") or check.get("detail") or ""
+        print(f"{check['name']}: {availability}; {detail}")
     for status in statuses:
         availability = "installed" if status["available"] else "missing"
         version = f"; version={status['version']}" if status.get("version") else ""
         print(f"{status['provider']}: {availability}; executable={status['executable']}{version}")
-    return 0
+    return 0 if report["ok"] else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="python3 -m scripts.twin")
+    parser = argparse.ArgumentParser(prog="twin")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    p_run = sub.add_parser("run")
+    p_run.add_argument("workspace")
+    p_run.add_argument("--supervisor", choices=ALLOWED_SUPERVISOR_ROUTES, required=True)
+    p_run.add_argument(
+        "--max-budget-usd",
+        type=float,
+        default=None,
+        help=f"Worker max budget in USD (default: {DEFAULT_WORKER_MAX_BUDGET_USD}, override with {WORKER_MAX_BUDGET_ENV})",
+    )
+    p_run.add_argument("--json", action="store_true")
+    p_run.set_defaults(func=_cmd_run)
+
+    p_submit_instruction = sub.add_parser("submit-instruction")
+    p_submit_instruction.add_argument("--workspace", required=True)
+    p_submit_instruction.add_argument("--supervisor", choices=ALLOWED_SUPERVISOR_ROUTES, required=True)
+    p_submit_instruction.add_argument("--state-revision", type=int, required=True)
+    p_submit_instruction.add_argument("--action-token", required=True)
+    instruction_input = p_submit_instruction.add_mutually_exclusive_group(required=True)
+    instruction_input.add_argument("--instruction")
+    instruction_input.add_argument("--instruction-file")
+    p_submit_instruction.add_argument("--json", action="store_true")
+    p_submit_instruction.set_defaults(func=_cmd_submit_instruction)
+
+    p_submit_review = sub.add_parser("submit-review")
+    p_submit_review.add_argument("--workspace", required=True)
+    p_submit_review.add_argument("--supervisor", choices=ALLOWED_SUPERVISOR_ROUTES, required=True)
+    p_submit_review.add_argument("--state-revision", type=int, required=True)
+    p_submit_review.add_argument("--action-token", required=True)
+    p_submit_review.add_argument("--run-id", required=True)
+    review_input = p_submit_review.add_mutually_exclusive_group(required=True)
+    review_input.add_argument("--review-json")
+    review_input.add_argument("--review-file")
+    p_submit_review.add_argument("--json", action="store_true")
+    p_submit_review.set_defaults(func=_cmd_submit_review)
 
     p_status = sub.add_parser("status")
     p_status.add_argument("workspace_pos", nargs="?")

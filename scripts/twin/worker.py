@@ -119,7 +119,7 @@ def changed_files_from_status(status: str) -> list[str]:
     files: list[str] = []
     for line in status.splitlines():
         text = line.rstrip()
-        if not text.strip() or text.lstrip().startswith("error:") or len(text) < 4:
+        if not re.match(r"^[ MADRCUT?!]{2} ", text):
             continue
         path = text[3:]
         if " -> " in path:
@@ -315,6 +315,10 @@ def start_worker_turn(
             "configure provider cost limits outside twin"
         )
     state = load_state(workspace)
+    if state.get("pending_action") is not None:
+        raise WorkspaceError(
+            "workspace has a pending supervisor action; submit it through twin submit-instruction or submit-review"
+        )
     if state.get("status") == "needs_human" and state.get("needs_human"):
         raise WorkspaceError("workspace is waiting for human response")
     if state.get("status") in {"accepted_done", "failed"}:

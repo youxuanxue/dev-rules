@@ -1,24 +1,22 @@
-# twin CAO/Codex 操作指南
+# twin worker 路由与 CAO 操作指南
 
 ## 当前边界
 
-当前 `/twin` supervisor 运行在 Claude Code 交互会话中。worker 默认使用 Claude headless，也可以直接调用本机 `claude` / `codex` / `gemini` CLI；需要远程、多 profile 或其他 CAO provider 时再通过 CAO：
+Supervisor 与 worker 是两个独立路由。当前 Claude、Codex 或 Antigravity 会话都可以做 host supervisor；worker 默认使用 Claude headless，也可以直接调用本机 `claude` / `codex` / `gemini` CLI。只有远程、多 profile 或其他 provider 才需要 CAO：
 
 ```text
-Claude /twin supervisor
+Claude / Codex / Antigravity host supervisor
   -> twin workspace/state engine
   -> local_cli provider CLI 或 CAO POST /terminals/run-step
   -> provider worker
   -> twin 隔离 worktree
 ```
 
-CAO 启动的是一个新的 provider CLI 进程，不会接管或复用当前 Codex/Claude 交互会话。跨轮事实来自 twin workspace artifacts，不来自 provider transcript。
-
-把当前 Codex 会话直接作为 twin supervisor 属于后续提案，见 `docs/twin-universal-command.md`。
+CAO 启动的是一个新的 worker CLI 进程，不会接管或复用当前 host 会话。跨轮事实来自 twin workspace artifacts，不来自 provider transcript。Host supervisor 和 `local_cli` worker 都不要求 CAO server。
 
 ## 前置条件
 
-1. 直接 CLI 路由：目标 provider CLI 在当前 `PATH` 中，可运行 `python3 -m scripts.twin doctor --json` 检查。
+1. 直接 CLI 路由：目标 provider CLI 在当前 `PATH` 中，可运行 `twin doctor --json` 检查。
 2. CAO 路由：CAO server 可从 twin 所在机器访问，目标 provider CLI 在 CAO server 的 `PATH` 中。
 3. provider 进程可以使用同一用户凭据或 server 环境完成认证。
 4. CAO terminal backend 的依赖已安装；默认 tmux backend 需要可用的 `tmux`。
@@ -47,7 +45,7 @@ curl -fsS http://127.0.0.1:9889/health
 
 ## twin 连接配置
 
-默认地址是 `http://127.0.0.1:9889`。连接其他 CAO 时，在启动 Claude Code supervisor 前设置：
+默认地址是 `http://127.0.0.1:9889`。连接其他 CAO 时，在启动 host supervisor 前设置：
 
 ```bash
 export TWIN_CAO_BASE_URL=http://127.0.0.1:9889
@@ -134,10 +132,10 @@ CAO 开启认证时额外添加：
 
 ## 从 twin 运行
 
-准备好带 `execution` 的 workspace 后，在 Claude Code 中运行：
+准备好带 `execution` 的 workspace 后，从当前宿主运行，例如 Codex：
 
-```text
-/twin <workspace>
+```bash
+twin run <workspace> --supervisor host/codex --json
 ```
 
 twin 每轮创建 fresh CAO terminal，使用 `teardown=true`，并在 `run.json::worker` 记录 backend、provider、agent 和 terminal hash。CAO backend 不 resume provider session；下一轮由 goal、plan、state 和 run evidence 重建上下文。
@@ -170,7 +168,7 @@ twin 每轮创建 fresh CAO terminal，使用 `teardown=true`，并在 `run.json
 仓库内的确定性验证：
 
 ```bash
-python3 -m scripts.twin validate --fixtures
+twin validate --fixtures
 python3 scripts/twin/worktree.py
 python3 scripts/export_agent_contract.py --check
 ./scripts/preflight.sh

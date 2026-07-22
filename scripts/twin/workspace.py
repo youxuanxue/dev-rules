@@ -37,17 +37,22 @@ class WorkspaceError(ValueError):
 
 
 def active_workspace_file() -> Path:
-    """Path to the active-twin-workspace pointer for the current project.
+    """Provider-neutral active-twin-workspace pointer for the current project.
 
-    Layout: ``~/.claude/twin-active-workspaces/<id>`` where ``<id>`` is the
+    Layout: ``~/.twin/active-workspaces/<id>`` where ``<id>`` is the
     first 16 hex chars of ``sha256(resolved cwd)``. File content is a single
-    line — the absolute path of the workspace last touched by ``/twin``,
-    ``/twin status <ws>`` or ``/twin bootstrap``. ``TWIN_ACTIVE_WORKSPACE_FILE``
+    line containing the absolute path of the workspace last touched by twin.
+    ``TWIN_ACTIVE_WORKSPACE_FILE``
     overrides this resolution for tests and isolated runs.
     """
     override = os.environ.get(ACTIVE_WORKSPACE_ENV)
     if override:
         return Path(override).expanduser().resolve()
+    project_id = hashlib.sha256(str(Path.cwd().resolve()).encode("utf-8")).hexdigest()[:16]
+    return Path.home() / ".twin" / "active-workspaces" / project_id
+
+
+def _legacy_active_workspace_file() -> Path:
     project_id = hashlib.sha256(str(Path.cwd().resolve()).encode("utf-8")).hexdigest()[:16]
     return Path.home() / ".claude" / "twin-active-workspaces" / project_id
 
@@ -64,16 +69,20 @@ def remember_active_workspace(workspace: Path | str) -> Path:
 
 def load_active_workspace() -> Path:
     target = active_workspace_file()
+    if not target.exists() and not os.environ.get(ACTIVE_WORKSPACE_ENV):
+        legacy = _legacy_active_workspace_file()
+        if legacy.exists():
+            target = legacy
     if not target.exists():
-        raise WorkspaceError("workspace is required; run /twin <workspace> or /twin status <workspace> first")
+        raise WorkspaceError("workspace is required; run twin run <workspace> or twin status <workspace> first")
     text = target.read_text(encoding="utf-8").strip()
     if not text:
-        raise WorkspaceError("active twin workspace is empty; run /twin <workspace> or /twin status <workspace> first")
+        raise WorkspaceError("active twin workspace is empty; run twin run <workspace> or twin status <workspace> first")
     resolved = resolve_workspace(text)
     if not (resolved / GOAL_FILE).exists():
         raise WorkspaceError(
             f"active twin workspace no longer exists at {resolved}; "
-            "run /twin <workspace> or /twin status <workspace> to set a new one"
+            "run twin run <workspace> or twin status <workspace> to set a new one"
         )
     return resolved
 
@@ -91,7 +100,7 @@ def plan_path(workspace: Path) -> Path:
         )
     if path.exists():
         return path
-    raise WorkspaceError(f"missing {PLAN_FILE}; run /twin \"<one-liner>\" or Claude Code plan mode first")
+    raise WorkspaceError(f"missing {PLAN_FILE}; prepare it with host plan mode or twin scaffold/bootstrap")
 
 
 def load_goal(workspace: Path) -> dict[str, Any]:
@@ -156,9 +165,19 @@ def default_state(workspace: Path) -> dict[str, Any]:
         "worker_session_id": None,
         "next_instruction": "",
         "last_review_status": None,
+        "state_revision": 0,
+        "supervisor_route": None,
+        "pending_action": None,
         "needs_human": None,
         "updated_at": now_utc(),
     }
+
+
+def _normalize_driver_state(state: dict[str, Any]) -> dict[str, Any]:
+    state.setdefault("state_revision", 0)
+    state.setdefault("supervisor_route", None)
+    state.setdefault("pending_action", None)
+    return state
 
 
 def load_state(workspace: Path) -> dict[str, Any]:
@@ -171,15 +190,22 @@ def load_state(workspace: Path) -> dict[str, Any]:
     errors = validate_schema(state, SUPERVISOR_STATE_SCHEMA)
     if errors:
         raise WorkspaceError("supervisor_state schema errors: " + "; ".join(errors))
-    return state
+    return _normalize_driver_state(state)
 
 
 def write_state(workspace: Path, state: dict[str, Any]) -> None:
+    path = workspace / SUPERVISOR_STATE_FILE
+    _normalize_driver_state(state)
+    if path.exists():
+        existing = read_json(path)
+        previous_revision = int(existing.get("state_revision") or 0)
+        supplied_revision = int(state.get("state_revision") or 0)
+        state["state_revision"] = max(previous_revision, supplied_revision) + 1
     state["updated_at"] = now_utc()
     errors = validate_schema(state, SUPERVISOR_STATE_SCHEMA)
     if errors:
         raise WorkspaceError("supervisor_state schema errors: " + "; ".join(errors))
-    write_json(workspace / SUPERVISOR_STATE_FILE, state)
+    write_json(path, state)
 
 
 def validate_workspace_readonly(workspace: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
@@ -194,7 +220,7 @@ def validate_workspace_readonly(workspace: Path) -> tuple[dict[str, Any], dict[s
         raise WorkspaceError("plan semantic errors: " + "; ".join(semantic_errors))
     state_path = workspace / SUPERVISOR_STATE_FILE
     if not state_path.exists():
-        raise WorkspaceError(f"missing {SUPERVISOR_STATE_FILE}; run /twin <workspace> to initialize runtime state")
+        raise WorkspaceError(f"missing {SUPERVISOR_STATE_FILE}; run twin run <workspace> to initialize runtime state")
     state = read_json(state_path)
     errors = validate_schema(state, SUPERVISOR_STATE_SCHEMA)
     if errors:
@@ -271,7 +297,7 @@ def worker_running_diagnostics(workspace: Path, state: dict[str, Any]) -> dict[s
             "events_bytes": 0,
             "run_artifact": False,
             "last_activity_seconds": None,
-            "note": "worker_running has no current_run_id; rerun /twin <workspace> to recover",
+            "note": "worker_running has no current_run_id; rerun twin run <workspace> to recover",
         }
     run_dir = workspace / RUNS_DIR / run_id
     pending = run_dir / "pending.json"
@@ -283,11 +309,11 @@ def worker_running_diagnostics(workspace: Path, state: dict[str, Any]) -> dict[s
     if run_artifact.exists():
         state_name = "completed_artifact_present"
         recommended_action = "review_run"
-        note = "run artifact exists while state is worker_running; rerun /twin <workspace> to review or recover"
+        note = "run artifact exists while state is worker_running; rerun twin run <workspace> to review or recover"
     elif not existing:
         state_name = "stale_no_artifacts"
         recommended_action = "recover_worker_turn"
-        note = "no worker artifacts found; next /twin <workspace> will recover with a fresh worker turn"
+        note = "no worker artifacts found; next twin run <workspace> will recover with a fresh worker turn"
     elif events.exists():
         state_name = "active" if last_activity is not None and last_activity <= 600 else "quiet"
         recommended_action = "watch_worker"
@@ -311,6 +337,8 @@ def worker_running_diagnostics(workspace: Path, state: dict[str, Any]) -> dict[s
 def status_display(workspace: Path, goal: dict[str, Any], plan: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
     workspace = resolve_workspace(workspace)
     status = str(state.get("status") or "unknown")
+    supervisor_route = state.get("supervisor_route") or "<host/provider>"
+    run_command = f"twin run {workspace} --supervisor {supervisor_route}"
     next_item = choose_next_item(plan)
     current_item_id = state.get("current_item_id") or (next_item.get("id") if next_item else None)
     labels = {
@@ -332,11 +360,11 @@ def status_display(workspace: Path, goal: dict[str, Any], plan: dict[str, Any], 
         "failed": "Supervisor marked the workspace as failed.",
     }
     next_commands = {
-        "idle": f"/twin {workspace}",
-        "worker_running": f"/twin status {workspace}",
-        "review_required": f"/twin {workspace}",
-        "continue": f"/twin {workspace}",
-        "needs_human": "/twin respond <answer>",
+        "idle": run_command,
+        "worker_running": f"twin status {workspace}",
+        "review_required": run_command,
+        "continue": run_command,
+        "needs_human": "twin respond <answer>",
         "accepted_done": "none",
         "failed": "inspect CURRENT.md and latest run evidence",
     }
@@ -349,7 +377,7 @@ def status_display(workspace: Path, goal: dict[str, Any], plan: dict[str, Any], 
     display = {
         "label": labels.get(status, status),
         "summary": summary,
-        "next_command": next_commands.get(status, f"/twin status {workspace}"),
+        "next_command": next_commands.get(status, f"twin status {workspace}"),
         "current_item_id": current_item_id,
         "evidence_paths": {
             "current": str(workspace / CURRENT_FILE),
@@ -430,6 +458,16 @@ def status_summary(workspace: Path) -> dict[str, Any]:
         "current_run_id": state.get("current_run_id"),
         "current_item_id": display.get("current_item_id"),
         "round_index": state.get("round_index"),
+        "state_revision": state.get("state_revision", 0),
+        "supervisor_route": state.get("supervisor_route"),
+        "pending_action": (
+            {
+                key: state["pending_action"].get(key)
+                for key in ("kind", "state_revision", "run_id", "issued_at")
+            }
+            if isinstance(state.get("pending_action"), dict)
+            else None
+        ),
         "next_instruction": state.get("next_instruction"),
         "needs_human": state.get("needs_human"),
         "plan_counts": item_counts(plan),

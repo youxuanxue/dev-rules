@@ -17,7 +17,7 @@
 
 | 能力 | 最适合负责 | 优势 | 局限 | 在团队中的位置 |
 | --- | --- | --- | --- | --- |
-| dev-rules `twin` | 目标、计划、轮次监督、证据验收、人类门禁、跨会话重入 | artifact 是事实源；能持续推进；状态和验收可审计 | 当前 supervisor 命令仍由 Claude Code 承载；不是 provider 进程平台 | 治理层 |
+| dev-rules `twin` | 目标、计划、轮次监督、证据验收、人类门禁、跨会话重入 | artifact 是事实源；Claude/Codex/Antigravity 共用 host protocol；状态和验收可审计 | 不是 provider 进程平台；当前不做无人值守 supervisor | 治理层 |
 | CLI Agent Orchestrator（CAO） | 启动和管理不同 provider CLI、profile、terminal、单轮执行 | 多 provider；统一 HTTP 控制面；隔离 provider 差异 | 不拥有业务目标、AC、最终验收和高风险审批 | 执行层 |
 | Claude Dynamic Workflow | 面对模糊或跨仓问题时并行搜集事实、方案、风险和未知项 | 调研 fan-out 快；适合扩大只读证据面 | 结果是研究材料，不是最终决策；规模不受控会烧预算、制造噪声 | 治理层的可选研究加速器 |
 | Codex goal（当前 CLI 会话能力） | 让一个明确目标跨多轮持续执行，并记录完成或阻塞状态 | 适合长任务连续推进；目标状态比聊天记忆可靠 | 当前暴露的是单目标连续性机制，不等于多 Agent 调度、持久 artifact 协议或验收治理 | 单 Agent 宿主连续性能力 |
@@ -151,16 +151,17 @@ Dynamic Workflow 只读调研
 
 `research.yaml` 不直接升级为计划，也不能覆盖人类已批准的目标。这样既接住并行调研的广度，又防止多个 researcher 各自产生一套互相冲突的目标。
 
-默认 `/twin "<goal>"` 由 supervisor 判断是否需要 research。显式入口 `/twin research` 和 `/twin plan --research ...` 用于需要保留调研证据或分阶段决策的任务，不应成为所有任务的强制仪式。
+默认由当前 host supervisor 判断是否需要 research。Claude 保留 `/twin "<goal>"` 薄适配；Codex/Antigravity 可用自身 plan 能力形成 artifact 后进入 `twin run`。显式 research 只用于需要保留调研证据或分阶段决策的任务，不应成为所有任务的强制仪式。
 
 ## 当前 Codex CLI 怎么参与
 
-现在有两条不同路径：
+当前 Codex 会话直接运行：
 
-1. 已实现：Claude `/twin` 作为 supervisor，可通过 `local_cli` 直接启动本机 Codex CLI，也可通过 CAO 启动独立 provider worker。当前 Codex 会话不会被接管或复用。
-2. 待实现：把 twin 做成独立 executable 和共享 supervisor skill，让当前 Codex 会话以 host supervisor 身份消费相同 driver protocol。
+```bash
+twin run <workspace> --supervisor host/codex --json
+```
 
-第二条路线不应复制一份 Codex 专属状态机。目标形态是 Claude、Codex、Antigravity 和 shell 都调用同一个 `twin` CLI；各端适配器只处理宿主交互差异。详细设计见 `docs/twin-universal-command.md`。
+CLI 在 instruction/review 判断点返回 bounded context、revision、one-time token 和 exact submit command；Codex 做完判断后按 payload 提交，再调用 `next_command`。确定性 worker turn、recovery、schema 和 artifact mutation 都在 Python 中，不复制 Codex 专属状态机。Claude 和 Antigravity 只替换 host route。
 
 ## 本轮已落地与未落地
 
@@ -172,19 +173,19 @@ Dynamic Workflow 只读调研
 - CAO URL/token 契约、fresh terminal、teardown 和证据记录；
 - twin 复用 `wtree.py`，worktree 失败 fail closed；
 - live CLI/schema 生成 Agent contract，并由 preflight/CI 检查漂移。
+- 独立 `twin` executable、host supervisor driver 和 revision/token 防重放；
+- Codex/Claude/Antigravity 共用 self-describing action protocol；
+- Claude `/twin` 薄适配和 Codex/Antigravity 生成导航。
 
-仍是提案：
+仍不在本轮：
 
-- 独立 `twin` executable；
-- Codex/Antigravity 共享的 twin supervisor skill；
-- host supervisor driver action/token 协议；
 - CAO 无人值守 supervisor backend；
 - CAO bootstrap submodule（只有确认需要可重复安装时再加）。
 
 ## 下一步优先级
 
-1. 先实现通用 CLI + host supervisor，让当前 Codex 会话真正能监督已有 twin workspace。
-2. 再实现 CAO supervisor，解决无人值守而不是先追求更多 worker provider。
-3. 最后收敛 Claude `/twin` 为薄适配器，并用 contract test 保证三端一致。
+1. 先用当前通用 CLI + host supervisor 跑真实普通任务，验证三端重入体验。
+2. 只有出现明确无人值守需求和 ROI 后，再审批 CAO supervisor。
+3. provider 扩展继续优先落 `local_cli` adapter；不要为每个 provider 复制 supervisor 实现。
 
 衡量成功的标准不是“接了多少 Agent”，而是：用户是否只需表达一次目标；系统是否能自动推进、验证和重入；失败是否停在清楚且可恢复的位置；高风险是否准确回到人类。

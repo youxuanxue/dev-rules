@@ -1,122 +1,68 @@
-# twin supervisor runbook
+# twin host supervisor runbook
 
-每轮 supervisor 在当前 Claude Code 交互会话中调用 Python 子命令；默认用户面仍是 `/twin "<goal>"`，可选显式使用 `/twin research` / `/twin plan`，运行面是 `/twin <workspace>` / `/twin status` / `/twin respond`（见 `commands/twin.md`）。Python 只做结构校验和 artifact 应用，事实判断由 supervisor 完成。
+## 入口
 
-## Bootstrap
-
-`/twin "<one-line goal>"` 不是 workspace 路径时，当前 Claude Code supervisor 先判断是否需要并行研究。普通目标直接按 plan mode 调研；跨仓、证据面大或关键方向未知时，可启动只读 Dynamic Workflow 并产出 `research.yaml`。supervisor 对关键结论二次核验后亲自草拟 `goal.yaml + plan.yaml`。Python 不替 supervisor 做规划，Dynamic Workflow 也不拥有最终 YAML。
-
-bootstrap 是防止长跑的主约束面：supervisor 必须先把多 AC 目标拆成多个短交付；每个 item 写清 scope 边界、证据预算、停止/转 review 条件；已知 gate gap 写成 `blocked` / `deferred` + `blocked_reason`；最终验收、summary、preflight 类 item 必须依赖前置交付项。不要把“实现 + 全量迁移 + 浏览器 + preflight + summary”塞给同一个 worker item。
-
-supervisor 用 `AskUserQuestion` 展示 goal、AC、non-goals、plan items，并请求确认；若无法给出上述约束，先问人，不启动 worker。确认后把草稿写到临时文件，再调用：
+准备好的 workspace 至少有 `goal.yaml` 和 `plan.yaml`。可用宿主 plan mode 直接起草后执行 `twin bootstrap`，或用 `twin scaffold` 生成最小草稿再完善。
 
 ```bash
-PYTHONPATH=$DEV_RULES python3 -m scripts.twin bootstrap --workspace <ws> --goal-file <goal.yaml> --plan-file <plan.yaml> [--research-file <research.yaml>]
+twin run <workspace> --supervisor host/codex --json
 ```
 
-这一步只写入并校验 workspace。`python3 -m scripts.twin scaffold "<goal>" --json` 只提供最小 scaffold fallback，用于契约测试或快速起草，不代表真实 planning。
+Claude 和 Antigravity 分别把 route 换成 `host/claude`、`host/antigravity`。同一 workspace 首次运行后绑定 route；中途静默换宿主会 fail closed。
 
-## 每轮调用顺序
+## 宿主循环
 
-```text
-1. supervisor-context  → 读 goal / plan / state / focus / skeleton
-2. supervisor 自写 instruction  （绑定当前 plan gap 与 AC）
-3. worker-turn         → 启动或 resume worker，产出 runs/<run_id>/run.json
-4. review-context      → 重读上下文 + 该 run artifact
-5. supervisor 自写 review JSON
-6. review              → 校验并应用，review 内联到 run.json::review
-7. status=continue 自动进入下一轮；accepted_done / needs_human / failed 停止
-```
+1. 调用 `twin run ... --json`。
+2. 如果 action 是 `supervisor_instruction` 或 `review_run`，只读取 payload 的 `context`，按 `expected_output` 做一次判断。
+3. 把结果写到 payload 给出的 `submit.command` stdin。不要修改命令里的 workspace、route、revision、token 或 run ID。
+4. 提交成功后再次调用返回的 `next_command`。
+5. 到 `watch_worker`、`ask_human`、`done` 或 `failed` 停下。
 
-state 是 `needs_human` 且无新回答时不启动 worker；state 是 `continue` 且 `next_instruction` 已写入时直接进入第 3 步。`review_required` / `continue` 不是用户停点，supervisor 必须自循环。当前 `/twin` 不是后台 daemon；workspace artifact 是重入口事实源，后台 worker 完成或会话中断后重新运行 `/twin <workspace>`，必须从 `review_required` / `continue` / `worker_running` 的当前 artifact state 恢复，不要求用户再说“继续”。`worker_running` 的 action 规则：run artifact 已出现则 review；artifact 全缺则用原 `next_instruction` fresh recovery；仍 active/quiet 则 bounded watch，超时明确停在 `worker_quiet_timeout`，不杀进程、不删除 artifact。
+| Action | Host 动作 |
+| --- | --- |
+| `supervisor_instruction` | 形成一个非空 worker instruction，以 text/plain 提交 |
+| `review_run` | 对照 goal/plan/evidence 形成 `twin.supervisor_review` JSON |
+| `watch_worker` | 报告 worker 尚未可评审；稍后执行 `resume_command` |
+| `ask_human` | 呈现 `needs_human.question`，等真人回答 |
+| `done` | 报告 `accepted_done` 和 workspace |
+| `failed` | 报告失败状态和 evidence 路径，不解释成完成 |
 
-## 子命令契约
+Python 会在一次 `twin run` 内自动执行 `worker_turn` 和 stale recovery；它们不是 host 判断点。
 
-### `next`
+## Review 判断
+
+Review 必须满足 `schemas/twin.supervisor_review.schema.json`。核心状态：
+
+- `continue`：必须给 `next_instruction`，未满足项继续进入下一轮。
+- `needs_human`：必须给 `human_question`，只用于真实业务/架构/高风险判断。
+- `accepted_done`：plan item 必须全部完成、AC 必须有 plan evidence、`remaining_gaps` 必须为空。
+- `failed`：存在无法继续的执行失败，不能伪装成完成。
+
+Worker 输出只是证据，不拥有最终验收权。内部 supervisor review 也不等于高风险 PR 批准或 merge 授权。
+
+## 人类门禁和重入
 
 ```bash
-PYTHONPATH=$DEV_RULES python3 -m scripts.twin next --workspace <ws> --json
+twin status [workspace]
+twin respond [--workspace <workspace>] "<answer>"
+twin run <workspace> --supervisor <bound-route> --json
 ```
 
-输出当前 artifact state 的下一步动作：`supervisor_instruction` / `worker_turn` / `recover_worker_turn` / `watch_worker` / `review_run` / `ask_human` / `done` / `failed`。`/twin <workspace>` 主路径先调用它，保证跨会话重入不依赖上一次交互上下文。
+Active workspace 指针按当前项目 cwd 隔离，主路径为 `~/.twin/active-workspaces/<cwd-hash>`；旧 `~/.claude/twin-active-workspaces/<cwd-hash>` 只做兼容读取。回答正文写入 workspace artifact，但 audit event 只记录 artifact 引用和长度，不记录正文。
 
-### `watch`
+`watch_worker` 是 bounded stop，不杀 worker、不删除 artifact。稍后从 `resume_command` 重入，Python 会根据当前 artifact 判断继续 watch、review 或 recovery。
+
+## 兼容入口
+
+`twin next`、`worker-turn`、`review-context`、`review` 等低层命令保留给测试和旧调用方；新 host 不应手工编排它们。`python3 -m scripts.twin` 仍可调用同一 parser，但生成契约和用户文档以 `twin` executable 为主。
+
+## 验证
 
 ```bash
-PYTHONPATH=$DEV_RULES python3 -m scripts.twin watch --workspace <ws> --max-wait-seconds N --poll-interval-seconds N --json
+twin doctor
+python3 -m scripts.twin validate --fixtures
+python3 scripts/export_agent_contract.py --check
+PREFLIGHT_BASE=origin/main bash scripts/preflight.sh
 ```
 
-bounded 等待 `worker_running` 产出可执行 artifact。若变成 `review_run` / `recover_worker_turn` / `ask_human` / terminal 立即返回；若持续 active/quiet 到超时，返回 `worker_quiet_timeout`。watch 不杀进程、不删除 artifact。
-
-### `supervisor-context`
-
-```bash
-PYTHONPATH=$DEV_RULES python3 -m scripts.twin supervisor-context --workspace <ws> [--run-id <id>]
-```
-
-输出 JSON：`goal`、`plan`、`supervisor_persona`、`state`、`next_item`、`remaining_gaps`、`acceptance_evidence`、`acceptance_focus`、`artifact_paths`、`review_skeleton`；可选 `human_response`、`run`。Python 不生成 `next_instruction`。
-
-### `worker-turn`
-
-```bash
-PYTHONPATH=$DEV_RULES python3 -m scripts.twin worker-turn --workspace <ws> --instruction "<supervisor-authored>" [--max-budget-usd N] --json
-```
-
-默认 `claude_headless` backend 的预算为 50 USD，可用 `TWIN_WORKER_MAX_BUDGET_USD` 覆盖；超时由 `TWIN_WORKER_TIMEOUT_SECONDS` 控制。`plan.yaml.execution.backend: local_cli` 时，provider 必须是当前机器已安装的 `claude`、`codex` 或 `gemini`，可用性由 `python3 -m scripts.twin doctor --json` 只读报告；Codex fresh/resume 都固定 `workspace-write` + `approval_policy=never`，Gemini 固定 sandbox + yolo，超时会终止整组 CLI/tool 子进程。Codex/Gemini 不支持 Claude 原生美元预算，显式设置预算会 fail closed。`plan.yaml.execution.backend: cao` 时，provider 与 agent profile 由 plan 指定，服务地址读 `TWIN_CAO_BASE_URL`，可选 bearer 读本机 `CAO_AUTH_LOCAL_TOKEN`；带 bearer 的非 loopback 地址必须用 HTTPS。模型、工具和权限由 CAO profile 管理。CAO `run-step` 当前没有费用预算字段，因此预算覆盖在 CAO backend 下同样会被拒绝，不会静默假装生效。返回 `run` 对象，与 `schemas/twin.run.schema.json` 对齐；`worker` 会记录 backend/provider/agent，`status` 一定是 `review_required` 或 `failed`，绝不是 `accepted_done`。
-
-### `review-context`
-
-```bash
-PYTHONPATH=$DEV_RULES python3 -m scripts.twin review-context --workspace <ws> --run-id <id> --json
-```
-
-等同于 `supervisor-context --run-id <id>`：多出 `run` 字段。supervisor 用它生成 review JSON。
-
-### `review`
-
-```bash
-PYTHONPATH=$DEV_RULES python3 -m scripts.twin review --workspace <ws> --run-id <id> --review-file <path>
-```
-
-review JSON 必须满足 `schemas/twin.supervisor_review.schema.json`：`status`、`summary`、`next_instruction`、`remaining_gaps`、`acceptance_evidence`、`risk_flags` 必填；可选 `actions: [fix_drift | validate_more | mark_plan_gap]`、`plan_updates`、`human_question`。`mark_plan_gap` 必须搭配 `plan_updates`。
-
-Python 应用语义：
-
-- `accepted_done`：要求 `remaining_gaps` 空、所有 AC 在 plan 都有 `actual_evidence`、plan 没有 open items。
-- `continue`：必须给非空 `next_instruction`，写入 state，supervisor 继续下一轮。
-- `needs_human`：必须给非空 `human_question`，写入 `state.needs_human`；supervisor 用 `AskUserQuestion` 问一个问题。用户用 `/twin respond <answer>` 解除门禁，成功后写入 `human_response.json` 并向 `workspace_events.jsonl` 追加不含回答正文的审计事件。
-- `failed`：terminal。
-
-## State machine
-
-`supervisor_state.json::status` 取值：
-
-| status | 含义 | 允许转入 |
-| --- | --- | --- |
-| `idle` | 新 workspace | `worker_running` |
-| `worker_running` | worker 进行中 | `review_required`、`failed` |
-| `review_required` | worker 结束，等 review | `continue` / `needs_human` / `accepted_done` / `failed` |
-| `continue` | review 通过，下一轮 | `worker_running` |
-| `needs_human` | 等真人回答 | `continue`（`/twin respond` 触发） |
-| `accepted_done` | 收敛完成 | terminal |
-| `failed` | 不可恢复 | terminal |
-
-`worker-turn` 拒绝 `accepted_done` / `failed` / `review_required` / `needs_human` 状态启动；`worker_running` 但 run artifact 全缺时识别为 stale，自动 reset 后 fresh 启动。
-
-## accepted_done 收尾自验清单
-
-Python 已校验：schema、AC 覆盖、plan 无 open items、`remaining_gaps` 为空。bootstrap 阶段还会校验 plan 约束是否足够短、硬、可 review；最终收尾只接受这些 item 的实际证据，不接受 worker 用口头总结替代 plan evidence。
-
-supervisor 必须自验：
-
-- 宿主仓库 `git status --porcelain` 干净；如必须脏交付，在 review `summary` 写明原因。
-- `$DEV_RULES/personas/*` 未被本会话或本轮 worker 写入：扫 `runs/<run_id>/events.jsonl` 的写入工具调用目标。
-- worker 信号正常：`run.json::evidence.quality_flags` 无未处理阻断信号。
-- 同一 gap 没有连续 3 轮未推进。
-- PR / CI 状态绿，或失败原因写进 `risk_flags`。
-
-任一不满足，回 `continue` 或 `needs_human`，别走 `accepted_done`。
-
-## 维护入口
-
-`python3 -m scripts.twin validate --fixtures` 跑 schema + 端到端 contract test；preflight 自动调用。其它阶段名不暴露给用户。
+Fixtures 覆盖 legacy workspace、stable/duplicate token、stale revision、wrong action/run/workspace/route、Codex host 完整闭环、`needs_human` 重入、provider-neutral active pointer 和真实 launcher。

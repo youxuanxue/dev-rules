@@ -127,7 +127,13 @@ def build_review_context(workspace: Path, run_id: str) -> dict[str, Any]:
     return build_supervisor_context(workspace, run_id)
 
 
-def apply_supervisor_review(workspace: Path, run_id: str, review: dict[str, Any]) -> dict[str, Any]:
+def apply_supervisor_review(
+    workspace: Path,
+    run_id: str,
+    review: dict[str, Any],
+    *,
+    clear_pending_action: bool = False,
+) -> dict[str, Any]:
     errors = validate_schema(review, SUPERVISOR_REVIEW_SCHEMA)
     if errors:
         raise WorkspaceError("supervisor_review schema errors: " + "; ".join(errors))
@@ -136,6 +142,10 @@ def apply_supervisor_review(workspace: Path, run_id: str, review: dict[str, Any]
     goal = load_goal(workspace)
     plan = load_plan(workspace)
     state = load_state(workspace)
+    if state.get("pending_action") is not None and not clear_pending_action:
+        raise WorkspaceError(
+            "workspace has a pending supervisor review; submit it through twin submit-review"
+        )
     run_path = _run_path(workspace, run_id)
     if not run_path.exists():
         raise WorkspaceError(f"missing run artifact: {run_path}")
@@ -184,6 +194,8 @@ def apply_supervisor_review(workspace: Path, run_id: str, review: dict[str, Any]
 
     state["last_review_status"] = status
     state["current_run_id"] = run_id
+    if clear_pending_action:
+        state["pending_action"] = None
     next_item = choose_next_item(plan)
     state["current_item_id"] = next_item.get("id") if next_item else None
     run["review"] = review

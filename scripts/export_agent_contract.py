@@ -20,11 +20,13 @@ def _cell(value: str) -> str:
     return value.replace("|", "\\|").replace("\n", " ").strip() or "-"
 
 
-def _action_label(action: argparse.Action) -> str:
+def _action_label(action: argparse.Action, *, one_required: bool = False) -> str:
     if action.option_strings:
         label = ", ".join(action.option_strings)
         if action.required:
             label += " (required)"
+        elif one_required:
+            label += " (one required)"
         return label
     suffix = "" if action.nargs in (None, 1) else f" [{action.nargs}]"
     return f"{action.dest}{suffix}"
@@ -43,12 +45,18 @@ def _twin_cli_rows() -> list[tuple[str, str, str]]:
     for name, command_parser in sorted(subparsers.choices.items()):
         positionals: list[str] = []
         options: list[str] = []
+        one_required = {
+            action
+            for group in command_parser._mutually_exclusive_groups
+            if group.required
+            for action in group._group_actions
+        }
         for action in command_parser._actions:
             if isinstance(action, argparse._HelpAction):
                 continue
             target = options if action.option_strings else positionals
-            target.append(_action_label(action))
-        rows.append((f"python3 -m scripts.twin {name}", ", ".join(positionals), ", ".join(options)))
+            target.append(_action_label(action, one_required=action in one_required))
+        rows.append((f"twin {name}", ", ".join(positionals), ", ".join(options)))
     return rows
 
 
@@ -82,9 +90,9 @@ def render_generated() -> str:
         _slash_surface(),
         "```",
         "",
-        "## Twin Runtime CLI",
+        "## Twin CLI",
         "",
-        "Source: `scripts/twin/__main__.py::build_parser`.",
+        "Source: `global/bin/twin` and `scripts/twin/__main__.py::build_parser`.",
         "",
         "| Command | Positionals | Options |",
         "| --- | --- | --- |",

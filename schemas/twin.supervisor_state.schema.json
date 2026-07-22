@@ -15,6 +15,20 @@
     "worker_session_id": { "type": ["string", "null"] },
     "next_instruction": { "type": "string" },
     "last_review_status": { "type": ["string", "null"] },
+    "state_revision": { "type": "integer", "minimum": 0 },
+    "supervisor_route": { "enum": [null, "host/claude", "host/codex", "host/antigravity"] },
+    "pending_action": {
+      "type": ["object", "null"],
+      "required": ["kind", "token", "state_revision", "run_id", "issued_at"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "type": "string", "enum": ["supervisor_instruction", "review_run"] },
+        "token": { "type": "string", "minLength": 1 },
+        "state_revision": { "type": "integer", "minimum": 0 },
+        "run_id": { "type": ["string", "null"] },
+        "issued_at": { "type": "string", "minLength": 1 }
+      }
+    },
     "needs_human": {
       "type": ["object", "null"],
       "required": ["question", "context", "created_at"],

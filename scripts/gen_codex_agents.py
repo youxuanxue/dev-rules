@@ -12,7 +12,7 @@ idempotent managed block inside AGENTS.md that POINTS at:
   - the constitution (dev-rules/global/CLAUDE.md),
   - the behavioral rule set (.cursor/rules/*.mdc — name + one-line each),
   - the available skills (.cursor/skills/*/SKILL.md — name + description),
-  - the /twin command (Claude-Code-only) and the cross-tool xj-review skill.
+  - the provider-neutral twin CLI contract and the cross-tool xj-review skill.
 
 Everything inside the block is derived mechanically from on-disk artifacts —
 no model inference — per rules/dev-rules-convention.mdc «skill/command 确定性基线».
@@ -164,6 +164,11 @@ def render_block(project: pathlib.Path) -> str:
         if has_dev_rules_submodule(project)
         else "scripts/gen_codex_agents.py"
     )
+    twin_contract_ref = (
+        "dev-rules/docs/agent_integration.md"
+        if has_dev_rules_submodule(project)
+        else "docs/agent_integration.md"
+    )
 
     lines: list[str] = [BEGIN, ""]
     lines.append(
@@ -208,9 +213,10 @@ def render_block(project: pathlib.Path) -> str:
 
     lines.append("## 命令")
     lines.append(
-        "- `/twin <workspace>|status [workspace]|respond <text>` — 运行 xuejiao persona "
-        "supervisor 驱动 worker；底层入口 `python3 -m scripts.twin`（见 "
-        "`dev-rules/commands/twin.md`）。Claude-Code-only。"
+        "- `twin` — provider-neutral xuejiao supervisor CLI；Codex 使用 "
+        "`twin run <workspace> --supervisor host/codex --json`，Antigravity 使用 "
+        f"`host/antigravity`。精确 action/submit 契约只见 `{twin_contract_ref}`；"
+        "不要在 AGENTS.md 复制状态机。Claude 的 `/twin` 只是同一 CLI 的薄适配器。"
     )
     lines.append(
         "- 代码审查走三端通用 skill `xj-review`（上面技能索引里）：先跑 `preflight.sh` 取 "
@@ -298,6 +304,10 @@ def _self_test() -> int:
             failures.append("rule index not rendered")
         if "**demo**" not in block or "A demo skill" not in block:
             failures.append("skill index not rendered")
+        if "host/codex" not in block or "docs/agent_integration.md" not in block:
+            failures.append("provider-neutral twin navigation not rendered")
+        if "Claude-Code-only" in block:
+            failures.append("generated AGENTS block still marks twin as Claude-only")
         # generator self-reference path is consumer-relative. Without a vendored
         # dev-rules submodule the bare scripts/ path is correct.
         if "`scripts/gen_codex_agents.py`" not in block:

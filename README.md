@@ -11,13 +11,14 @@
 | `rules/agent-contract-enforcement.mdc` | WebUI / API / CLI / MCP 契约同步、安全基线、跨端对齐 |
 | `rules/test-philosophy.mdc` | 按风险匹配 Story 强度、测试设计、Story ↔ Test 对齐 |
 
-## Claude Code 命令
+## twin 命令
 
 | 命令 | 用法 | 作用 |
 | --- | --- | --- |
-| `commands/twin.md` | `/twin` | 运行 xuejiao persona supervisor；live 命令面见 `docs/agent_integration.md` |
+| `global/bin/twin` | `twin` | Claude、Codex、Antigravity 共用的 xuejiao persona supervisor CLI |
+| `commands/twin.md` | `/twin` | Claude Code 薄适配器；live 命令面见 `docs/agent_integration.md` |
 
-> `/twin` 是 Claude-Code-only supervisor 命令；worker 默认使用 Claude headless，也可直接路由到本机 `claude` / `codex` / `gemini` CLI，或通过 CAO HTTP 路由到其他 provider。代码审查不再是命令——已重写为三端通用 skill `xj-review`（见下）。
+> `twin` supervisor 不要求本地 server。当前 Claude、Codex 或 Antigravity 会话通过 `host/<provider>` route 做判断；worker 默认使用 Claude headless，也可直接路由到本机 `claude` / `codex` / `gemini` CLI，远程或多 profile 场景才选 CAO。代码审查走三端通用 skill `xj-review`。
 
 ## Agent Skills
 
@@ -44,7 +45,7 @@
 | `docs/twin-design.md` | twin 设计单一事实来源 |
 | `docs/twin-supervisor-runbook.md` | supervisor 每轮调用契约 |
 | `docs/twin-cao-operator-guide.md` | CAO/Codex worker 的安装、路由、验证和排障指南 |
-| `docs/twin-universal-command.md` | twin 三端通用 CLI 与 supervisor backend 提案 |
+| `docs/twin-universal-command.md` | twin 三端通用 CLI 与 host supervisor 决策 |
 | `docs/agent-team-playbook.md` | 四层 Agent 团队、七阶段裁剪、能力对比与本轮决策备忘 |
 | `docs/agent_integration.md` | 从 live twin CLI、Claude command surface 与 schemas 生成的 Agent 集成契约 |
 | `templates/twin-workspace/` | `/twin` workspace 起点模板 |

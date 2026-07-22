@@ -2,15 +2,15 @@
 
 ## 一句话
 
-`twin` 是运行在 Claude Code 交互模式里的 **xuejiao persona supervisor**：它持有目标、通过可插拔 backend 指挥 worker 多轮推进、验收证据，并只在真正需要真人判断时停下。
+`twin` 是 provider-neutral 的 **xuejiao persona supervisor CLI**：当前 Claude、Codex 或 Antigravity 会话通过 host action protocol 做判断；Python 持有目标和状态，通过可插拔 backend 指挥 worker、验收证据，并只在真正需要真人判断时停下。
 
 worker harness 由 dev-rules、项目 `CLAUDE.md`、hooks、preflight、`wtree.py` 与 worker backend 承担；`twin` 不再造 agent 平台。普通 Agent 会话走 `$git-worktree-submodule`，人类走 `wts`；twin 作为程序化调用方也只消费同一个 `wtree.py` 引擎。
 
 ## 核心约束
 
-1. **bootstrap or workspace**：`/twin "<one-line goal>"` 由当前 supervisor 判断是否需要可选只读 research，再草拟 `goal.yaml + plan.yaml`；Python 只写入和校验，`/twin <workspace>` 直接运行已准备好的 workspace。
+1. **bootstrap or workspace**：当前 host 判断是否需要可选只读 research，再草拟 `goal.yaml + plan.yaml`；Python 只写入和校验，`twin run <workspace> --supervisor host/<provider>` 运行已准备好的 workspace。
 2. **persona split**：supervisor 使用 `$DEV_RULES/personas/supervisor-persona.md`；worker 只看到 `$DEV_RULES/personas/worker-persona.md`。
-3. **interactive supervisor**：`/twin` 本身就是 supervisor，不另起 supervisor `claude -p`。
+3. **interactive supervisor**：当前 Agent 会话就是 supervisor，不另起 supervisor server 或 headless Agent；Claude `/twin` 只是通用 CLI 的薄适配。
 4. **worker backend**：默认 Claude Code headless；`local_cli` 直接调用本机 Claude、Codex 或 Gemini；CAO `run-step` 是远程、多 profile 和并发场景的可选 backend。
 5. **supervisor 验收**：worker stop 不是完成；完成由 supervisor 对照 goal、plan、run evidence、测试、preflight、PR/commit 状态判断。
 6. **single source of truth**：每类事实只有一个权威载体；旧 `feature_ledger.yaml` 是 breaking legacy，不自动迁移。
@@ -25,7 +25,7 @@ plan.yaml    # deliverables、AC 覆盖、状态、证据、下一步
 
 `research.yaml` 不是决策文件。Dynamic Workflow 可以生成它，但最终目标、non-goals、AC 与交付拆分必须由 supervisor 判断。
 
-`goal.yaml` 只放目标和验收；授权和门禁由 Claude Code permissions / settings / hooks / dev-rules / 项目 `CLAUDE.md` 承担。
+`goal.yaml` 只放目标和验收；授权和门禁由当前 provider sandbox/permissions、hooks、dev-rules 和项目指令承担。
 
 `plan.yaml` 只引用 AC ID，不重复 AC statement。bootstrap 阶段必须把复杂目标拆成短交付：多 AC 不得只生成单个 item；每个 item 要写清 scope 边界、证据预算、停止/转 review 条件；已知 gate gap 用 `blocked` / `deferred` + `blocked_reason` 表达；最终验收、summary、preflight 类 item 依赖前置交付项。防止长跑优先靠入口 plan 质量，不靠运行期限制 worker 自主性。
 
@@ -83,13 +83,13 @@ items:
 
 ```text
 while not terminal:
-  1. 读：goal + plan + supervisor persona + run evidence
-  2. 干：启动或 resume worker
-  3. 验：supervisor 对照 AC、plan、diff、测试、preflight、PR/commit 状态验收
-  4. 判：accepted_done / continue / needs_human / failed
+  1. twin 派生确定性 action
+  2. host 只在 instruction/review action 做判断并带 token 提交
+  3. twin 启动或 resume worker，写入 evidence
+  4. watch / needs_human / accepted_done / failed 时返回宿主
 ```
 
-`continue` 必须自动进入下一轮；只有 `accepted_done` / `needs_human` / `failed` 停下。`needs_human` 用 `AskUserQuestion` 问一个具体问题。每轮 `next_instruction` 只能绑定当前 plan item 的证据预算和停止条件；如果发现 plan item 过宽，supervisor 应回到 plan 约束修正或 `needs_human`，不要把过宽目标交给 worker 长跑。
+`continue` 在一次 host 调用中自动进入下一轮；`watch_worker` 是 bounded stop，稍后从 artifact state 重入。`needs_human` 向用户问一个具体问题。每轮 `next_instruction` 只能绑定当前 plan item 的证据预算和停止条件；如果发现 plan item 过宽，supervisor 应回到 plan 约束修正或 `needs_human`，不要把过宽目标交给 worker 长跑。
 
 ## 单一事实来源
 
@@ -100,7 +100,7 @@ while not terminal:
 | 计划、执行路由、deliverables、AC 覆盖、状态、实际证据 | `plan.yaml` |
 | supervisor persona | `$DEV_RULES/personas/supervisor-persona.md` |
 | worker persona | `$DEV_RULES/personas/worker-persona.md` |
-| 当前轮次、next instruction、可续跑 backend session handle、terminal status | `supervisor_state.json` |
+| 当前轮次、host route、state revision、pending action、next instruction、可续跑 backend session handle、terminal status | `supervisor_state.json` |
 | worker 过程、证据、内联 review | `runs/<run_id>/run.json` / `events.jsonl` |
 | 人类门禁回答 | `human_response.json` |
 | 人类门禁审计 | `workspace_events.jsonl` |
@@ -124,9 +124,9 @@ worker session memory 只是续跑辅助；事实源始终是 workspace artifact
 
 ## status artifact
 
-`CURRENT.md` 和 `/twin status` 是人类状态面：从 `goal.yaml`、`plan.yaml`、`supervisor_state.json` 与 run artifact 派生，不驱动状态变化。它们展示可读状态、当前 item、轮次、下一条命令和必要证据路径；`worker_running` 时只用 artifact metadata 派生 compact worker 诊断，不展开日志。机器消费继续使用 `status --json` 的原始字段。
+`CURRENT.md` 和 `twin status` 是人类状态面：从 `goal.yaml`、`plan.yaml`、`supervisor_state.json` 与 run artifact 派生，不驱动状态变化。它们展示可读状态、当前 item、轮次、下一条命令和必要证据路径；`worker_running` 时只用 artifact metadata 派生 compact worker 诊断，不展开日志。机器消费继续使用 `status --json` 的原始字段。
 
-`workspace_events.jsonl` 只记录 workspace 级人类 mutation 审计。当前仅记录成功的 `/twin respond`，不写入回答正文，只记录状态迁移、artifact 引用和回答长度。
+`workspace_events.jsonl` 记录 workspace 级 mutation 审计。`twin respond` 不写回答正文，只记录状态迁移、artifact 引用和回答长度；host instruction submission 也只记录 route、revision、长度和 hash，不记录 instruction 正文。
 
 ## review artifact
 
