@@ -815,6 +815,59 @@ def _driver_protocol_errors(root: Path) -> list[str]:
     )
     if launcher_result.returncode != 0 or str(needs_workspace) not in launcher_result.stdout:
         errors.append(f"real twin launcher smoke failed: {launcher_result.stderr.strip()}")
+
+    scaffold_workspace = root / "driver-launcher-scaffold"
+    scaffold_result = subprocess.run(
+        [
+            str(launcher),
+            "scaffold",
+            "真实 launcher scaffold fixture",
+            "--workspace",
+            str(scaffold_workspace),
+        ],
+        cwd=Path(__file__).resolve().parents[2],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=launcher_env,
+    )
+    if scaffold_result.returncode != 0:
+        errors.append(f"real twin scaffold failed: {scaffold_result.stderr.strip()}")
+    elif not (scaffold_workspace / "goal.yaml").is_file() or not (scaffold_workspace / "plan.yaml").is_file():
+        errors.append("real twin scaffold should create editable goal.yaml and plan.yaml files")
+    else:
+        scaffold_status = subprocess.run(
+            [str(launcher), "status", str(scaffold_workspace), "--json"],
+            cwd=Path(__file__).resolve().parents[2],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=launcher_env,
+        )
+        if scaffold_status.returncode != 0:
+            errors.append(f"scaffolded workspace should pass twin status: {scaffold_status.stderr.strip()}")
+        scaffold_run = subprocess.run(
+            [
+                str(launcher),
+                "run",
+                str(scaffold_workspace),
+                "--supervisor",
+                "host/codex",
+                "--json",
+            ],
+            cwd=Path(__file__).resolve().parents[2],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=launcher_env,
+        )
+        try:
+            scaffold_action = json.loads(scaffold_run.stdout)
+        except json.JSONDecodeError:
+            scaffold_action = {}
+        if scaffold_run.returncode != 0 or scaffold_action.get("action") != "supervisor_instruction":
+            errors.append(f"scaffolded workspace should enter twin run: {scaffold_run.stderr.strip()}")
+
     help_result = subprocess.run(
         [str(launcher), "--help"],
         cwd=Path(__file__).resolve().parents[2],

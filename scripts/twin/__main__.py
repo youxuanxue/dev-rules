@@ -324,6 +324,7 @@ def _cmd_submit_review(args: argparse.Namespace) -> int:
 def _cmd_scaffold(args: argparse.Namespace) -> int:
     try:
         draft = draft_workspace(args.goal, Path(args.workspace) if args.workspace else None)
+        draft["workspace"] = str(write_workspace_draft(draft))
     except WorkspaceError as exc:
         print(str(exc), file=sys.stderr)
         return 2
