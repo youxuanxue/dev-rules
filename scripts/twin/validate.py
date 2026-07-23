@@ -306,6 +306,30 @@ def _schema_errors() -> list[str]:
 
 def _runtime_reentry_errors(root: Path) -> list[str]:
     errors: list[str] = []
+    spaced_workspace = _write_workspace(root / "worker command paths with spaces")
+    spaced_action = continuation_action(spaced_workspace)
+    spaced_workspace_resolved = spaced_workspace.resolve()
+    expected_context_command = shlex.join(
+        ["twin", "supervisor-context", "--workspace", str(spaced_workspace_resolved)]
+    )
+    expected_run_command = shlex.join(
+        [
+            "twin",
+            "run",
+            str(spaced_workspace_resolved),
+            "--supervisor",
+            "<host/provider>",
+        ]
+    )
+    if spaced_action.get("command") != expected_context_command:
+        errors.append(
+            f"continuation command must shell-quote workspace paths: {spaced_action!r}"
+        )
+    if spaced_action.get("next") != expected_run_command:
+        errors.append(
+            f"continuation next command must shell-quote workspace paths: {spaced_action!r}"
+        )
+
     workspace = _write_workspace(root / "worker-diagnostics")
     state = load_state(workspace)
     state["status"] = "worker_running"
@@ -378,6 +402,41 @@ def _runtime_reentry_errors(root: Path) -> list[str]:
     quiet_action = continuation_action(quiet)
     if quiet_action.get("action") != "watch_worker" or quiet_action.get("worker", {}).get("state") != "quiet":
         errors.append(f"quiet worker should route to bounded watchdog: {quiet_action!r}")
+    watch_timeout = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.twin",
+            "watch",
+            "--workspace",
+            str(quiet),
+            "--max-wait-seconds",
+            "0",
+            "--json",
+        ],
+        cwd=Path(__file__).resolve().parents[2],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    try:
+        watch_timeout_payload = json.loads(watch_timeout.stdout)
+    except json.JSONDecodeError:
+        errors.append(
+            f"watch timeout should return JSON: {watch_timeout.stderr.strip()}"
+        )
+    else:
+        expected_status_command = shlex.join(
+            ["twin", "status", str(quiet.resolve())]
+        )
+        if (
+            watch_timeout.returncode != 1
+            or watch_timeout_payload.get("action") != "worker_quiet_timeout"
+            or watch_timeout_payload.get("next") != expected_status_command
+        ):
+            errors.append(
+                f"watch timeout must return a shell-safe status command: {watch_timeout_payload!r}"
+            )
 
     for expected_status, expected_action in [
         ("idle", "supervisor_instruction"),

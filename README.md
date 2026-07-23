@@ -46,7 +46,6 @@
 | `docs/twin-supervisor-runbook.md` | supervisor 每轮调用契约 |
 | `docs/twin-cao-operator-guide.md` | CAO/Codex worker 的安装、路由、验证和排障指南 |
 | `docs/twin-universal-command.md` | twin 三端通用 CLI 与 host supervisor 决策 |
-| `docs/agent-team-playbook.md` | 四层 Agent 团队、七阶段裁剪、能力对比与本轮决策备忘 |
 | `docs/agent_integration.md` | 从 live twin CLI、Claude command surface 与 schemas 生成的 Agent 集成契约 |
 | `templates/twin-workspace/` | `/twin` workspace 起点模板 |
 | `global/CLAUDE.md` | Claude Code 全局工作宪法 |

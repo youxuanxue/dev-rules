@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,10 @@ from .workspace import (
 )
 
 
+def _shell_command(*parts: object) -> str:
+    return shlex.join([str(part) for part in parts])
+
+
 def status_workspace(workspace: Path | str) -> dict[str, Any]:
     return status_summary(Path(workspace).expanduser().resolve())
 
@@ -30,7 +35,13 @@ def continuation_action(workspace: Path | str) -> dict[str, Any]:
     state = load_state(workspace_path)
     status = str(state.get("status") or "")
     supervisor_route = state.get("supervisor_route") or "<host/provider>"
-    run_command = f"twin run {workspace_path} --supervisor {supervisor_route}"
+    run_command = _shell_command(
+        "twin", "run", workspace_path, "--supervisor", supervisor_route
+    )
+    status_command = _shell_command("twin", "status", workspace_path)
+    supervisor_context_command = _shell_command(
+        "twin", "supervisor-context", "--workspace", workspace_path
+    )
     base = {
         "workspace": str(workspace_path),
         "status": status,
@@ -41,7 +52,7 @@ def continuation_action(workspace: Path | str) -> dict[str, Any]:
         return {
             **base,
             "action": "supervisor_instruction",
-            "command": f"twin supervisor-context --workspace {workspace_path}",
+            "command": supervisor_context_command,
             "next": run_command,
         }
     if status == "continue":
@@ -49,13 +60,20 @@ def continuation_action(workspace: Path | str) -> dict[str, Any]:
             return {
                 **base,
                 "action": "supervisor_instruction",
-                "command": f"twin supervisor-context --workspace {workspace_path}",
+                "command": supervisor_context_command,
                 "next": run_command,
             }
         return {
             **base,
             "action": "worker_turn",
-            "command": f"twin worker-turn --workspace {workspace_path} --instruction <next_instruction>",
+            "command": _shell_command(
+                "twin",
+                "worker-turn",
+                "--workspace",
+                workspace_path,
+                "--instruction",
+                "<next_instruction>",
+            ),
             "next": run_command,
         }
     if status == "worker_running":
@@ -67,7 +85,15 @@ def continuation_action(workspace: Path | str) -> dict[str, Any]:
                 **base,
                 "action": "review_run",
                 "worker": worker,
-                "command": f"twin review-context --workspace {workspace_path} --run-id {run_id} --json",
+                "command": _shell_command(
+                    "twin",
+                    "review-context",
+                    "--workspace",
+                    workspace_path,
+                    "--run-id",
+                    run_id,
+                    "--json",
+                ),
                 "next": run_command,
             }
         if worker_action == "recover_worker_turn":
@@ -75,22 +101,39 @@ def continuation_action(workspace: Path | str) -> dict[str, Any]:
                 **base,
                 "action": "recover_worker_turn",
                 "worker": worker,
-                "command": f"twin worker-turn --workspace {workspace_path} --instruction <next_instruction>",
+                "command": _shell_command(
+                    "twin",
+                    "worker-turn",
+                    "--workspace",
+                    workspace_path,
+                    "--instruction",
+                    "<next_instruction>",
+                ),
                 "next": run_command,
             }
         return {
             **base,
             "action": "watch_worker",
             "worker": worker,
-            "command": f"twin watch --workspace {workspace_path} --json",
-            "next": f"twin status {workspace_path}",
+            "command": _shell_command(
+                "twin", "watch", "--workspace", workspace_path, "--json"
+            ),
+            "next": status_command,
         }
     if status == "review_required":
         run_id = str(state.get("current_run_id") or "")
         return {
             **base,
             "action": "review_run",
-            "command": f"twin review-context --workspace {workspace_path} --run-id {run_id} --json",
+            "command": _shell_command(
+                "twin",
+                "review-context",
+                "--workspace",
+                workspace_path,
+                "--run-id",
+                run_id,
+                "--json",
+            ),
             "next": run_command,
         }
     if status == "needs_human":
@@ -99,7 +142,7 @@ def continuation_action(workspace: Path | str) -> dict[str, Any]:
         return {**base, "action": "done", "next": "none"}
     if status == "failed":
         return {**base, "action": "failed", "next": "inspect CURRENT.md and latest run evidence"}
-    return {**base, "action": "unknown", "next": f"twin status {workspace_path}"}
+    return {**base, "action": "unknown", "next": status_command}
 
 
 def record_human_response(workspace: Path | str, text: str) -> Path:

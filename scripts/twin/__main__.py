@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import shutil
 import sys
 import time
@@ -149,7 +150,13 @@ def _cmd_watch(args: argparse.Namespace) -> int:
             return 0
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            timeout = {**latest, "action": "worker_quiet_timeout", "next": f"twin status {Path(workspace).expanduser().resolve()}"}
+            timeout = {
+                **latest,
+                "action": "worker_quiet_timeout",
+                "next": shlex.join(
+                    ["twin", "status", str(Path(workspace).expanduser().resolve())]
+                ),
+            }
             if args.json:
                 _print_json(timeout)
             else:
