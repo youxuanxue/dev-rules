@@ -1,6 +1,6 @@
 # dev-rules
 
-数字分身规则的单一事实来源。`README.md` 只做入口索引；长期规则在 `rules/*.mdc`，命令契约在 `commands/*.md`，会话级纪律在 `global/CLAUDE.md`。
+数字分身规则的单一事实来源。`README.md` 只做入口索引；长期规则在 `rules/*.mdc`，跨宿主工作流在 Agent Skills，会话级纪律在 `global/CLAUDE.md`。
 
 ## 规则
 
@@ -11,12 +11,12 @@
 | `rules/agent-contract-enforcement.mdc` | WebUI / API / CLI / MCP 契约同步、安全基线、跨端对齐 |
 | `rules/test-philosophy.mdc` | 按风险匹配 Story 强度、测试设计、Story ↔ Test 对齐 |
 
-## twin 命令
+## twin 入口
 
-| 命令 | 用法 | 作用 |
+| 入口 | 用法 | 作用 |
 | --- | --- | --- |
 | `global/bin/twin` | `twin` | Claude、Codex、Antigravity 共用的 xuejiao persona supervisor CLI |
-| `commands/twin.md` | `/twin` | Claude Code 薄适配器；live 命令面见 `docs/agent_integration.md` |
+| `agent-skills/twin/SKILL.md` | Claude `/twin`、Codex `$twin`、Antigravity `twin` skill | 三端共用的唯一宿主体验；经 skill symlink 同源分发 |
 
 > `twin` supervisor 不要求本地 server。当前 Claude、Codex 或 Antigravity 会话通过 `host/<provider>` route 做判断；worker 默认使用 Claude headless，也可直接路由到本机 `claude` / `codex` / `gemini` CLI，远程或多 profile 场景才选 CAO。代码审查走三端通用 skill `xj-review`。
 
@@ -46,8 +46,8 @@
 | `docs/twin-supervisor-runbook.md` | supervisor 每轮调用契约 |
 | `docs/twin-cao-operator-guide.md` | CAO/Codex worker 的安装、路由、验证和排障指南 |
 | `docs/twin-universal-command.md` | twin 三端通用 CLI 与 host supervisor 决策 |
-| `docs/agent_integration.md` | 从 live twin CLI、Claude command surface 与 schemas 生成的 Agent 集成契约 |
-| `templates/twin-workspace/` | `/twin` workspace 起点模板 |
+| `docs/agent_integration.md` | 从 live twin CLI 与 schemas 生成的 Agent 集成契约 |
+| `templates/twin-workspace/` | 三端共用的 twin workspace 起点模板 |
 | `global/CLAUDE.md` | Claude Code 全局工作宪法 |
 
 Agent 契约变更后运行 `python3 scripts/export_agent_contract.py`，并用 `python3 scripts/export_agent_contract.py --check` 检查漂移；`docs/agent_integration.md` 禁止手工编辑。
