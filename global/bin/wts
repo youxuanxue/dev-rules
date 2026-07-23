@@ -120,6 +120,36 @@ normalize_runtime() {
     esac
 }
 
+resolve_agent_bin() {
+    if [[ -n "${AGENT_BIN:-}" && -x "$AGENT_BIN" ]]; then
+        echo "$AGENT_BIN"
+        return 0
+    fi
+    if [[ -x "$HOME/.local/bin/agent" ]]; then
+        echo "$HOME/.local/bin/agent"
+        return 0
+    fi
+    local found=""
+    found="$(command -v agent 2>/dev/null || true)"
+    if [[ -n "$found" && -x "$found" ]]; then
+        echo "$found"
+        return 0
+    fi
+    die "agent not found in PATH (set AGENT_BIN)"
+}
+
+prepare_agent_cli() {
+    local worktree="$1"
+    WTS_AGENT_BIN="$(resolve_agent_bin)"
+    WTS_AGENT_WORKTREE="$(cd "$worktree" && pwd)"
+    # agent shell-integration (zsh) exports CURSOR_AGENT_CHAT_ID and wraps `agent()`
+    # with --resume; inheriting that ID can silently keep edits on the main checkout.
+    unset CURSOR_AGENT_CHAT_ID
+    export WTREE_SESSION_WORKDIR="$WTS_AGENT_WORKTREE"
+    echo "worktree: $WTS_AGENT_WORKTREE"
+    echo "session-workdir: $WTS_AGENT_WORKTREE"
+}
+
 session_command() {
     local runtime="$1"
     local worktree="$2"
@@ -127,9 +157,9 @@ session_command() {
 
     case "$runtime" in
         agent)
-            local agent_bin="${AGENT_BIN:-$(command -v agent 2>/dev/null || echo "$HOME/.local/bin/agent")}"
-            [[ -x "$agent_bin" ]] || die "agent not found in PATH (set AGENT_BIN)"
-            cmd=("$agent_bin" "--workspace" "$worktree")
+            prepare_agent_cli "$worktree"
+            cmd=("$WTS_AGENT_BIN" "--workspace" "$WTS_AGENT_WORKTREE" "--trust")
+            worktree="$WTS_AGENT_WORKTREE"
             ;;
         codex)
             local codex_bin="${CODEX_BIN:-$(command -v codex 2>/dev/null || true)}"
@@ -176,7 +206,11 @@ import sys
 
 worktree = sys.argv[1]
 cmd = sys.argv[2:]
-inner = f"cd {shlex.quote(worktree)} && exec " + " ".join(shlex.quote(part) for part in cmd)
+inner = (
+    "unset CURSOR_AGENT_CHAT_ID; "
+    f"cd {shlex.quote(worktree)} && exec "
+    + " ".join(shlex.quote(part) for part in cmd)
+)
 inner_esc = inner.replace("\\", "\\\\").replace('"', '\\"')
 script = f'''tell application "iTerm"
   activate
