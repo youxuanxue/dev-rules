@@ -1,6 +1,6 @@
 ---
-approved_by: pending
-status: pending_review
+approved_by: user-chat-2026-07-22
+status: approved
 risk_level: high
 ---
 
@@ -10,7 +10,7 @@ risk_level: high
 
 `twin` must not rely on a remembered interactive Claude Code session to continue after a worker finishes or becomes stale. Workspace artifacts are the source of truth for reentry.
 
-## Approved behavior pending review
+## Approved behavior
 
 - `/twin <workspace>` starts from artifact state, not conversation memory.
 - `python3 -m scripts.twin next --workspace <ws> --json` returns the next deterministic action for the current workspace state.
@@ -20,12 +20,13 @@ risk_level: high
 - `python3 -m scripts.twin watch --workspace <ws> --max-wait-seconds N --poll-interval-seconds N --json` waits only until a non-watch action appears or the bounded timeout expires.
 - `watch` timeout returns `worker_quiet_timeout` and does not kill processes, delete artifacts, or mutate workspace state.
 - `status` remains read-only and may only display compact worker diagnostics derived from artifact metadata.
+- `/twin respond` records the human artifact, then re-enters the supervisor when no `next_instruction` exists; it never fabricates an empty worker turn.
 
 ## Non-goals
 
 - No long-running daemon.
 - No UI/TUI.
-- No process killing or orphan-process cleanup.
+- No watchdog-driven process killing or orphan-process cleanup.
 - No state schema version change.
 - No destructive artifact repair from `status`.
 

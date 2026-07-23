@@ -153,16 +153,16 @@ else
 fi
 
 section "twin status is short-circuited"
-# Doc must declare the short-circuit and point at the Python entrypoint; the
-# stricter "what is forbidden inside status" is enforced by the validate.py
-# fixture (stdout size cap + behavioral asserts), so this check only fences
-# the section anchor — rewording the prose body must not break CI.
-if grep -q '^## 用户命令短路' "$COMMANDS_DIR/twin.md" && \
-   grep -q 'terminal short-circuit' "$COMMANDS_DIR/twin.md" && \
-   grep -q 'python3 -m scripts.twin status' "$COMMANDS_DIR/twin.md"; then
+# The Claude adapter must delegate status/respond directly to the universal
+# CLI and forward stdout. Runtime fixtures enforce the compact read-only
+# behavior; these anchors prevent the prompt from regaining a parallel path.
+if grep -q '^## 薄适配契约' "$COMMANDS_DIR/twin.md" && \
+   grep -Fq '`status [workspace]`：执行 `twin status [workspace]`' "$COMMANDS_DIR/twin.md" && \
+   grep -Fq '逐字转发 stdout；不自行读取或解释 workspace artifact' "$COMMANDS_DIR/twin.md" && \
+   grep -Fq '`respond <text>`：执行 `twin respond <text>`' "$COMMANDS_DIR/twin.md"; then
     ok "twin status command cannot expand workspace artifacts"
 else
-    fail "twin status/respond must stay a Python-only terminal short-circuit"
+    fail "twin status/respond must stay a universal-CLI-only terminal short-circuit"
 fi
 
 section "twin persona source is read-only"
@@ -259,8 +259,8 @@ fi
 # ── twin worktree isolation self-test ─────────────────────────────────
 # worktree.py runs its assertions when invoked directly (no --self-test
 # flag), so the generic check_*/gen_* loop above does not reach it. Run it
-# explicitly: it exercises deterministic path derivation, the env gate, and
-# real git worktree create/idempotent-reuse/remove against a temp repo.
+# explicitly: it exercises deterministic path/branch derivation, the env gate,
+# shared wtree.py create/reuse, fail-closed resolution, and safe cleanup.
 section "twin worktree isolation self-test"
 if python3 "$SCRIPT_DIR/scripts/twin/worktree.py" > /tmp/dev-rules-twin-worktree.log 2>&1; then
     ok "scripts/twin/worktree.py selftest"

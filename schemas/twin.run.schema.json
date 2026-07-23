@@ -22,6 +22,9 @@
       "required": ["session_hash", "resume_used", "permission_mode", "returncode", "session_lost"],
       "additionalProperties": false,
       "properties": {
+        "backend": { "type": "string", "minLength": 1 },
+        "provider": { "type": "string", "minLength": 1 },
+        "agent": { "type": "string", "minLength": 1 },
         "session_hash": { "type": "string" },
         "resume_used": { "type": "boolean" },
         "permission_mode": { "type": "string" },

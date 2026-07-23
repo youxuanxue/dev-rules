@@ -4,6 +4,7 @@ from collections import defaultdict
 from typing import Any
 
 from .contracts import ITEM_STATUSES
+from .local_cli import LOCAL_CLI_PROVIDERS
 
 
 _BOUNDARY_MARKERS = ("只", "仅", "不", "不得", "边界", "范围", "non-goal", "non-goals", "scope")
@@ -70,6 +71,30 @@ def validate_plan_semantics(goal: dict[str, Any], plan: dict[str, Any]) -> list[
     errors: list[str] = []
     if plan.get("goal_id") != goal.get("id"):
         errors.append("plan.goal_id must match goal.id")
+
+    execution = plan.get("execution")
+    if isinstance(execution, dict):
+        backend = execution.get("backend")
+        if backend == "cao":
+            if not str(execution.get("provider") or "").strip():
+                errors.append("plan.execution.provider is required for the cao backend")
+            if not str(execution.get("agent") or "").strip():
+                errors.append("plan.execution.agent is required for the cao backend")
+        elif backend == "local_cli":
+            provider = str(execution.get("provider") or "").strip()
+            if not provider:
+                errors.append("plan.execution.provider is required for the local_cli backend")
+            elif provider not in LOCAL_CLI_PROVIDERS:
+                errors.append(
+                    "plan.execution.provider must be one of: " + ", ".join(LOCAL_CLI_PROVIDERS)
+                )
+            if "agent" in execution:
+                errors.append("plan.execution.agent is only valid for the cao backend")
+        elif backend == "claude_headless":
+            if "provider" in execution:
+                errors.append("plan.execution.provider is only valid for local_cli or cao backends")
+            if "agent" in execution:
+                errors.append("plan.execution.agent is only valid for the cao backend")
 
     known_ac = ac_ids(goal)
     items = plan.get("items", [])

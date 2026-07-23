@@ -9,7 +9,7 @@ $EDITOR .twin/<slug>/plan.yaml
 /twin .twin/<slug>
 ```
 
-更推荐直接用 `/twin "<one-line goal>"` 让 supervisor 先草拟 `goal.yaml + plan.yaml`，确认后再跑。
+更推荐直接用 `/twin "<one-line goal>"` 让 supervisor 判断是否需要只读研究，再草拟 `goal.yaml + plan.yaml`，确认后执行。跨仓或方向不明时可显式使用 `/twin research`，再用 `/twin plan --research <research.yaml>`。
 
 **别在 `dev-rules/templates/twin-workspace/` 原地跑或 validate**——它是模板，不是 workspace；`validate` 会在 workspace 里写出 `supervisor_state.json` 和 `runs/`，污染模板。复制走再改、再 validate、再 `/twin`。
 

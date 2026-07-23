@@ -1,0 +1,15 @@
+# dev-rules Agent Contract Notes
+
+- `twin` is the provider-neutral supervisor CLI. Use `twin run <workspace> --supervisor host/codex|host/claude|host/antigravity --json`; Claude `/twin` is a thin adapter over the same action protocol.
+- Host actions are self-describing: `supervisor_instruction` and `review_run` carry bounded context, expected output, a state revision, a one-time token, and the exact stdin submit command. Python owns worker execution and artifact mutation.
+- A workspace binds lazily to its first host route. Transfer ownership only with `twin handoff <workspace> --supervisor host/<provider>` when no action is pending; handoff advances the revision and records an audit event. Stale revisions, duplicate tokens, wrong action/run/workspace, and old routes fail closed.
+- Public and token-bound action commands are exported from explicit live-parser visibility metadata. Internal compatibility commands remain callable but are omitted from public help and this generated contract; route-bound workspaces reject their low-level worker/review mutation paths.
+- `plan.yaml.execution` defaults to `claude_headless`. `backend: local_cli` directly invokes the installed `claude`, `codex`, or `gemini` CLI; `backend: cao` uses CAO's external `POST /terminals/run-step` contract. CAO provider profiles remain owned by the CAO installation.
+- Local Codex fresh/resume turns enforce `workspace-write` plus `approval_policy=never`; local Gemini turns enforce its OS sandbox plus yolo approvals. A provider timeout terminates the spawned process group before the turn is finalized.
+- `plan.yaml.execution.agent` is required only for `backend: cao` and must name a profile returned by `cao profile list`; `developer` is the portable built-in example. CAO permissions are resolved from that profile rather than from Claude-native tool names.
+- `TWIN_CAO_BASE_URL` selects the CAO control plane. `CAO_AUTH_LOCAL_TOKEN` is read only for auth-enabled CAO, is never persisted in twin artifacts, requires HTTPS outside loopback, and is never forwarded through HTTP redirects.
+- `research.yaml` is optional, read-only provenance. The twin supervisor owns final `goal.yaml` and `plan.yaml` decisions.
+- The approved team runtime boundary is `docs/approved/twin-team-runtime-architecture.md`; practical CAO/Codex setup is in `docs/twin-cao-operator-guide.md`.
+- The approved host-supervisor boundary is in `docs/approved/twin-universal-host-supervisor.md`.
+- `global/bin/twin` is distributed to `~/.local/bin/twin` by `sync.sh`. No local server is required for host supervision or `local_cli` workers; CAO remains optional for remote and profile-managed workers.
+- `global/CLAUDE.md` and generated project `AGENTS.md` blocks are navigation and policy surfaces. Runtime command and schema inventories are generated here.

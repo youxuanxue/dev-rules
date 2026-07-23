@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 from typing import Any
 
-from .contracts import GOAL_FILE, PLAN_FILE, SCHEMA_VERSION
+from .contracts import GOAL_FILE, PLAN_FILE, RESEARCH_FILE, SCHEMA_VERSION
 from .plan import validate_bootstrap_plan_constraints, validate_plan_semantics
 from .schema_contract import validate_schema
+from .research import load_research
 from .util import read_yaml_like, write_yaml_like
 from .workspace import WorkspaceError, load_state, render_current, validate_workspace
 
@@ -15,8 +17,8 @@ def slugify_goal(goal: str) -> str:
     words = re.findall(r"[A-Za-z0-9]+", goal.lower())
     if words:
         return "-".join(words[:6])[:48].strip("-") or "twin-goal"
-    digest = abs(hash(goal)) % 100000
-    return f"twin-goal-{digest:05d}"
+    digest = hashlib.sha256(goal.encode("utf-8")).hexdigest()[:10]
+    return f"twin-goal-{digest}"
 
 
 def draft_workspace(goal: str, workspace: Path | None = None) -> dict[str, Any]:
@@ -72,7 +74,12 @@ def draft_workspace(goal: str, workspace: Path | None = None) -> dict[str, Any]:
     }
 
 
-def draft_from_files(workspace: Path, goal_file: Path, plan_file: Path) -> dict[str, Any]:
+def draft_from_files(
+    workspace: Path,
+    goal_file: Path,
+    plan_file: Path,
+    research_file: Path | None = None,
+) -> dict[str, Any]:
     goal_doc = read_yaml_like(goal_file.expanduser().resolve())
     plan_doc = read_yaml_like(plan_file.expanduser().resolve())
     errors = validate_schema(goal_doc, "twin.goal.schema.json")
@@ -81,11 +88,14 @@ def draft_from_files(workspace: Path, goal_file: Path, plan_file: Path) -> dict[
     errors.extend(validate_bootstrap_plan_constraints(goal_doc, plan_doc))
     if errors:
         raise WorkspaceError("supervisor-authored bootstrap artifacts are invalid: " + "; ".join(errors))
-    return {
+    draft = {
         "workspace": str(workspace),
         "goal": goal_doc,
         "plan": plan_doc,
     }
+    if research_file is not None:
+        draft["research"] = load_research(research_file)
+    return draft
 
 
 def write_workspace_draft(draft: dict[str, Any], *, overwrite: bool = False) -> Path:
@@ -99,6 +109,8 @@ def write_workspace_draft(draft: dict[str, Any], *, overwrite: bool = False) -> 
     workspace.mkdir(parents=True, exist_ok=True)
     write_yaml_like(workspace / GOAL_FILE, dict(draft.get("goal") or {}))
     write_yaml_like(workspace / PLAN_FILE, dict(draft.get("plan") or {}))
+    if isinstance(draft.get("research"), dict):
+        write_yaml_like(workspace / RESEARCH_FILE, dict(draft["research"]))
     goal, plan = validate_workspace(workspace)
     render_current(workspace, goal, plan, load_state(workspace))
     return workspace

@@ -11,13 +11,14 @@
 | `rules/agent-contract-enforcement.mdc` | WebUI / API / CLI / MCP 契约同步、安全基线、跨端对齐 |
 | `rules/test-philosophy.mdc` | 按风险匹配 Story 强度、测试设计、Story ↔ Test 对齐 |
 
-## Claude Code 命令
+## twin 命令
 
 | 命令 | 用法 | 作用 |
 | --- | --- | --- |
-| `commands/twin.md` | `/twin "<goal>"\|<workspace>\|status [workspace]\|respond <text>` | 运行 xuejiao persona supervisor，驱动 Claude Code worker 完成目标 |
+| `global/bin/twin` | `twin` | Claude、Codex、Antigravity 共用的 xuejiao persona supervisor CLI |
+| `commands/twin.md` | `/twin` | Claude Code 薄适配器；live 命令面见 `docs/agent_integration.md` |
 
-> `/twin` 是 Claude-Code-only 命令（驱动 `claude` CLI worker）。代码审查不再是命令——已重写为三端通用 skill `xj-review`（见下）。
+> `twin` supervisor 不要求本地 server。当前 Claude、Codex 或 Antigravity 会话通过 `host/<provider>` route 做判断；worker 默认使用 Claude headless，也可直接路由到本机 `claude` / `codex` / `gemini` CLI，远程或多 profile 场景才选 CAO。代码审查走三端通用 skill `xj-review`。
 
 ## Agent Skills
 
@@ -39,12 +40,17 @@
 | `scripts/preflight.sh` | dev-rules 源仓库自己的提交门禁 |
 | `schemas/review.schema.json` | `/user:xj-review` 输出契约 |
 | `schemas/skill.schema.json` | 跨项目共享的 Skill manifest 规范 |
-| `schemas/twin.*.schema.json` | twin goal、plan、state、review、run 与 human response 契约 |
+| `schemas/twin.*.schema.json` | twin research、goal、plan、state、review、run 与 human response 契约 |
 | `scripts/twin/` | twin supervisor support runtime 与 fixtures |
 | `docs/twin-design.md` | twin 设计单一事实来源 |
 | `docs/twin-supervisor-runbook.md` | supervisor 每轮调用契约 |
+| `docs/twin-cao-operator-guide.md` | CAO/Codex worker 的安装、路由、验证和排障指南 |
+| `docs/twin-universal-command.md` | twin 三端通用 CLI 与 host supervisor 决策 |
+| `docs/agent_integration.md` | 从 live twin CLI、Claude command surface 与 schemas 生成的 Agent 集成契约 |
 | `templates/twin-workspace/` | `/twin` workspace 起点模板 |
 | `global/CLAUDE.md` | Claude Code 全局工作宪法 |
+
+Agent 契约变更后运行 `python3 scripts/export_agent_contract.py`，并用 `python3 scripts/export_agent_contract.py --check` 检查漂移；`docs/agent_integration.md` 禁止手工编辑。
 
 ## 接入与日常使用
 
