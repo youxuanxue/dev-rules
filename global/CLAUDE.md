@@ -28,7 +28,7 @@
 | 命令 / 技能 | 用途 |
 | --- | --- |
 | `/xj-review [范围]`（**skill**，三端通用） | 默认对话内精简代码审查；高风险或明确要求时再留 PR comment / 结构化记录。源在 `agent-skills/xj-review/SKILL.md` |
-| `twin`（CLI，三端通用） | xuejiao persona supervisor；Codex/Antigravity 直接调用，Claude `/twin` 是薄适配；live 契约见 `$DEV_RULES/docs/agent_integration.md` |
+| `twin`（**skill**，三端通用） | xuejiao persona supervisor；Claude `/twin`、Codex `$twin` 复用 `agent-skills/twin/SKILL.md`，运行时契约由 `twin doctor --json` 定位 |
 
 任务拆解走 Claude Code 原生 plan mode（默认按风险落到对话 / PR summary / `docs/approved/*`，参见 `rules/product-dev.mdc`）。
 

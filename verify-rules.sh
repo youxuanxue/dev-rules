@@ -92,6 +92,7 @@ else
         fi
     done
     for cmd in "$COMMANDS_DIR"/*.md; do
+        [ -f "$cmd" ] || continue
         base="$(basename "$cmd")"
         name="${base%.md}"
         if grep -qE "(commands/$base|\`$base\`|/user:$name|\`$name\`)" "$README"; then
@@ -128,7 +129,7 @@ done
 
 section "twin workspace does not own persona"
 if grep -R "persona snapshot\|copy the persona\|workspace / \"worker-persona.md\"\|workspace / \"supervisor-persona.md\"\|read_text_file" \
-        "$SCRIPT_DIR/scripts/twin" "$SCRIPT_DIR/docs" "$SCRIPT_DIR/commands" "$SCRIPT_DIR/schemas" \
+        "$SCRIPT_DIR/scripts/twin" "$SCRIPT_DIR/docs" "$SCRIPT_DIR/schemas" \
         > /dev/null 2>&1; then
     fail "twin must use DEV_RULES/personas persona files directly, not workspace persona snapshots"
 else
@@ -140,7 +141,7 @@ old_persona_path_found=0
 persona_scan_files=("$SCRIPT_DIR/sync.sh" "$SCRIPT_DIR/.gitignore")
 while IFS= read -r file; do
     persona_scan_files+=("$file")
-done < <(find "$SCRIPT_DIR/scripts/twin" "$SCRIPT_DIR/docs" "$SCRIPT_DIR/commands" -type f ! -name '*.pyc' ! -path '*/__pycache__/*')
+done < <(find "$SCRIPT_DIR/scripts/twin" "$SCRIPT_DIR/docs" -type f ! -name '*.pyc' ! -path '*/__pycache__/*')
 for forbidden in "~/.xuejiao-twin" ".xuejiao-twin" "secure-twin-persona" "TWIN_HOME"; do
     if grep -F "$forbidden" "${persona_scan_files[@]}" > /dev/null 2>&1; then
         old_persona_path_found=1
@@ -152,17 +153,46 @@ else
     ok "twin uses DEV_RULES/personas directly"
 fi
 
-section "twin status is short-circuited"
-# The Claude adapter must delegate status/respond directly to the universal
-# CLI and forward stdout. Runtime fixtures enforce the compact read-only
-# behavior; these anchors prevent the prompt from regaining a parallel path.
-if grep -q '^## 薄适配契约' "$COMMANDS_DIR/twin.md" && \
-   grep -Fq '`status [workspace]`：执行 `twin status [workspace]`' "$COMMANDS_DIR/twin.md" && \
-   grep -Fq '逐字转发 stdout；不自行读取或解释 workspace artifact' "$COMMANDS_DIR/twin.md" && \
-   grep -Fq '`respond <text>`：执行 `twin respond <text>`' "$COMMANDS_DIR/twin.md"; then
-    ok "twin status command cannot expand workspace artifacts"
+section "twin host workflow has one skill owner"
+if [ ! -e "$COMMANDS_DIR/twin.md" ] && \
+   grep -Fq 'agent-skills/twin/SKILL.md' "$GLOBAL_DIR/CLAUDE.md" && \
+   ! grep -Fq 'Claude Command Surface' "$SCRIPT_DIR/docs/agent_integration.md" && \
+   ! grep -Fq 'commands/twin.md' "$SCRIPT_DIR/scripts/export_agent_contract.py"; then
+    ok "twin host workflow is owned only by the shared skill"
 else
-    fail "twin status/respond must stay a universal-CLI-only terminal short-circuit"
+    fail "twin host workflow must not be duplicated in commands/twin.md or generated CLI docs"
+fi
+
+section "stale Claude command cleanup preserves user commands"
+if (
+    set -eu
+    test_home="$(mktemp -d)"
+    test_canonical="$test_home/Codes/dev-rules"
+    cleanup() {
+        rm -rf "$test_home"
+    }
+    trap cleanup EXIT
+
+    mkdir -p "$test_canonical/commands" "$test_home/.claude/commands"
+    touch "$test_canonical/commands/keep.md" "$test_home/user-command.md"
+    ln -s "$test_canonical/commands/keep.md" "$test_home/.claude/commands/keep.md"
+    ln -s "$test_canonical/commands/twin.md" "$test_home/.claude/commands/twin.md"
+    ln -s "$test_home/user-command.md" "$test_home/.claude/commands/user.md"
+    ln -s "$test_home/missing-command.md" "$test_home/.claude/commands/user-dangling.md"
+
+    env -u CODEX_HOME -u ANTIGRAVITY_HOME \
+        HOME="$test_home" DEV_RULES_HOME="$test_canonical" \
+        bash "$SCRIPT_DIR/sync.sh" > "$test_home/sync.log"
+
+    test ! -L "$test_home/.claude/commands/twin.md"
+    test "$(readlink "$test_home/.claude/commands/keep.md")" = "$test_canonical/commands/keep.md"
+    test "$(readlink "$test_home/.claude/commands/user.md")" = "$test_home/user-command.md"
+    test "$(readlink "$test_home/.claude/commands/user-dangling.md")" = "$test_home/missing-command.md"
+) > /tmp/dev-rules-command-cleanup.log 2>&1; then
+    ok "sync removes stale managed commands without touching user-owned links"
+else
+    cat /tmp/dev-rules-command-cleanup.log | sed 's/^/    /'
+    fail "sync must remove only stale dev-rules-managed command symlinks"
 fi
 
 section "twin persona source is read-only"

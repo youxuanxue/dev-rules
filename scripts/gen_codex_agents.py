@@ -12,7 +12,7 @@ idempotent managed block inside AGENTS.md that POINTS at:
   - the constitution (dev-rules/global/CLAUDE.md),
   - the behavioral rule set (.cursor/rules/*.mdc — name + one-line each),
   - the available skills (.cursor/skills/*/SKILL.md — name + description),
-  - the provider-neutral twin CLI contract and the cross-tool xj-review skill.
+  - navigation to the shared twin/xj-review skills and provider-neutral twin CLI contract.
 
 Everything inside the block is derived mechanically from on-disk artifacts —
 no model inference — per rules/dev-rules-convention.mdc «skill/command 确定性基线».
@@ -211,12 +211,11 @@ def render_block(project: pathlib.Path) -> str:
         lines.append("- （本项目 `.cursor/skills/` 暂无技能）")
     lines.append("")
 
-    lines.append("## 命令")
+    lines.append("## 全局技能与工具")
     lines.append(
-        "- `twin` — provider-neutral xuejiao supervisor CLI；Codex 使用 "
-        "`twin run <workspace> --supervisor host/codex --json`，Antigravity 使用 "
-        f"`host/antigravity`。精确 action/submit 契约只见 `{twin_contract_ref}`；"
-        "不要在 AGENTS.md 复制状态机。Claude 的 `/twin` 只是同一 CLI 的薄适配器。"
+        "- `twin` supervisor 的三端宿主体验只由同源 `twin` skill 定义；"
+        f"运行时 CLI/action/schema 契约见 `{twin_contract_ref}`。"
+        "不要在 AGENTS.md 复制命令面或状态机。"
     )
     lines.append(
         "- 代码审查走三端通用 skill `xj-review`（上面技能索引里）：先跑 `preflight.sh` 取 "
@@ -304,10 +303,10 @@ def _self_test() -> int:
             failures.append("rule index not rendered")
         if "**demo**" not in block or "A demo skill" not in block:
             failures.append("skill index not rendered")
-        if "host/codex" not in block or "docs/agent_integration.md" not in block:
+        if "同源 `twin` skill" not in block or "docs/agent_integration.md" not in block:
             failures.append("provider-neutral twin navigation not rendered")
-        if "Claude-Code-only" in block:
-            failures.append("generated AGENTS block still marks twin as Claude-only")
+        if "薄适配器" in block or "Claude-Code-only" in block:
+            failures.append("generated AGENTS block still duplicates a Claude-only twin adapter")
         # generator self-reference path is consumer-relative. Without a vendored
         # dev-rules submodule the bare scripts/ path is correct.
         if "`scripts/gen_codex_agents.py`" not in block:

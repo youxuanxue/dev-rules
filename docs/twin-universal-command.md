@@ -1,8 +1,8 @@
 ---
 status: implemented
-date: 2026-07-22
-scope: twin universal CLI and interactive host supervisor
-approved_by: user-chat-2026-07-22
+date: 2026-07-23
+scope: twin universal CLI and shared host skill
+approved_by: user-chat-2026-07-23
 ---
 
 # twin 通用命令
@@ -27,7 +27,7 @@ twin status [workspace]
 twin respond <answer>
 ```
 
-Claude 和 Antigravity 只需把 route 换成 `host/claude`、`host/antigravity`；Claude 的 `/twin <workspace>` 是同一路径的薄适配。
+Claude 和 Antigravity 只需把 route 换成 `host/claude`、`host/antigravity`；三端宿主入口统一由 `agent-skills/twin/SKILL.md` 选择当前 route。
 
 ## 显式交接
 

@@ -10,7 +10,7 @@ worker harness 由 dev-rules、项目 `CLAUDE.md`、hooks、preflight、`wtree.p
 
 1. **bootstrap or workspace**：当前 host 判断是否需要可选只读 research，再草拟 `goal.yaml + plan.yaml`；Python 只写入和校验，`twin run <workspace> --supervisor host/<provider>` 运行已准备好的 workspace。
 2. **persona split**：supervisor 使用 `$DEV_RULES/personas/supervisor-persona.md`；worker 只看到 `$DEV_RULES/personas/worker-persona.md`。
-3. **interactive supervisor**：当前 Agent 会话就是 supervisor，不另起 supervisor server 或 headless Agent；Claude `/twin` 只是通用 CLI 的薄适配。
+3. **interactive supervisor**：当前 Agent 会话就是 supervisor，不另起 supervisor server 或 headless Agent；Claude、Codex 与 Antigravity 复用同一个 `twin` skill 作为宿主入口。
 4. **worker backend**：默认 Claude Code headless；`local_cli` 直接调用本机 Claude、Codex 或 Gemini；CAO `run-step` 是远程、多 profile 和并发场景的可选 backend。
 5. **supervisor 验收**：worker stop 不是完成；完成由 supervisor 对照 goal、plan、run evidence、测试、preflight、PR/commit 状态判断。
 6. **single source of truth**：每类事实只有一个权威载体；旧 `feature_ledger.yaml` 是 breaking legacy，不自动迁移。

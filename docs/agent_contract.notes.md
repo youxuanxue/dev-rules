@@ -1,6 +1,6 @@
 # dev-rules Agent Contract Notes
 
-- `twin` is the provider-neutral supervisor CLI. Use `twin run <workspace> --supervisor host/codex|host/claude|host/antigravity --json`; Claude `/twin` is a thin adapter over the same action protocol.
+- `agent-skills/twin/SKILL.md` is the single host-workflow owner consumed by Claude Code, Codex, and Antigravity. `twin` is its provider-neutral runtime CLI; use `twin run <workspace> --supervisor host/codex|host/claude|host/antigravity --json`.
 - Host actions are self-describing: `supervisor_instruction` and `review_run` carry bounded context, expected output, a state revision, a one-time token, and the exact stdin submit command. Python owns worker execution and artifact mutation.
 - A workspace binds lazily to its first host route. Transfer ownership only with `twin handoff <workspace> --supervisor host/<provider>` when no action is pending; handoff advances the revision and records an audit event. Stale revisions, duplicate tokens, wrong action/run/workspace, and old routes fail closed.
 - Public and token-bound action commands are exported from explicit live-parser visibility metadata. Internal compatibility commands remain callable but are omitted from public help and this generated contract; route-bound workspaces reject their low-level worker/review mutation paths.

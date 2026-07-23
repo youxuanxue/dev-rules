@@ -312,6 +312,19 @@ sync_to_home() {
             echo "  updated: $basename"
         fi
     done
+    for target in "$CLAUDE_COMMANDS"/*.md; do
+        [ -L "$target" ] || continue
+        local source
+        source="$(readlink "$target")"
+        case "$source" in
+            "$HOME_COMMANDS_DIR"/*)
+                if [ ! -e "$source" ]; then
+                    rm -f "$target"
+                    echo "  removed stale: $(basename "$target")"
+                fi
+                ;;
+        esac
+    done
 
     echo ""
     echo "=== Syncing to ~/.claude/hooks/ (symlinks → $HOME_HOOKS_DIR) ==="
@@ -755,6 +768,40 @@ check_project_drift() {
     return $drift
 }
 
+# Check command symlinks managed by dev-rules without policing user commands.
+# A deleted canonical command must not survive as a dangling Claude entry.
+check_home_commands_drift() {
+    HOME_COMMANDS_DRIFT=0
+    local command_src basename target actual
+    for command_src in "$HOME_COMMANDS_DIR"/*.md; do
+        [ -f "$command_src" ] || continue
+        basename="$(basename "$command_src")"
+        target="$CLAUDE_COMMANDS/$basename"
+        if [ ! -L "$target" ]; then
+            echo "  ✗ MISSING OR REAL FILE: ~/.claude/commands/$basename"
+            HOME_COMMANDS_DRIFT=$((HOME_COMMANDS_DRIFT + 1))
+        else
+            actual="$(readlink "$target")"
+            if [ "$actual" != "$command_src" ]; then
+                echo "  ✗ WRONG TARGET: ~/.claude/commands/$basename → $actual (expected → $command_src)"
+                HOME_COMMANDS_DRIFT=$((HOME_COMMANDS_DRIFT + 1))
+            fi
+        fi
+    done
+    for target in "$CLAUDE_COMMANDS"/*.md; do
+        [ -L "$target" ] || continue
+        actual="$(readlink "$target")"
+        case "$actual" in
+            "$HOME_COMMANDS_DIR"/*)
+                if [ ! -e "$actual" ]; then
+                    echo "  ✗ STALE: ~/.claude/commands/$(basename "$target") → $actual"
+                    HOME_COMMANDS_DRIFT=$((HOME_COMMANDS_DRIFT + 1))
+                fi
+                ;;
+        esac
+    done
+}
+
 # Check that each file in $HOME_HOOKS_DIR has a correct symlink in $CLAUDE_HOOKS.
 # Drift cases (each → +1 to HOME_HOOKS_DRIFT):
 #   - missing: no entry in $CLAUDE_HOOKS for a canonical hook
@@ -992,6 +1039,18 @@ check_drift() {
             echo ""
         done < <(iter_local_projects)
 
+        # Home-command drift: expected command links plus deleted dev-rules
+        # commands that still survive as dangling Claude entries.
+        echo "=== Checking drift: ~/.claude/commands/ vs $HOME_COMMANDS_DIR ==="
+        check_home_commands_drift
+        if [ "$HOME_COMMANDS_DRIFT" -eq 0 ]; then
+            echo "  ok: command symlinks healthy"
+        else
+            total_drift=$((total_drift + HOME_COMMANDS_DRIFT))
+            echo "  $HOME_COMMANDS_DRIFT command link(s) drifted. Run: $SCRIPT_DIR/sync.sh"
+        fi
+        echo ""
+
         # Home-hooks drift: ~/.claude/hooks/ entries that should be symlinks to
         # $HOME_HOOKS_DIR but aren't (regular file, missing, wrong target).
         # User hooks not present in canonical mirror are NOT flagged.
@@ -1073,10 +1132,10 @@ check_drift() {
         fi
 
         if [ "$total_drift" -eq 0 ]; then
-            echo "All $checked materialized project(s) and home hooks in sync."
+            echo "All $checked materialized project(s) and home links in sync."
             exit 0
         else
-            echo "$total_drift drift item(s) across $checked project(s) + home hooks. Run: $SCRIPT_DIR/sync.sh --all"
+            echo "$total_drift drift item(s) across $checked project(s) + home links. Run: $SCRIPT_DIR/sync.sh --all"
             exit 1
         fi
     else
