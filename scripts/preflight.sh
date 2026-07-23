@@ -53,6 +53,18 @@ else
     fail "twin fixture validation failed"
 fi
 
+section "twin story / test alignment"
+if [ -f .testing/user-stories/verify_quality.py ]; then
+    if python3 .testing/user-stories/verify_quality.py > /tmp/dev-rules-story-quality.log 2>&1; then
+        ok "US-088 acceptance criteria map to live twin fixtures"
+    else
+        cat /tmp/dev-rules-story-quality.log | sed 's/^/    /'
+        fail "US-088 story quality / test alignment failed"
+    fi
+else
+    fail ".testing/user-stories/verify_quality.py missing"
+fi
+
 section "xj-review loop_state selftest (circuit-breaker caps)"
 if python3 -m scripts.review.loop_state selftest > /tmp/dev-rules-review-loop.log 2>&1; then
     ok "loop_state caps/reset asserts pass"
