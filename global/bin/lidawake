@@ -1,0 +1,288 @@
+#!/usr/bin/env bash
+#
+# lidawake — 合盖不睡眠开关（Apple Silicon 内置屏）。
+#
+# 场景：办公室已经跑着多个 agent 会话（codex / claude），合盖装包在路上 20 分钟，
+# 希望进程不断。Apple Silicon + 内置屏 + 无外接显示器时，合盖强制系统睡眠，
+# caffeinate 与「使用电源适配器供电且显示器关闭时防止自动进入睡眠」都拦不住 ——
+# 唯一能压掉它的是 pmset 的未公开 flag `disablesleep`（不在 man page 中）。
+#
+# 机制与代价：
+#   - disablesleep 会连**空闲睡眠一起禁掉**，机器从此永不自动睡，因此电池
+#     profile 的 sleep / displaysleep 不需要另外改（少改一处少忘一处还原）。
+#   - 它是**持久设置**（写系统 PowerManagement 配置），重启依然有效。这是它
+#     适合本场景的原因（设一次即默认生效），也是它的风险：忘记关会让机器在
+#     包里一直醒着，合盖散热差 + 长时间高温对电池寿命有实际损耗。
+#   - 所以本脚本的重点是 `status`：随时用**实际读数**回答「我是不是忘了关」，
+#     而不是靠记性。
+#
+# 为什么 on/off 走 sudo 而 status 不需要：
+#   写 disablesleep 必须 root。读则有免 sudo 路径 —— `pmset -g` 的 live 输出，
+#   以及 `plutil -extract` 读 /Library/Preferences/com.apple.PowerManagement.plist
+#   （无权限即可读；key 从未被设置过时 extract 失败，视为关闭）。status 因此在
+#   任何会话里都能直接跑，不会因为要密码而让人跳过检查。
+#
+# ── 两个已修 bug，改本文件前请先读 ──
+#
+# 1) 不要写 "…「$var」…"：本机 `env bash` 是 Apple 的 bash 3.2.57 + LANG=zh_CN.UTF-8，
+#    全角标点的首字节会被吞进变量名，`set -u` 报 `label?: unbound variable`。
+#    实测：`"a「$label」b"` 失败，`"a「${label}」b"` 正常。凡与非 ASCII 相邻的
+#    变量一律加花括号（--self-test 会机械扫描本文件拦这个模式）。
+#
+# 2) 不要用 grep 从 `plutil -p` 里判布尔：`plutil -p` 打印的是 true/false，
+#    不是 1/0，按数字 grep 会在「已开启」时静默漏判。改用 `plutil -extract … raw`
+#    并显式匹配 true/false。
+#
+# 这两个 bug 都只在 sudo 写入路径上现形，`bash -n` 与只跑 status 都测不出来 ——
+# 所以 run_pmset() 留了 LIDAWAKE_DRY_RUN 注入点，让 on/off 的全部消息路径
+# 能在无密码环境下被 --self-test 覆盖。
+#
+# Canonical source: dev-rules/global/bin/lidawake（sync.sh symlink 到 ~/.local/bin/lidawake）
+#
+# Usage:
+#   lidawake status      # 读实际状态（免 sudo）：开关 / 电源 / 盖子 / 电量 / 温度告警
+#   lidawake on          # 开启合盖不睡眠（sudo，会提示密码）
+#   lidawake off         # 还原（sudo）
+#   lidawake --self-test # 自检：不需要 sudo，覆盖消息路径与源码模式扫描
+#
+set -euo pipefail
+
+PM_PLIST="/Library/Preferences/com.apple.PowerManagement.plist"
+PM_KEY="SystemPowerSettings.SleepDisabled"
+
+usage() {
+    cat <<'EOF'
+Usage:
+  lidawake status      读取实际状态（免 sudo）
+  lidawake on          开启合盖不睡眠（sudo；持久，重启仍生效）
+  lidawake off         还原为系统默认（sudo）
+  lidawake --self-test 自检（免 sudo）
+
+说明：
+  on 会同时禁掉空闲睡眠，机器永不自动睡，且重启后依然有效。
+  用完请 off —— 忘记关会让机器在包里一直醒着（散热差 + 耗电）。
+
+Examples:
+  lidawake on         # 出门前
+  lidawake status     # 随时确认有没有忘记关
+  lidawake off        # 到工位后
+EOF
+}
+
+die() {
+    echo "lidawake: $*" >&2
+    exit 1
+}
+
+# 把 pmset / plutil 的多种布尔写法归一成 1 / 0；无法识别时返回空串（交给调用方降级）。
+normalize_bool() {
+    case "${1:-}" in
+        1 | true | True | TRUE | Yes | yes) echo 1 ;;
+        0 | false | False | FALSE | No | no) echo 0 ;;
+        *) echo "" ;;
+    esac
+}
+
+# disablesleep 的当前值，按可信度取第一个能解析的信号：
+#   1) `pmset -g` 的 live 值（权威；该 key 在从未被设置过的机器上不出现）
+#   2) 持久化 plist（免 sudo；extract 在 key 不存在时非零退出）
+#   3) 都读不到 → 从未开启过，按 0 处理
+read_disablesleep() {
+    local raw val
+    raw="$(pmset -g 2>/dev/null |
+        awk 'tolower($1) == "sleepdisabled" { print $2; exit }')" || raw=""
+    val="$(normalize_bool "${raw}")"
+    if [[ -n "${val}" ]]; then
+        echo "${val}"
+        return 0
+    fi
+
+    raw="$(plutil -extract "${PM_KEY}" raw "${PM_PLIST}" 2>/dev/null)" || raw=""
+    val="$(normalize_bool "${raw}")"
+    if [[ -n "${val}" ]]; then
+        echo "${val}"
+        return 0
+    fi
+
+    echo 0
+}
+
+lid_state() {
+    local raw
+    raw="$(ioreg -r -k AppleClamshellState -d 4 2>/dev/null |
+        grep -o '"AppleClamshellState" = [A-Za-z]*' | head -1 | awk '{print $3}')" || true
+    case "${raw:-}" in
+        Yes) echo "closed" ;;
+        No) echo "open" ;;
+        *) echo "unknown" ;;
+    esac
+}
+
+# 状态描述句。刻意不做变量插值 —— 全角括号紧跟变量正是 bug #1 的形状。
+state_line() {
+    if [[ "${1}" = "1" ]]; then
+        echo "合盖不睡眠：开启（持久设置，重启仍生效）"
+    else
+        echo "合盖不睡眠：关闭（系统默认；合盖会强制睡眠）"
+    fi
+}
+
+cmd_status() {
+    local disabled power lid batt therm
+    disabled="$(read_disablesleep)"
+    power="$(pmset -g batt 2>/dev/null | head -1 | sed -e "s/.*'\(.*\)'.*/\1/")" || power=""
+    lid="$(lid_state)"
+    batt="$(pmset -g batt 2>/dev/null | grep -o '[0-9]\{1,3\}%' | head -1)" || batt=""
+
+    state_line "${disabled}"
+    echo "电源：${power:-unknown}    盖子：${lid}    电量：${batt:-?}"
+
+    # 温度告警是判断「这个组合是否适合当前负载」的唯一客观信号，顺手报出来。
+    therm="$(pmset -g therm 2>/dev/null | grep -iv '^Note: No' | grep -i 'warning' || true)"
+    if [[ -n "${therm}" ]]; then
+        echo "温度告警：${therm}"
+    else
+        echo "温度告警：无记录"
+    fi
+
+    if [[ "${disabled}" = "1" ]]; then
+        echo
+        echo "提醒：用完跑 'lidawake off' 还原。长期开启 + 合盖散热差会损耗电池寿命。"
+    fi
+}
+
+# sudo 写入的唯一出口。LIDAWAKE_DRY_RUN=1 时只回显不执行，使 on/off 的消息路径
+# 可在无密码环境下被 --self-test 覆盖（这两个 bug 当初就是因为测不到才漏的）。
+run_pmset() {
+    if [[ "${LIDAWAKE_DRY_RUN:-0}" = "1" ]]; then
+        echo "[dry-run] sudo pmset -a disablesleep ${1}"
+        return 0
+    fi
+    sudo pmset -a disablesleep "${1}"
+}
+
+cmd_set() {
+    local want="${1}" before after
+    before="$(read_disablesleep)"
+    if [[ "${before}" = "${want}" ]]; then
+        echo "lidawake: 状态未变化，无需改动"
+        echo
+        cmd_status
+        return 0
+    fi
+
+    command -v pmset >/dev/null 2>&1 || die "pmset not found"
+    echo "lidawake: 需要管理员权限写入 disablesleep（会提示密码）"
+    run_pmset "${want}"
+
+    # 写完必须回读校验：disablesleep 是未公开 flag，不能假定 exit 0 就等于生效。
+    if [[ "${LIDAWAKE_DRY_RUN:-0}" != "1" ]]; then
+        after="$(read_disablesleep)"
+        if [[ "${after}" != "${want}" ]]; then
+            die "写入后回读仍为 ${after}（期望 ${want}）—— 该 flag 可能已被此 macOS 版本移除，请手动检查 'pmset -g'"
+        fi
+    fi
+
+    echo "lidawake: 已切换"
+    echo
+    cmd_status
+}
+
+# 免 sudo 自检。覆盖两类此前漏掉的东西：
+#   A) 源码级：变量紧邻非 ASCII 字符（bash 3.2 + UTF-8 locale 下会炸，bash -n 测不出）
+#   B) 运行级：on / off 的完整消息路径（经 dry-run），以及布尔归一化表
+cmd_self_test() {
+    local self fails=0
+    self="${BASH_SOURCE[0]}"
+
+    echo "── A: 源码扫描（变量紧邻非 ASCII → bash 3.2 会当成变量名的一部分）──"
+    if python3 - "${self}" <<'PY'; then
+import re
+import sys
+
+src = open(sys.argv[1], "rb").read().decode("utf-8")
+pattern = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*[^\x00-\x7f]")
+# 只扫可执行行。整行注释里出现这个形状是**本 bug 的文档**（见文件头），
+# 不是缺陷；把注释一起扫会让自检永久红着，进而被无视。
+bad = [
+    (n, line)
+    for n, line in enumerate(src.splitlines(), 1)
+    if not line.lstrip().startswith("#") and pattern.search(line)
+]
+for n, line in bad:
+    print("  ✗ line %d: %s" % (n, line.strip()))
+if bad:
+    print("  → 给这些变量加花括号：${var}")
+    sys.exit(1)
+print("  ok: 没有裸变量紧邻全角字符")
+PY
+        :
+    else
+        fails=$((fails + 1))
+    fi
+
+    echo "── B: 布尔归一化 ──"
+    local pair got want
+    for pair in "1:1" "true:1" "Yes:1" "0:0" "false:0" "No:0" "garbage:" ":"; do
+        want="${pair##*:}"
+        got="$(normalize_bool "${pair%%:*}")"
+        if [[ "${got}" != "${want}" ]]; then
+            echo "  ✗ normalize_bool(${pair%%:*}) = '${got}'，期望 '${want}'"
+            fails=$((fails + 1))
+        fi
+    done
+    [[ "${fails}" -eq 0 ]] && echo "  ok: 8 种输入归一化正确"
+
+    echo "── C: state_line 两个分支 ──"
+    for want in 0 1; do
+        if [[ -z "$(state_line "${want}")" ]]; then
+            echo "  ✗ state_line(${want}) 为空"
+            fails=$((fails + 1))
+        fi
+    done
+    echo "  ok: 两个分支都有输出"
+
+    echo "── D: read_disablesleep 返回 0 或 1 ──"
+    got="$(read_disablesleep)"
+    if [[ "${got}" != "0" && "${got}" != "1" ]]; then
+        echo "  ✗ read_disablesleep = '${got}'"
+        fails=$((fails + 1))
+    else
+        echo "  ok: 实际读数 = ${got}"
+    fi
+
+    echo "── E: on / off 完整消息路径（dry-run，不写系统）──"
+    local cur other
+    cur="$(read_disablesleep)"
+    if [[ "${cur}" = "1" ]]; then other=0; else other=1; fi
+    # 相同值 → 走 early-return 分支；不同值 → 走写入 + 收尾消息分支。
+    if ! LIDAWAKE_DRY_RUN=1 "${self}" "$([[ ${cur} = 1 ]] && echo on || echo off)" >/dev/null 2>&1; then
+        echo "  ✗ 同值分支（early return）失败"
+        fails=$((fails + 1))
+    fi
+    if ! LIDAWAKE_DRY_RUN=1 "${self}" "$([[ ${other} = 1 ]] && echo on || echo off)" >/dev/null 2>&1; then
+        echo "  ✗ 切换分支（写入 + 收尾消息）失败"
+        fails=$((fails + 1))
+    fi
+    [[ "${fails}" -eq 0 ]] && echo "  ok: 两条分支均无 unbound variable"
+
+    echo
+    if [[ "${fails}" -eq 0 ]]; then
+        echo "=== self-test PASS ==="
+        return 0
+    fi
+    echo "=== self-test FAIL: ${fails} 项 ==="
+    return 1
+}
+
+case "${1:-status}" in
+    status) cmd_status ;;
+    on) cmd_set 1 ;;
+    off) cmd_set 0 ;;
+    --self-test) cmd_self_test ;;
+    -h | --help | help) usage ;;
+    *)
+        usage >&2
+        die "unknown command: ${1}"
+        ;;
+esac
