@@ -286,6 +286,36 @@ if [ "$SECTION_TESTED" = "0" ]; then
     ok "no check_*.py exposes --self-test mode"
 fi
 
+# ── global/bin launcher self-tests ────────────────────────────────────
+# Same "check 自己没被检查" guard as above, extended to CLI launchers. A
+# launcher that ships --self-test must pass it here, otherwise the self-test
+# only runs when someone remembers to — exactly the soft constraint §5 says
+# to harden.
+#
+# Discovery is static (grep the source for a --self-test case branch), not
+# `$launcher --help`: probing help would execute the launcher, and some of
+# these exec real backends (claude-with-token exec's claude with a token).
+# Symlinks are skipped so profile aliases don't re-run the same script.
+section "global/bin launcher self-tests"
+LAUNCHER_TESTED=0
+if [ -d "$GLOBAL_DIR/bin" ]; then
+    for launcher in "$GLOBAL_DIR"/bin/*; do
+        [ -f "$launcher" ] || continue
+        [ -L "$launcher" ] && continue
+        grep -q -- '--self-test)' "$launcher" || continue
+        LAUNCHER_TESTED=1
+        if "$launcher" --self-test > /tmp/dev-rules-launcher-self-test.log 2>&1; then
+            ok "$(basename "$launcher") --self-test"
+        else
+            sed 's/^/    /' /tmp/dev-rules-launcher-self-test.log
+            fail "$(basename "$launcher") --self-test failed"
+        fi
+    done
+fi
+if [ "$LAUNCHER_TESTED" = "0" ]; then
+    ok "no global/bin launcher exposes --self-test mode"
+fi
+
 # ── twin worktree isolation self-test ─────────────────────────────────
 # worktree.py runs its assertions when invoked directly (no --self-test
 # flag), so the generic check_*/gen_* loop above does not reach it. Run it

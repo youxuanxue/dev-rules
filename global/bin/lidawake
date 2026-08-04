@@ -191,8 +191,12 @@ cmd_set() {
 # 免 sudo 自检。覆盖两类此前漏掉的东西：
 #   A) 源码级：变量紧邻非 ASCII 字符（bash 3.2 + UTF-8 locale 下会炸，bash -n 测不出）
 #   B) 运行级：on / off 的完整消息路径（经 dry-run），以及布尔归一化表
+#
+# 每段用**本段**计数器（sec）判定 ok，不共用全局 fails —— 共用会让 ok 消息说谎：
+# 前面段失败时后面段的 ok 被静默吞掉，或无条件 echo 的 ok 与同段 ✗ 同时出现。
+# 自检自己的报告必须可信，否则它比没有更糟。
 cmd_self_test() {
-    local self fails=0
+    local self fails=0 sec
     self="${BASH_SOURCE[0]}"
 
     echo "── A: 源码扫描（变量紧邻非 ASCII → bash 3.2 会当成变量名的一部分）──"
@@ -222,49 +226,58 @@ PY
     fi
 
     echo "── B: 布尔归一化 ──"
+    sec=0
     local pair got want
     for pair in "1:1" "true:1" "Yes:1" "0:0" "false:0" "No:0" "garbage:" ":"; do
         want="${pair##*:}"
         got="$(normalize_bool "${pair%%:*}")"
         if [[ "${got}" != "${want}" ]]; then
             echo "  ✗ normalize_bool(${pair%%:*}) = '${got}'，期望 '${want}'"
-            fails=$((fails + 1))
+            sec=$((sec + 1))
         fi
     done
-    [[ "${fails}" -eq 0 ]] && echo "  ok: 8 种输入归一化正确"
+    [[ "${sec}" -eq 0 ]] && echo "  ok: 8 种输入归一化正确"
+    fails=$((fails + sec))
 
     echo "── C: state_line 两个分支 ──"
+    sec=0
     for want in 0 1; do
         if [[ -z "$(state_line "${want}")" ]]; then
             echo "  ✗ state_line(${want}) 为空"
-            fails=$((fails + 1))
+            sec=$((sec + 1))
         fi
     done
-    echo "  ok: 两个分支都有输出"
+    [[ "${sec}" -eq 0 ]] && echo "  ok: 两个分支都有输出"
+    fails=$((fails + sec))
 
     echo "── D: read_disablesleep 返回 0 或 1 ──"
+    sec=0
     got="$(read_disablesleep)"
     if [[ "${got}" != "0" && "${got}" != "1" ]]; then
         echo "  ✗ read_disablesleep = '${got}'"
-        fails=$((fails + 1))
+        sec=$((sec + 1))
     else
         echo "  ok: 实际读数 = ${got}"
     fi
+    fails=$((fails + sec))
 
     echo "── E: on / off 完整消息路径（dry-run，不写系统）──"
-    local cur other
+    sec=0
+    local cur other err
     cur="$(read_disablesleep)"
     if [[ "${cur}" = "1" ]]; then other=0; else other=1; fi
     # 相同值 → 走 early-return 分支；不同值 → 走写入 + 收尾消息分支。
-    if ! LIDAWAKE_DRY_RUN=1 "${self}" "$([[ ${cur} = 1 ]] && echo on || echo off)" >/dev/null 2>&1; then
-        echo "  ✗ 同值分支（early return）失败"
-        fails=$((fails + 1))
-    fi
-    if ! LIDAWAKE_DRY_RUN=1 "${self}" "$([[ ${other} = 1 ]] && echo on || echo off)" >/dev/null 2>&1; then
-        echo "  ✗ 切换分支（写入 + 收尾消息）失败"
-        fails=$((fails + 1))
-    fi
-    [[ "${fails}" -eq 0 ]] && echo "  ok: 两条分支均无 unbound variable"
+    # stderr 必须留下来：unbound variable 的真实行号只在 bash 的错误里，
+    # 吞掉它会让失败只剩「某分支失败」，调试得手工复现。
+    for want in "${cur}:同值分支（early return）" "${other}:切换分支（写入 + 收尾消息）"; do
+        err="$(LIDAWAKE_DRY_RUN=1 "${self}" \
+            "$([[ ${want%%:*} = 1 ]] && echo on || echo off)" 2>&1 >/dev/null)" && continue
+        echo "  ✗ ${want#*:}失败"
+        [[ -n "${err}" ]] && echo "${err}" | sed 's/^/      /'
+        sec=$((sec + 1))
+    done
+    [[ "${sec}" -eq 0 ]] && echo "  ok: 两条分支均无 unbound variable"
+    fails=$((fails + sec))
 
     echo
     if [[ "${fails}" -eq 0 ]]; then
