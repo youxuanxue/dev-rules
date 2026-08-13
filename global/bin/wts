@@ -25,6 +25,7 @@ Usage:
 
 Options:
   --repo PATH    Superproject path (default: git root from cwd)
+  --model MODEL  Pass a model to the Claude runtime
   --iterm        Open a new iTerm window instead of the current terminal
   --here         Same as default (accepted for compatibility)
   -h, --help     Show this help
@@ -153,6 +154,7 @@ prepare_agent_cli() {
 session_command() {
     local runtime="$1"
     local worktree="$2"
+    local model="$3"
     local -a cmd=()
 
     case "$runtime" in
@@ -170,6 +172,9 @@ session_command() {
             local claude_bin="${CLAUDE_BIN:-$(command -v claude 2>/dev/null || echo "$HOME/.local/bin/claude")}"
             [[ -x "$claude_bin" ]] || die "claude not found in PATH (set CLAUDE_BIN)"
             cmd=("$claude_bin")
+            if [[ -n "$model" ]]; then
+                cmd+=("--model" "$model")
+            fi
             ;;
         ide)
             python3 "$WTREE" open-workspace --worktree "$worktree"
@@ -232,11 +237,82 @@ create_worktree() {
     python3 "$WTREE" create --repo "$repo" --no-open-workspace --json "$slug" | worktree_from_json
 }
 
+cmd_self_test() {
+    local self tmp repo worktree argv_file output_file fails
+    fails=0
+    self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+    tmp="$(mktemp -d)"
+    trap 'rm -r "$tmp"' RETURN
+
+    repo="$tmp/repo"
+    worktree="$tmp/worktree"
+    argv_file="$tmp/claude-argv"
+    output_file="$tmp/output"
+    mkdir -p "$repo" "$worktree"
+
+    cat > "$tmp/wtree.py" <<'PY'
+import json
+import os
+
+print(json.dumps({"worktree": os.environ["WTS_SELF_TEST_WORKTREE"]}))
+PY
+    cat > "$tmp/claude" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$WTS_SELF_TEST_ARGV"
+SH
+    chmod +x "$tmp/claude"
+
+    echo "=== wts self-test ==="
+    if WTS_SELF_TEST_WORKTREE="$worktree" WTREE_SCRIPT="$tmp/wtree.py" \
+        CLAUDE_BIN="$tmp/claude" WTS_SELF_TEST_ARGV="$argv_file" \
+        "$self" --repo "$repo" seedance claude --model gpt-5.6 \
+        >"$output_file" 2>&1 \
+        && [[ "$(printf '%s\n' --model gpt-5.6)" == "$(cat "$argv_file")" ]]; then
+        echo "  ok: claude receives --model"
+    else
+        echo "  x claude did not receive --model gpt-5.6"
+        sed 's/^/      /' "$output_file"
+        fails=$((fails + 1))
+    fi
+
+    if "$self" --repo "$repo" seedance claude --model >"$output_file" 2>&1; then
+        echo "  x --model without a value succeeded"
+        fails=$((fails + 1))
+    elif grep -qF -- '--model requires a value' "$output_file"; then
+        echo "  ok: --model requires a value"
+    else
+        echo "  x --model without a value returned the wrong error"
+        sed 's/^/      /' "$output_file"
+        fails=$((fails + 1))
+    fi
+
+    if WTS_SELF_TEST_WORKTREE="$worktree" WTREE_SCRIPT="$tmp/wtree.py" \
+        "$self" --repo "$repo" seedance agent --model gpt-5.6 \
+        >"$output_file" 2>&1; then
+        echo "  x agent accepted Claude's --model option"
+        fails=$((fails + 1))
+    elif grep -qF -- '--model is only supported with the claude runtime' "$output_file"; then
+        echo "  ok: --model rejects non-Claude runtimes"
+    else
+        echo "  x non-Claude --model returned the wrong error"
+        sed 's/^/      /' "$output_file"
+        fails=$((fails + 1))
+    fi
+
+    if [[ "$fails" -eq 0 ]]; then
+        echo "=== self-test PASS ==="
+        return 0
+    fi
+    echo "=== self-test FAIL: $fails ==="
+    return 1
+}
+
 main() {
     local cmd="create"
     local repo="."
     local slug=""
     local runtime="agent"
+    local model=""
     WTS_HERE="${WTS_HERE:-1}"
 
     while [[ $# -gt 0 ]]; do
@@ -245,9 +321,18 @@ main() {
                 usage
                 exit 0
                 ;;
+            --self-test)
+                cmd_self_test
+                exit
+                ;;
             --repo)
                 [[ $# -ge 2 ]] || die "--repo requires a path"
                 repo="$2"
+                shift 2
+                ;;
+            --model)
+                [[ $# -ge 2 ]] || die "--model requires a value"
+                model="$2"
                 shift 2
                 ;;
             --iterm)
@@ -292,6 +377,7 @@ main() {
         usage >&2
         exit 1
     }
+    [[ -z "$model" || "$runtime" == "claude" ]] || die "--model is only supported with the claude runtime"
 
     WTREE="$(resolve_wtree_script)"
     repo="$(resolve_repo "$repo")"
@@ -303,7 +389,7 @@ main() {
         worktree="$(create_worktree "$repo" "$slug")"
     fi
 
-    session_command "$runtime" "$worktree"
+    session_command "$runtime" "$worktree" "$model"
 }
 
 main "$@"
