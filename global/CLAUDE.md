@@ -20,7 +20,7 @@
 - 新建、切换、修复或销毁 git worktree（尤其是带 submodule 的仓库）必须使用 `$git-worktree-submodule`；`add` / `switch` 后先按 `session-workdir` 切换本会话 cwd / workdir 并跑 `session-check`，再读写相对路径。`/twin` worker 内部 worktree 由其命令脚本托管，不手工替换。
 - 端到端测试（e2e）一律经真实 UI、用 Playwright 驱动；后端 / API-only / 直调 handler 不算 e2e。细则与 soft→hard 守卫随 `rules/test-philosophy.mdc` §3「e2e 必须经真实 UI」（无 UI 工件不强制 e2e）。
 - 破坏性 shell 命令（`rm -rf`、`git reset --hard`、`git clean -fd`、force push、`drop`/`truncate`、`kill -9`、降权 `chmod` 等）的拦截以 Claude Code permissions / `settings.json` 为单一约束面；规则层不再叠加软提醒。permissions 未禁掉默认放行属于安装期 debt，应记入项目 `docs/preflight-debt.md`。
-- 高风险、范围不清、预算较大或会长时间占用资源的任务，先输出执行计划并等待审批；默认路径下不为“多步骤”本身额外增加审批。
+- 默认直接执行，不进 plan mode；只有命中高风险、范围不清（Agent 无法确定目标状态）、显著预算/时间或不可逆外部副作用时才先计划并等待审批。多步骤、多文件、多模块、多种实现方式本身不构成 plan mode 触发条件。详见 `rules/product-dev.mdc` §直接执行原则。
 - 遇到需要业务决策的问题，记录并暂停，不猜测；同一问题连续 3 次失败必须暂停分析，等待人工介入。
 
 ## 3. 命令与技能
@@ -30,7 +30,7 @@
 | `/xj-review [范围]`（**skill**，三端通用） | 默认对话内精简代码审查；高风险或明确要求时再留 PR comment / 结构化记录。源在 `agent-skills/xj-review/SKILL.md` |
 | `twin`（**skill**，三端通用） | xuejiao persona supervisor；Claude `/twin`、Codex `$twin` 复用 `agent-skills/twin/SKILL.md`，运行时契约由 `twin doctor --json` 定位 |
 
-任务拆解走 Claude Code 原生 plan mode（默认按风险落到对话 / PR summary / `docs/approved/*`，参见 `rules/product-dev.mdc`）。
+任务拆解仅在高风险路径下走 Claude Code 原生 plan mode（落到 `docs/approved/*`，参见 `rules/product-dev.mdc` §高风险路径）；低/常规风险直接执行，不进 plan mode。
 
 Agent-facing CLI 与 artifact 契约以 `docs/agent_integration.md` 为导航入口，由 `scripts/export_agent_contract.py` 从 live code 生成；禁止在 `AGENTS.md` 复制命令清单。
 
