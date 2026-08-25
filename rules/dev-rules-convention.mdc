@@ -133,7 +133,7 @@ git commit -m "chore: sync dev-rules" && git push
 
 ### 跨机器同步（被动）
 
-LaunchAgent `local.dev-rules.sync` 每 30 分钟跑 `sync.sh --pull`，把其他机器推上来的更新拉到 `~/Codes/dev-rules` 并 fan-out 到本机已落地的注册项目。如果 `verify-rules.sh` 报告 LaunchAgent 未装，跑 `templates/install-launchagent.sh`。
+LaunchAgent `local.dev-rules.sync` 每 30 分钟跑 `sync.sh --pull`，把其他机器推上来的 `origin/main` 更新拉到 canonical `main` checkout 并 fan-out 到本机已落地的注册项目。`--pull` 在 canonical checkout 不是 `main`（含 detached HEAD）时必须在 fan-out 前 fail-closed，禁止从 feature branch 分发规则。若 main 使用独立 worktree，安装 LaunchAgent 时通过 `DEV_RULES_HOME=/absolute/main/worktree` 固定脚本路径与 canonical source；如果 `verify-rules.sh` 报告 LaunchAgent 未装，跑 `templates/install-launchagent.sh`。
 
 ## 强约束门禁（机械检查，禁止仅"靠自觉"）
 

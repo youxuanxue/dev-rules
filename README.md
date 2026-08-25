@@ -32,7 +32,7 @@
 | --- | --- |
 | `sync.sh --local` | 从当前 submodule 同步到父项目 `.cursor/rules/`，并登记项目 |
 | `sync.sh --push` | push submodule 后同步本机镜像与已落地项目 |
-| `sync.sh --pull` | 从远端拉取并 fan-out 到本机已落地项目 |
+| `sync.sh --pull` | 仅从 canonical `main` 拉取 `origin/main`，再 fan-out 到本机已落地项目；非 `main` fail-closed |
 | `sync.sh --check` | 检查项目 `.cursor/rules/` 与 submodule 是否 drift |
 | `verify-rules.sh` | 验证 dev-rules 仓库自身完整性 |
 | `templates/install-hooks.sh` | 安装 pre-commit + commit-msg hook（后者硬拦高风险锚点 / 契约删除公告缺失） |
