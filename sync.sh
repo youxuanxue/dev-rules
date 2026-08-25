@@ -120,6 +120,10 @@ project_git_url() {
     git -C "$1" remote get-url origin 2>/dev/null
 }
 
+is_git_checkout() {
+    git -C "$1" rev-parse --is-inside-work-tree > /dev/null 2>&1
+}
+
 local_path_for() {
     local url="$1"
     [ -f "$LOCAL_PROJECTS_FILE" ] || return 0
@@ -641,7 +645,7 @@ sync_push() {
 
     echo ""
     echo "=== [2/3] Pulling $HOME_CANONICAL ==="
-    if [ ! -d "$HOME_CANONICAL/.git" ]; then
+    if ! is_git_checkout "$HOME_CANONICAL"; then
         echo "  WARN: $HOME_CANONICAL is not a git checkout — skipping mirror update"
         echo "         (set DEV_RULES_REMOTE_URL, then clone: git clone \"\$DEV_RULES_REMOTE_URL\" $HOME_CANONICAL)"
     elif [ "$(cd "$SCRIPT_DIR" && pwd)" = "$HOME_CANONICAL" ]; then
@@ -674,8 +678,15 @@ sync_push() {
 #   2) 重刷 home symlinks + fan-out
 sync_pull() {
     echo "=== [1/2] Pulling $HOME_CANONICAL ==="
-    if [ ! -d "$HOME_CANONICAL/.git" ]; then
+    if ! is_git_checkout "$HOME_CANONICAL"; then
         echo "  FAIL: $HOME_CANONICAL is not a git checkout"
+        exit 1
+    fi
+    local branch
+    branch="$(git -C "$HOME_CANONICAL" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    if [ "$branch" != "main" ]; then
+        echo "  FAIL: --pull requires canonical branch main (current: ${branch:-unknown})"
+        echo "        refusing to fan-out rules from a feature or detached checkout"
         exit 1
     fi
     if ! git -C "$HOME_CANONICAL" diff --quiet || ! git -C "$HOME_CANONICAL" diff --cached --quiet; then
@@ -684,7 +695,7 @@ sync_pull() {
         git -C "$HOME_CANONICAL" fetch origin --quiet
         local local_sha remote_sha
         local_sha="$(git -C "$HOME_CANONICAL" rev-parse HEAD)"
-        remote_sha="$(git -C "$HOME_CANONICAL" rev-parse "origin/$(git -C "$HOME_CANONICAL" rev-parse --abbrev-ref HEAD)")"
+        remote_sha="$(git -C "$HOME_CANONICAL" rev-parse origin/main)"
         if [ "$local_sha" = "$remote_sha" ]; then
             echo "  already at $local_sha"
         else
@@ -1237,7 +1248,7 @@ print_status() {
     echo "=== Sync Status ==="
     echo ""
     echo "Local canonical mirror: $HOME_CANONICAL"
-    if [ -d "$HOME_CANONICAL/.git" ]; then
+    if is_git_checkout "$HOME_CANONICAL"; then
         local mirror_sha submod_sha
         mirror_sha="$(git -C "$HOME_CANONICAL" rev-parse --short HEAD 2>/dev/null || echo '?')"
         submod_sha="$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo '?')"
