@@ -179,7 +179,7 @@ class ResourceCatalogTest(TestCase):
 
 - [ ] **Step 4: Run the test to verify it fails**
 
-Run: `cd /Users/feng/Codes/twin && python3 -m unittest tests.test_resources -v`
+Run: `cd /Users/feng/Codes/twin && PYTHONPATH=src python3 -m unittest tests.test_resources -v`
 
 Expected: FAIL because `twin.paths` and `twin.resources` do not exist.
 
@@ -909,6 +909,7 @@ git -C /Users/feng/Codes/twin commit -m "feat: install the Twin-owned host skill
 **Files:**
 - Create: `/Users/feng/Codes/twin/scripts/preflight.sh`
 - Create: `/Users/feng/Codes/twin/scripts/smoke-clean-home.sh`
+- Create: `/Users/feng/Codes/twin/tests/smoke_installed.py`
 - Create: `/Users/feng/Codes/twin/docs/architecture.md`
 - Create: `/Users/feng/Codes/twin/docs/agent-integration.md` as generated output
 - Create: `/Users/feng/Codes/twin/docs/operator-guide.md`
@@ -918,32 +919,53 @@ git -C /Users/feng/Codes/twin commit -m "feat: install the Twin-owned host skill
 **Interfaces:**
 - Consumes: every earlier task
 - Produces: `scripts/preflight.sh` as the repository gate
-- Produces: `scripts/smoke-clean-home.sh` as the checkout-independence proof
+- Produces: `scripts/smoke-clean-home.sh` as the filesystem-isolated checkout-independence proof
+- Produces: `tests/smoke_installed.py` as the staged installed-wheel lifecycle driver
 
 - [ ] **Step 1: Write the clean-home smoke script before claiming independence**
 
-The script must create temporary HOME, target repository, virtual environment, and wheel-install directory; install the wheel; materialize a real `~/.cursor/skills`; run setup; then use the fake provider to exercise start, plan submission, run, review submission, human response, status, handoff, restart recovery, token replay rejection, and dirty-worktree preservation.
+The script accepts the exact wheel through required `TWIN_WHEEL=/absolute/path/to/xuejiao_twin-*.whl`. It stages only that wheel and `tests/smoke_installed.py` into a temporary input directory, then runs the stage read-only in `python:3.9-slim-bookworm` with `--network none`. The container command creates a temporary HOME, target repository, and `/opt/twin-venv`, installs the staged wheel into that venv, materializes a real `~/.cursor/skills`, and invokes setup, `contract --json`, `doctor --json`, and every lifecycle action only through `/opt/twin-venv/bin/twin`. The smoke driver exercises start, plan submission, run, review submission, human response, status, handoff, restart recovery, token replay rejection, and dirty-worktree preservation.
 
-It must temporarily make the source checkouts unavailable to the subprocess by setting `PYTHONPATH` empty and running from the target repository. It must not rename or modify the real checkouts.
+Support Docker and Podman only. Selection is deterministic: use executable `TWIN_CONTAINER_RUNTIME` when it is exactly `docker` or `podman`, otherwise choose a usable Docker daemon, then a usable Podman service. If neither is usable, exit `77` with `SKIP: no supported container runtime`; `scripts/preflight.sh` may report that skip only for an ordinary local run. CI, release, push, and the plan completion gate set `TWIN_REQUIRE_CONTAINER=1`, which converts exit `77` into failure.
+
+Mount only the temporary staged input directory. Do not mount `/Users/feng/Codes/twin`, `/Users/feng/Codes/dev-rules`, `/Users/feng/Codes/agent-skills`, their parents, or the host HOME. Inside the container, fail if any of those host paths exist. After setup, locate the installed `twin` package and `share/twin` data through the venv Python, and inspect those roots plus `$HOME/.twin/skills/twin`: no file or directory inside them may be a symlink, and no text file may contain `$DEV_RULES`, `/Users/feng/Codes/dev-rules`, `/Users/feng/Codes/agent-skills`, `scripts.twin`, or another source-checkout path. The expected host entry links may point only to the container's `$HOME/.twin/skills/twin`.
 
 - [ ] **Step 2: Run the smoke script and verify the initial failure**
 
-Run: `cd /Users/feng/Codes/twin && bash scripts/smoke-clean-home.sh`
+Run:
+
+```bash
+cd /Users/feng/Codes/twin
+tmp_wheels="$(mktemp -d)"
+python3 -m pip wheel --no-deps --wheel-dir "$tmp_wheels" .
+TWIN_WHEEL="$(find "$tmp_wheels" -maxdepth 1 -name 'xuejiao_twin-*.whl' -print -quit)" \
+  TWIN_REQUIRE_CONTAINER=1 \
+  bash scripts/smoke-clean-home.sh
+```
 
 Expected before wiring all cases: non-zero with the first missing lifecycle assertion, not a false success.
 
 - [ ] **Step 3: Complete the smoke fixture and repository preflight**
 
-`scripts/preflight.sh` runs, in order:
+`scripts/preflight.sh` creates one temporary wheel directory and runs, in order:
 
 ```bash
-python3 -m unittest discover -s tests -v
+PYTHONPATH=src python3 -m unittest discover -s tests -v
 python3 -m pip wheel --no-deps --wheel-dir "$tmp_wheels" .
-bash scripts/smoke-clean-home.sh
-python3 -m twin contract --json
+wheel="$(find "$tmp_wheels" -maxdepth 1 -name 'xuejiao_twin-*.whl' -print -quit)"
+test -n "$wheel"
+python3 -m venv "$tmp_venv"
+"$tmp_venv/bin/python" -m pip install --no-deps "$wheel"
+mkdir -p "$tmp_home/.cursor/skills"
+HOME="$tmp_home" "$tmp_venv/bin/twin" setup
+HOME="$tmp_home" "$tmp_venv/bin/twin" contract --json
+HOME="$tmp_home" "$tmp_venv/bin/twin" doctor --json
+TWIN_WHEEL="$wheel" TWIN_REQUIRE_CONTAINER="${TWIN_REQUIRE_CONTAINER:-0}" bash scripts/smoke-clean-home.sh
 ```
 
-Add an `rg` gate that fails on `$DEV_RULES`, `/Codes/dev-rules`, `/Codes/agent-skills`, `scripts.twin`, old active-pointer names, `scaffold`, `bootstrap`, or legacy command registration in runtime/skill/docs. Allow the approved migration rationale only in Git history, not current Twin files.
+No installed verification command may use ambient `python3 -m twin`; source tests always use `PYTHONPATH=src`, while installation evidence always uses the exact wheel's venv console script. Treat smoke exit `77` as a visible local skip only when `TWIN_REQUIRE_CONTAINER` is not `1` and CI is false; otherwise fail preflight.
+
+Add a supplemental static `rg` gate that fails on `$DEV_RULES`, `/Codes/dev-rules`, `/Codes/agent-skills`, `scripts.twin`, old active-pointer names, `scaffold`, `bootstrap`, or legacy command registration in runtime/skill/docs. Allow the approved migration rationale only in Git history, not current Twin files. This scan does not replace the container filesystem and installed-resource inspection.
 
 - [ ] **Step 4: Generate current documentation from live code**
 
@@ -955,7 +977,7 @@ Run:
 
 ```bash
 cd /Users/feng/Codes/twin
-bash scripts/preflight.sh
+TWIN_REQUIRE_CONTAINER=1 bash scripts/preflight.sh
 git diff --check
 git status --short
 ```
@@ -979,7 +1001,8 @@ Expected: `origin/main` contains a fresh Twin-only history, and its release unit
 Do not begin the owner cutover plan until all of these are true:
 
 - `/Users/feng/Codes/twin/scripts/preflight.sh` passes freshly.
-- A wheel-installed Twin passes `smoke-clean-home.sh` with no source checkout on `PYTHONPATH`.
-- `twin contract --json` and `twin doctor --json` are valid from the installed console script.
+- A wheel-installed Twin passes `smoke-clean-home.sh` inside the isolated Linux filesystem with no source checkout mounted or present.
+- `twin contract --json`, `twin doctor --json`, and the smoke lifecycle are valid only through console scripts from fresh venvs containing the exact built wheel.
+- Installed package resources and the installed skill contain no symlink or text reference back to a source checkout.
 - The skill setup tests prove foreign entries are preserved.
 - The old dev-rules and agent-skills Twin owners are still untouched, providing a clean rollback point before cutover.

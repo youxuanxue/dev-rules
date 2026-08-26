@@ -142,6 +142,8 @@ The ownership rules for the shared registry are:
 - neither reconciler removes, rewrites or adopts a link or real file owned by the other or by the user;
 - deleting the `agent-skills` checkout may break skills owned there, but must not affect the installed Twin skill.
 
+The one-time Twin ownership handoff is a separate migration transaction, not normal reconciler behavior. After the additive registry is live, it verifies every existing direct `twin` host link exactly targets the configured old `agent-skills/twin`, unlinks only that verified set, and immediately runs `twin setup`. If verification or setup fails, the transaction stops and restores the verified old links where no new owner entry exists. While `agent-skills` still contains `twin`, dev-rules reconciliation must fail on the Twin-owned foreign collision rather than adopt or replace it; normal dev-rules sync is therefore paused between the handoff and removal of the old source entry.
+
 Live code exposes the machine-owned interfaces:
 
 - `twin contract --json`: public commands, hidden action protocol, schema locations and contract version;
@@ -235,6 +237,8 @@ The following are deliberately not copied:
 - Git history from either source repository;
 - `$DEV_RULES`, source-directory or old installation-path assumptions.
 
+The archived PDF is never overwritten. Cutover records the source checksum and checks the exact archive destination before moving: an absent destination receives the source and is checksum-verified; an identical destination is preserved while the source is moved to a recoverable temporary quarantine; a different checksum stops for human decision.
+
 During cutover, `dev-rules` deletes Twin runtime, schemas, personas, templates, product documentation, launcher, contract export and all Twin-specific branches in sync, verification and preflight code. `agent-skills` deletes its Twin directory after the new installer owns the active host links. No forwarding wrapper, compatibility switch or duplicated skill remains.
 
 ## Delivery sequence
@@ -248,14 +252,16 @@ During cutover, `dev-rules` deletes Twin runtime, schemas, personas, templates, 
 
 ### Cut over ownership
 
-- Install the new package and host skill.
-- Remove Twin-owned assets and checks from `dev-rules`.
-- Remove the old Twin skill owner from `agent-skills` without touching unrelated tracked or untracked user assets.
+- Merge the dev-rules additive-registry change, update the canonical checkout with `pull --ff-only`, and materialize the registry while the old Twin links are still dev-rules-owned.
+- Install the new package, execute the verified one-time link handoff, and do not run normal dev-rules reconciliation again until the old `agent-skills/twin` source entry is gone.
+- Merge Twin-navigation and product-owner removal from `dev-rules` first.
+- Update the `agent-skills/dev-rules` submodule to that merged commit, regenerate `agent-skills/AGENTS.md` with the updated generator, remove the old Twin skill owner, and merge those changes together without touching unrelated tracked or untracked user assets.
+- Update both canonical checkouts with `pull --ff-only`, verify the removed paths there, and only then resume dev-rules and Twin reconciliation checks.
 - Reject old commands and paths explicitly; do not add migration or fallback behavior.
 
 ### Prove independence
 
-Verify the package in an environment with no `dev-rules` or `agent-skills` checkout available. Cover installation, setup drift, contract discovery, diagnosis, goal start, continuation, status, human response, restart recovery, timeout, worker failure, token replay, route mismatch, concurrency lock, verification failure and host handoff.
+Verify the exact built wheel in a minimal Linux container whose mounts contain only staged smoke inputs and do not expose the host `dev-rules`, `agent-skills`, or Twin source checkouts. Create a fresh virtual environment inside that filesystem, install the wheel, and invoke `contract`, `doctor`, setup, and the lifecycle smoke only through that environment's `twin` console script. Inspect installed package resources and the installed skill for symlinks or text references back to source checkouts. Docker and Podman are the supported runtimes; a missing runtime is an explicit local skip but a hard failure in CI, release, and completion-gate runs. Static source `rg` checks remain supplemental. Cover installation, setup drift, contract discovery, diagnosis, goal start, continuation, status, human response, restart recovery, timeout, worker failure, token replay, route mismatch, concurrency lock, verification failure and host handoff.
 
 ### Replace the runtime adapter
 
