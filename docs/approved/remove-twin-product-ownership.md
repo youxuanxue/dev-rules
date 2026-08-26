@@ -121,7 +121,9 @@ twin = "twin.cli:main"
 
 Development installation uses an editable tool install from `/Users/feng/Codes/twin`; published installation uses a versioned release from `youxuanxue/twin`. There is no shell launcher that searches for a source checkout.
 
-`twin setup` installs the repository-owned skill into a stable Twin home and creates host links:
+The shared home skill root must support independent owners. The current whole-directory chain from `~/.cursor/skills` into the `agent-skills` checkout is removed. `~/.cursor/skills/` becomes a real additive registry directory: `dev-rules` maintains only per-skill links whose sources are in `agent-skills`, while other products maintain their own entries. `~/.claude/skills` remains a directory symlink to that additive registry.
+
+`twin setup` installs the repository-owned skill into a stable Twin home and creates only Twin-owned host links:
 
 ```text
 ~/.twin/skills/twin/
@@ -132,6 +134,13 @@ Development installation uses an editable tool install from `/Users/feng/Codes/t
 ```
 
 `twin setup --check` detects drift. `twin uninstall` removes only links that still point to the Twin-owned installation. It never replaces or deletes a real user file.
+
+The ownership rules for the shared registry are:
+
+- `dev-rules sync.sh` creates, checks and removes only per-skill links whose targets are in its configured `agent-skills` source;
+- `twin setup` creates, checks and removes only the `twin` entries whose targets are in `~/.twin`;
+- neither reconciler removes, rewrites or adopts a link or real file owned by the other or by the user;
+- deleting the `agent-skills` checkout may break skills owned there, but must not affect the installed Twin skill.
 
 Live code exposes the machine-owned interfaces:
 
@@ -258,6 +267,8 @@ Only after the independent repository is stable, integrate DeepSeek Harness thro
 - The Twin repository is the sole owner of its CLI, domain code, schemas, personas, skill, setup, tests and live contract.
 - `dev-rules` contains no Twin runtime owner, distribution branch, contract export or product-specific gate.
 - `agent-skills` contains no Twin skill owner.
+- `~/.cursor/skills` is an additive registry rather than a whole-directory link into `agent-skills`; independent owners can coexist without writing into another repository.
+- dev-rules and Twin reconcilers mutate only their own per-skill links and preserve foreign or user-owned entries.
 - No `$DEV_RULES`, old source-module, old active-pointer or legacy workspace fallback remains.
 - Old command and data paths fail clearly instead of being translated.
 - Action replay, route drift, concurrent mutation and inconsistent artifacts fail closed.
