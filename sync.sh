@@ -268,7 +268,10 @@ home_cursor_skills_source() {
 ensure_additive_skill_root() {
     local root="$1"
     if [ ! -e "$root" ] && [ ! -L "$root" ]; then
-        mkdir -p "$root"
+        mkdir -p "$root" || {
+            echo "FAIL: cursor-skills ownership conflict: unable to create $root" >&2
+            return 1
+        }
         return 0
     fi
     if [ -L "$root" ]; then
@@ -276,8 +279,14 @@ ensure_additive_skill_root() {
             echo "FAIL: cursor-skills ownership conflict: $root is a foreign symlink → $(readlink "$root")" >&2
             return 1
         fi
-        unlink "$root"
-        mkdir -p "$root"
+        unlink "$root" || {
+            echo "FAIL: cursor-skills ownership conflict: unable to materialize $root" >&2
+            return 1
+        }
+        mkdir -p "$root" || {
+            echo "FAIL: cursor-skills ownership conflict: unable to materialize $root" >&2
+            return 1
+        }
         echo "  materialized: cursor-skills registry from legacy symlink"
         return 0
     fi
@@ -288,6 +297,27 @@ ensure_additive_skill_root() {
     return 1
 }
 
+# Consumer skill roots must be real directories. Cursor's one legacy-root
+# exception is handled before this guard by ensure_additive_skill_root().
+ensure_skill_destination_root() {
+    local root="$1" label="$2"
+    if [ ! -e "$root" ] && [ ! -L "$root" ]; then
+        mkdir -p "$root" || {
+            echo "FAIL: $label ownership conflict: unable to create destination root $root" >&2
+            return 1
+        }
+        return 0
+    fi
+    if [ -L "$root" ]; then
+        echo "FAIL: $label ownership conflict: destination root $root is a symlink → $(readlink "$root")" >&2
+        return 1
+    fi
+    if [ ! -d "$root" ]; then
+        echo "FAIL: $label ownership conflict: destination root $root is a real file" >&2
+        return 1
+    fi
+}
+
 skill_name_is_reserved() {
     local name="$1" reserved_list="$2" reserved
     for reserved in $reserved_list; do
@@ -296,26 +326,29 @@ skill_name_is_reserved() {
     return 1
 }
 
-# A managed link may be recognized by its original textual target or by its
-# resolved target. The latter makes legacy links via ~/.cursor/skills safe to
-# retain after the home registry is materialized.
+# Normalize an absolute path even when its leaf is dangling. Python's realpath
+# resolves any existing symlink parents and lexically normalizes the remainder,
+# so ownership checks cannot be fooled by source/../foreign spelling.
+normalize_skill_path() {
+    python3 -c 'import os, sys; print(os.path.realpath(os.path.abspath(sys.argv[1])))' "$1"
+}
+
+# A managed link is recognized only when its normalized target is within the
+# normalized source boundary. This remains safe for stale dangling links while
+# preserving foreign links whose textual target merely shares a source prefix.
 skill_link_is_owned_by_source() {
-    local source="$1" link="$2" target target_dir target_name resolved source_real
+    local source="$1" link="$2" target absolute_target normalized_target normalized_source
     [ -L "$link" ] || return 1
-    target="$(readlink "$link")"
-    case "$target" in
-        "$source"|"$source"/*) return 0 ;;
-    esac
+    target="$(readlink "$link")" || return 1
     if [[ "$target" = /* ]]; then
-        target_dir="$(dirname "$target")"
+        absolute_target="$target"
     else
-        target_dir="$(dirname "$link")/$(dirname "$target")"
+        absolute_target="$(dirname "$link")/$target"
     fi
-    target_name="$(basename "$target")"
-    resolved="$(cd -P "$target_dir" 2>/dev/null && pwd)/$target_name"
-    source_real="$(cd -P "$source" 2>/dev/null && pwd)"
-    case "$resolved" in
-        "$source_real"|"$source_real"/*) return 0 ;;
+    normalized_target="$(normalize_skill_path "$absolute_target")" || return 1
+    normalized_source="$(normalize_skill_path "$source")" || return 1
+    case "$normalized_target" in
+        "$normalized_source"|"$normalized_source"/*) return 0 ;;
     esac
     return 1
 }
@@ -326,7 +359,7 @@ skill_link_is_owned_by_source() {
 reconcile_owned_skill_links() {
     local source="$1" destination="$2" label="$3" reserved_list="${4:-}"
     [ -d "$source" ] || return 0
-    mkdir -p "$destination"
+    ensure_skill_destination_root "$destination" "$label" || return 1
 
     local entry name link
     for entry in "$source"/*; do
@@ -358,8 +391,16 @@ reconcile_owned_skill_links() {
         if [ -L "$link" ] && { [ "$(readlink "$link")" = "$entry" ] || [ "$link" -ef "$entry" ]; }; then
             echo "  ok: $label/$name"
         else
-            [ -L "$link" ] && unlink "$link"
-            ln -s "$entry" "$link"
+            if [ -L "$link" ]; then
+                unlink "$link" || {
+                    echo "FAIL: $label ownership conflict: unable to replace $link" >&2
+                    return 1
+                }
+            fi
+            ln -s "$entry" "$link" || {
+                echo "FAIL: $label ownership conflict: unable to create $link" >&2
+                return 1
+            }
             echo "  linked: $label/$name → $entry"
         fi
     done
@@ -373,7 +414,10 @@ reconcile_owned_skill_links() {
             continue
         fi
         if skill_link_is_owned_by_source "$source" "$link"; then
-            unlink "$link"
+            unlink "$link" || {
+                echo "FAIL: $label ownership conflict: unable to remove stale $link" >&2
+                return 1
+            }
             echo "  removed stale: $label/$name"
         fi
     done
