@@ -34,29 +34,6 @@ else
     fail "./sync-stats.sh missing or not executable"
 fi
 
-section "twin fixtures (schema, privacy, dry-run)"
-# Scrub GIT_* env so the fixture's nested `git init/add/commit` inside a
-# TemporaryDirectory does not leak into the parent repo when this script
-# runs from a git pre-commit hook (which sets GIT_DIR / GIT_INDEX_FILE).
-if env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE -u GIT_AUTHOR_DATE -u GIT_COMMITTER_DATE -u GIT_EDITOR -u GIT_PREFIX -u GIT_INTERNAL_GETTEXT_SH_SCHEME python3 -m scripts.twin validate --fixtures > /tmp/dev-rules-twin.log 2>&1; then
-    ok "twin fixture validation passes"
-else
-    cat /tmp/dev-rules-twin.log | sed 's/^/    /'
-    fail "twin fixture validation failed"
-fi
-
-section "twin story / test alignment"
-if [ -f .testing/user-stories/verify_quality.py ]; then
-    if python3 .testing/user-stories/verify_quality.py > /tmp/dev-rules-story-quality.log 2>&1; then
-        ok "US-088 acceptance criteria map to live twin fixtures"
-    else
-        cat /tmp/dev-rules-story-quality.log | sed 's/^/    /'
-        fail "US-088 story quality / test alignment failed"
-    fi
-else
-    fail ".testing/user-stories/verify_quality.py missing"
-fi
-
 section "xj-review loop_state selftest (circuit-breaker caps)"
 if python3 -m scripts.review.loop_state selftest > /tmp/dev-rules-review-loop.log 2>&1; then
     ok "loop_state caps/reset asserts pass"

@@ -17,7 +17,7 @@
 - 默认研发路径、风险分级、PR / commit 形状与完成自检以 `rules/product-dev.mdc` 为准；本文件不复制第二套流程。
 - 规则来源、同步、hook、项目接入以 `rules/dev-rules-convention.mdc` 为准；禁止直接编辑 sync 产物。
 - `scripts/preflight.sh` 是提交、推送、PR 出口、部署、发布前的机械门禁，不是每次会话或普通汇报的固定动作；触发门禁时失败必须修复后重跑，禁止 `--no-verify` 绕过（紧急回滚除外）。
-- 新建、切换、修复或销毁 git worktree（尤其是带 submodule 的仓库）必须使用 `$git-worktree-submodule`；`add` / `switch` 后先按 `session-workdir` 切换本会话 cwd / workdir 并跑 `session-check`，再读写相对路径。`/twin` worker 内部 worktree 由其命令脚本托管，不手工替换。
+- 新建、切换、修复或销毁 git worktree（尤其是带 submodule 的仓库）必须使用 `$git-worktree-submodule`；`add` / `switch` 后先按 `session-workdir` 切换本会话 cwd / workdir 并跑 `session-check`，再读写相对路径。
 - 端到端测试（e2e）一律经真实 UI、用 Playwright 驱动；后端 / API-only / 直调 handler 不算 e2e。细则与 soft→hard 守卫随 `rules/test-philosophy.mdc` §3「e2e 必须经真实 UI」（无 UI 工件不强制 e2e）。
 - 破坏性 shell 命令（`rm -rf`、`git reset --hard`、`git clean -fd`、force push、`drop`/`truncate`、`kill -9`、降权 `chmod` 等）的拦截以 Claude Code permissions / `settings.json` 为单一约束面；规则层不再叠加软提醒。permissions 未禁掉默认放行属于安装期 debt，应记入项目 `docs/preflight-debt.md`。
 - 默认直接执行，不进 plan mode；只有命中高风险、范围不清（Agent 无法确定目标状态）、显著预算/时间或不可逆外部副作用时才先计划并等待审批。多步骤、多文件、多模块、多种实现方式本身不构成 plan mode 触发条件。详见 `rules/product-dev.mdc` §直接执行原则。
@@ -28,9 +28,10 @@
 | 命令 / 技能 | 用途 |
 | --- | --- |
 | `/xj-review [范围]`（**skill**，三端通用） | 默认对话内精简代码审查；高风险或明确要求时再留 PR comment / 结构化记录。源在 `agent-skills/xj-review/SKILL.md` |
-| `twin`（**skill**，三端通用） | xuejiao persona supervisor；Claude `/twin`、Codex `$twin` 复用 `agent-skills/twin/SKILL.md`，运行时契约由 `twin doctor --json` 定位 |
 
 任务拆解仅在高风险路径下走 Claude Code 原生 plan mode（落到 `docs/approved/*`，参见 `rules/product-dev.mdc` §高风险路径）；低/常规风险直接执行，不进 plan mode。
+
+独立安装的工具自行拥有其技能与运行时契约；`AGENTS.md` 只保留本仓库提供的导航。
 
 新增命令编辑 `dev-rules/commands/*.md`，运行 `dev-rules/sync.sh` 后立即在所有会话生效（symlink）。
 

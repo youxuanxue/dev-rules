@@ -1,6 +1,6 @@
 """Minimal stdlib JSON-Schema subset validator.
 
-Supports the keywords used by dev-rules schemas (twin.*, review, skill):
+Supports the keywords used by dev-rules schemas (review, skill):
 type / enum / const / required / properties / additionalProperties /
 items / minItems / maxItems / minimum / maximum / minLength / maxLength /
 pattern / format(date) / allOf-if-then-else / oneOf.
