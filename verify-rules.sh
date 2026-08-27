@@ -222,6 +222,167 @@ else
     fail "project fan-out must remove retired managed rules"
 fi
 
+section "project rule fan-out fails closed on copy errors"
+if (
+    set -eu
+    test_home="$(mktemp -d)"
+    test_canonical="$test_home/Codes/dev-rules"
+    test_project="$test_home/Codes/demo-project"
+    cleanup() {
+        chmod u+w "$test_project/.cursor/rules" 2>/dev/null || true
+        rm -rf "$test_home"
+    }
+    trap cleanup EXIT
+
+    mkdir -p "$test_canonical/rules" "$test_project/.cursor/rules"
+    cp "$RULES_DIR/product-dev.mdc" "$test_canonical/rules/product-dev.mdc"
+    chmod a-w "$test_project/.cursor/rules"
+
+    if env -u CODEX_HOME -u ANTIGRAVITY_HOME \
+        HOME="$test_home" DEV_RULES_HOME="$test_canonical" \
+        bash "$SCRIPT_DIR/sync.sh" --project "$test_project" > "$test_home/sync.log" 2>&1; then
+        echo "expected project fan-out copy failure to return non-zero" >&2
+        exit 1
+    fi
+
+    grep -Fq "unable to copy rule" "$test_home/sync.log"
+    test ! -e "$test_project/.cursor/rules/product-dev.mdc"
+) > /tmp/dev-rules-project-copy-failure.log 2>&1; then
+    ok "project fan-out returns non-zero when a managed rule cannot be copied"
+else
+    sed 's/^/    /' /tmp/dev-rules-project-copy-failure.log
+    fail "project fan-out must fail closed on managed rule copy errors"
+fi
+
+section "project rule fan-out fails closed on retired-rule removal errors"
+if (
+    set -eu
+    test_home="$(mktemp -d)"
+    test_canonical="$test_home/Codes/dev-rules"
+    test_project="$test_home/Codes/demo-project"
+    cleanup() {
+        chmod u+w "$test_project/.cursor/rules" 2>/dev/null || true
+        rm -rf "$test_home"
+    }
+    trap cleanup EXIT
+
+    mkdir -p "$test_canonical/rules" "$test_project/.cursor/rules"
+    cp "$RULES_DIR/product-dev.mdc" "$test_canonical/rules/product-dev.mdc"
+    cp "$RULES_DIR/product-dev.mdc" "$test_project/.cursor/rules/product-dev.mdc"
+    cp "$RULES_DIR/test-philosophy.mdc" "$test_project/.cursor/rules/retired-rule.mdc"
+    chmod a-w "$test_project/.cursor/rules"
+
+    if env -u CODEX_HOME -u ANTIGRAVITY_HOME \
+        HOME="$test_home" DEV_RULES_HOME="$test_canonical" \
+        bash "$SCRIPT_DIR/sync.sh" --project "$test_project" > "$test_home/sync.log" 2>&1; then
+        echo "expected retired-rule removal failure to return non-zero" >&2
+        exit 1
+    fi
+
+    grep -Fq "unable to remove retired rule" "$test_home/sync.log"
+    test -f "$test_project/.cursor/rules/retired-rule.mdc"
+) > /tmp/dev-rules-retired-rule-failure.log 2>&1; then
+    ok "project fan-out returns non-zero when a retired rule cannot be removed"
+else
+    sed 's/^/    /' /tmp/dev-rules-retired-rule-failure.log
+    fail "project fan-out must fail closed on retired-rule removal errors"
+fi
+
+section "project rule fan-out fails closed on AGENTS generation errors"
+if (
+    set -eu
+    test_home="$(mktemp -d)"
+    test_canonical="$test_home/Codes/dev-rules"
+    test_project="$test_home/Codes/demo-project"
+    fake_bin="$test_home/bin"
+    cleanup() {
+        rm -rf "$test_home"
+    }
+    trap cleanup EXIT
+
+    mkdir -p "$test_canonical/rules" "$test_project/.cursor/rules" "$fake_bin"
+    cp "$RULES_DIR/product-dev.mdc" "$test_canonical/rules/product-dev.mdc"
+    ln -s /usr/bin/false "$fake_bin/python3"
+
+    if env -u CODEX_HOME -u ANTIGRAVITY_HOME \
+        PATH="$fake_bin:/usr/bin:/bin" HOME="$test_home" DEV_RULES_HOME="$test_canonical" \
+        bash "$SCRIPT_DIR/sync.sh" --project "$test_project" > "$test_home/sync.log" 2>&1; then
+        echo "expected AGENTS generation failure to return non-zero" >&2
+        exit 1
+    fi
+
+    grep -Fq "AGENTS generation failed" "$test_home/sync.log"
+) > /tmp/dev-rules-agents-generation-failure.log 2>&1; then
+    ok "project fan-out returns non-zero when AGENTS generation fails"
+else
+    sed 's/^/    /' /tmp/dev-rules-agents-generation-failure.log
+    fail "project fan-out must fail closed on AGENTS generation errors"
+fi
+
+section "all-project fan-out aggregates project failures"
+if (
+    set -eu
+    test_home="$(mktemp -d)"
+    test_canonical="$test_home/Codes/dev-rules"
+    test_project="$test_home/Codes/demo-project"
+    cleanup() {
+        chmod u+w "$test_project/.cursor/rules" 2>/dev/null || true
+        rm -rf "$test_home"
+    }
+    trap cleanup EXIT
+
+    mkdir -p "$test_canonical/rules" "$test_project/.cursor/rules"
+    cp "$RULES_DIR/product-dev.mdc" "$test_canonical/rules/product-dev.mdc"
+    printf 'local-only://demo\t%s\n' "$test_project" > "$test_canonical/.local-projects"
+    chmod a-w "$test_project/.cursor/rules"
+
+    if env -u CODEX_HOME -u ANTIGRAVITY_HOME \
+        HOME="$test_home" DEV_RULES_HOME="$test_canonical" \
+        bash "$SCRIPT_DIR/sync.sh" --all > "$test_home/sync.log" 2>&1; then
+        echo "expected --all to report the project fan-out failure" >&2
+        exit 1
+    fi
+
+    grep -Fq "unable to copy rule" "$test_home/sync.log"
+) > /tmp/dev-rules-all-project-failure.log 2>&1; then
+    ok "--all returns non-zero when any materialized project fails to sync"
+else
+    sed 's/^/    /' /tmp/dev-rules-all-project-failure.log
+    fail "--all must aggregate and propagate project fan-out failures"
+fi
+
+section "local project sync propagates project failures"
+if (
+    set -eu
+    test_home="$(mktemp -d)"
+    test_project="$test_home/Codes/demo-project"
+    test_dev_rules="$test_project/dev-rules"
+    cleanup() {
+        chmod u+w "$test_project/.cursor/rules" 2>/dev/null || true
+        rm -rf "$test_home"
+    }
+    trap cleanup EXIT
+
+    mkdir -p "$test_dev_rules/rules" "$test_project/.cursor/rules"
+    cp "$SCRIPT_DIR/sync.sh" "$test_dev_rules/sync.sh"
+    cp "$RULES_DIR/product-dev.mdc" "$test_dev_rules/rules/product-dev.mdc"
+    chmod a-w "$test_project/.cursor/rules"
+
+    if env -u CODEX_HOME -u ANTIGRAVITY_HOME \
+        HOME="$test_home" DEV_RULES_HOME="$test_home/Codes/canonical-dev-rules" \
+        bash "$test_dev_rules/sync.sh" --local > "$test_home/sync.log" 2>&1; then
+        echo "expected --local to report the project sync failure" >&2
+        exit 1
+    fi
+
+    grep -Fq "unable to copy rule" "$test_home/sync.log"
+) > /tmp/dev-rules-local-project-failure.log 2>&1; then
+    ok "--local returns non-zero when the parent project cannot be synced"
+else
+    sed 's/^/    /' /tmp/dev-rules-local-project-failure.log
+    fail "--local must propagate parent project sync failures"
+fi
+
 section "home skill registry is additive and owner-safe"
 if (
     set -eu
