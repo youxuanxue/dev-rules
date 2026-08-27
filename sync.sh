@@ -228,10 +228,16 @@ link_project_skill_consumer_dir() {
     fi
     if [ -e "$link" ] && [ ! -L "$link" ]; then
         local backup="$link.bak.$(date +%Y%m%d%H%M%S)"
-        mv "$link" "$backup"
+        mv "$link" "$backup" || {
+            echo "  FAIL: unable to back up $label at $link" >&2
+            return 1
+        }
         echo "  backup: $link → $backup (was a real copy; single source is $guard)"
     fi
-    ln -sfn "$target" "$link"
+    ln -sfn "$target" "$link" || {
+        echo "  FAIL: unable to link $label at $link → $target" >&2
+        return 1
+    }
     echo "  linked: $label → $target"
 }
 
@@ -562,7 +568,7 @@ sync_to_home() {
         echo "  (no ~/.cursor/skills, skipping — nothing for Claude Code to load)"
     else
         mkdir -p "$(dirname "$CLAUDE_SKILLS")"
-        link_skills_dir "$CLAUDE_SKILLS" "$CURSOR_SKILLS" "$CURSOR_SKILLS" "skills"
+        link_skills_dir "$CLAUDE_SKILLS" "$CURSOR_SKILLS" "$CURSOR_SKILLS" "skills" || return 1
     fi
 
     echo ""
@@ -679,8 +685,8 @@ sync_to_project() {
         return 0
     fi
     if [ ! -d "$source_rules_dir" ]; then
-        echo "  SKIP (source missing): $source_rules_dir"
-        return 0
+        echo "  FAIL: source rules directory missing: $source_rules_dir" >&2
+        return 1
     fi
 
     local target_rules="$project_dir/.cursor/rules"
@@ -744,11 +750,13 @@ sync_to_project() {
     # instructions; it ignores .cursor/rules/*.mdc and has no behavioral-rules
     # dir, so dev-rules capabilities are injected as a generated managed block
     # in AGENTS.md (constitution + rule index + skill index + commands).
-    if [ -f "$GEN_CODEX_AGENTS" ]; then
-        if ! python3 "$GEN_CODEX_AGENTS" --project "$project_dir"; then
-            echo "  FAIL: AGENTS generation failed for $(basename "$project_dir")" >&2
-            return 1
-        fi
+    if [ ! -f "$GEN_CODEX_AGENTS" ]; then
+        echo "  FAIL: AGENTS generator missing: $GEN_CODEX_AGENTS" >&2
+        return 1
+    fi
+    if ! python3 "$GEN_CODEX_AGENTS" --project "$project_dir"; then
+        echo "  FAIL: AGENTS generation failed for $(basename "$project_dir")" >&2
+        return 1
     fi
     # Codex also reads project-level .codex/skills/ — mirror the .claude/skills
     # pattern so Codex loads the same skills natively. No-op without skills.
