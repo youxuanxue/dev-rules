@@ -216,14 +216,10 @@ iter_local_projects() {
     rm -f "$seen_file"
 }
 
-# Ensure <link> is a symlink → <target> so Claude Code can load skills that are
-# authored/committed under .cursor/skills/. Single source of truth: .cursor/skills/
-# is the only edit/commit point; .claude/skills is a pure pointer, never a copy.
-# No-op when <guard> (the .cursor/skills dir) doesn't exist — projects without
-# skills are left untouched. A pre-existing real dir/file is backed up, never
-# deleted blindly. Uses `ln -sfn` so an existing dir-symlink is replaced in place
-# rather than nested into.
-link_skills_dir() {
+# Ensure a project-local skill consumer is a symlink → its .cursor/skills
+# source. Project-local consumers remain whole-directory links because their
+# source is not a mixed home registry.
+link_project_skill_consumer_dir() {
     local link="$1" target="$2" guard="$3" label="$4"
     [ -d "$guard" ] || return 0
     if [ -L "$link" ] && [ "$(readlink "$link")" = "$target" ]; then
@@ -239,37 +235,190 @@ link_skills_dir() {
     echo "  linked: $label → $target"
 }
 
-# Additively symlink each individual skill from a source skills dir into a
-# destination skills dir (used for Codex's ~/.codex/skills and Antigravity's
-# ~/.gemini/antigravity-cli/skills, which also hold tool-managed entries we must
-# NOT touch). Unlike link_skills_dir (whole-dir symlink), this links one <name>
-# at a time so reserved/native entries coexist. Only subdirs containing a SKILL.md
-# are linked. The 4th arg is the source-side reserved-name list to skip (defaults
-# to Codex's); No-op when src is absent.
-link_each_skill() {
-    local src_dir="$1" dst_dir="$2" label="$3" reserved_list="${4:-$CODEX_SKILL_RESERVED}"
-    [ -d "$src_dir" ] || return 0
-    mkdir -p "$dst_dir"
-    local entry name link reserved skip
-    for entry in "$src_dir"/*; do
+# Preserve the established project-local Claude fan-out interface. Home-level
+# consumers must use reconcile_owned_skill_links instead.
+link_skills_dir() {
+    link_project_skill_consumer_dir "$@"
+}
+
+# Return the configured agent-skills checkout behind the canonical mirror's
+# .cursor/skills link. Consumers link directly to this source spelling rather
+# than adopting entries from the mixed home registry.
+home_cursor_skills_source() {
+    [ -d "$HOME_CURSOR_SKILLS_SRC" ] || return 1
+    if [ -L "$HOME_CURSOR_SKILLS_SRC" ]; then
+        local target
+        target="$(readlink "$HOME_CURSOR_SKILLS_SRC")"
+        if [[ "$target" = /* ]]; then
+            printf '%s\n' "$target"
+        else
+            (
+                cd -L "$(dirname "$HOME_CURSOR_SKILLS_SRC")/$target"
+                pwd -L
+            )
+        fi
+    else
+        printf '%s\n' "$HOME_CURSOR_SKILLS_SRC"
+    fi
+}
+
+# ~/.cursor/skills is an additive registry, not a whole-directory symlink. A
+# legacy symlink to the configured source is safely materialized; every other
+# existing filesystem object is someone else's ownership and must be preserved.
+ensure_additive_skill_root() {
+    local root="$1"
+    if [ ! -e "$root" ] && [ ! -L "$root" ]; then
+        mkdir -p "$root" || {
+            echo "FAIL: cursor-skills ownership conflict: unable to create $root" >&2
+            return 1
+        }
+        return 0
+    fi
+    if [ -L "$root" ]; then
+        if [ "$(readlink "$root")" != "$HOME_CURSOR_SKILLS_SRC" ]; then
+            echo "FAIL: cursor-skills ownership conflict: $root is a foreign symlink → $(readlink "$root")" >&2
+            return 1
+        fi
+        unlink "$root" || {
+            echo "FAIL: cursor-skills ownership conflict: unable to materialize $root" >&2
+            return 1
+        }
+        mkdir -p "$root" || {
+            echo "FAIL: cursor-skills ownership conflict: unable to materialize $root" >&2
+            return 1
+        }
+        echo "  materialized: cursor-skills registry from legacy symlink"
+        return 0
+    fi
+    if [ -d "$root" ]; then
+        return 0
+    fi
+    echo "FAIL: cursor-skills ownership conflict: $root is a real file" >&2
+    return 1
+}
+
+# Consumer skill roots must be real directories. Cursor's one legacy-root
+# exception is handled before this guard by ensure_additive_skill_root().
+ensure_skill_destination_root() {
+    local root="$1" label="$2"
+    if [ ! -e "$root" ] && [ ! -L "$root" ]; then
+        mkdir -p "$root" || {
+            echo "FAIL: $label ownership conflict: unable to create destination root $root" >&2
+            return 1
+        }
+        return 0
+    fi
+    if [ -L "$root" ]; then
+        echo "FAIL: $label ownership conflict: destination root $root is a symlink → $(readlink "$root")" >&2
+        return 1
+    fi
+    if [ ! -d "$root" ]; then
+        echo "FAIL: $label ownership conflict: destination root $root is a real file" >&2
+        return 1
+    fi
+}
+
+skill_name_is_reserved() {
+    local name="$1" reserved_list="$2" reserved
+    for reserved in $reserved_list; do
+        [ "$name" = "$reserved" ] && return 0
+    done
+    return 1
+}
+
+# Normalize an absolute path even when its leaf is dangling. Python's realpath
+# resolves any existing symlink parents and lexically normalizes the remainder,
+# so ownership checks cannot be fooled by source/../foreign spelling.
+normalize_skill_path() {
+    python3 -c 'import os, sys; print(os.path.realpath(os.path.abspath(sys.argv[1])))' "$1"
+}
+
+# A managed link is recognized only when its normalized target is within the
+# normalized source boundary. This remains safe for stale dangling links while
+# preserving foreign links whose textual target merely shares a source prefix.
+skill_link_is_owned_by_source() {
+    local source="$1" link="$2" target absolute_target normalized_target normalized_source
+    [ -L "$link" ] || return 1
+    target="$(readlink "$link")" || return 1
+    if [[ "$target" = /* ]]; then
+        absolute_target="$target"
+    else
+        absolute_target="$(dirname "$link")/$target"
+    fi
+    normalized_target="$(normalize_skill_path "$absolute_target")" || return 1
+    normalized_source="$(normalize_skill_path "$source")" || return 1
+    case "$normalized_target" in
+        "$normalized_source"|"$normalized_source"/*) return 0 ;;
+    esac
+    return 1
+}
+
+# Additively reconcile only links owned by <source>. Foreign symlinks, files,
+# and directories remain untouched; a desired same-name collision fails before
+# changing any destination entry. Reserved names are always left to their owner.
+reconcile_owned_skill_links() {
+    local source="$1" destination="$2" label="$3" reserved_list="${4:-}"
+    [ -d "$source" ] || return 0
+    ensure_skill_destination_root "$destination" "$label" || return 1
+
+    local entry name link
+    for entry in "$source"/*; do
         [ -d "$entry" ] || continue
         [ -f "$entry/SKILL.md" ] || continue
         name="$(basename "$entry")"
-        skip=0
-        for reserved in $reserved_list; do
-            [ "$name" = "$reserved" ] && skip=1 && break
-        done
-        [ "$skip" -eq 1 ] && continue
-        link="$dst_dir/$name"
-        if [ -L "$link" ] && [ "$(readlink "$link")" = "$entry" ]; then
+        skill_name_is_reserved "$name" "$reserved_list" && continue
+        link="$destination/$name"
+        if [ -L "$link" ]; then
+            if [ "$(readlink "$link")" = "$entry" ] || [ "$link" -ef "$entry" ]; then
+                continue
+            fi
+            if ! skill_link_is_owned_by_source "$source" "$link"; then
+                echo "FAIL: $label ownership conflict: $link is a foreign symlink → $(readlink "$link")" >&2
+                return 1
+            fi
+        elif [ -e "$link" ]; then
+            echo "FAIL: $label ownership conflict: $link is a real path" >&2
+            return 1
+        fi
+    done
+
+    for entry in "$source"/*; do
+        [ -d "$entry" ] || continue
+        [ -f "$entry/SKILL.md" ] || continue
+        name="$(basename "$entry")"
+        skill_name_is_reserved "$name" "$reserved_list" && continue
+        link="$destination/$name"
+        if [ -L "$link" ] && { [ "$(readlink "$link")" = "$entry" ] || [ "$link" -ef "$entry" ]; }; then
             echo "  ok: $label/$name"
-        elif [ -e "$link" ] && [ ! -L "$link" ]; then
-            mv "$link" "$link.bak.$(date +%Y%m%d%H%M%S)"
-            ln -sfn "$entry" "$link"
-            echo "  relinked (backed up real dir): $label/$name"
         else
-            ln -sfn "$entry" "$link"
+            if [ -L "$link" ]; then
+                unlink "$link" || {
+                    echo "FAIL: $label ownership conflict: unable to replace $link" >&2
+                    return 1
+                }
+            fi
+            ln -s "$entry" "$link" || {
+                echo "FAIL: $label ownership conflict: unable to create $link" >&2
+                return 1
+            }
             echo "  linked: $label/$name → $entry"
+        fi
+    done
+
+    for link in "$destination"/*; do
+        [ -L "$link" ] || continue
+        name="$(basename "$link")"
+        skill_name_is_reserved "$name" "$reserved_list" && continue
+        entry="$source/$name"
+        if [ -d "$entry" ] && [ -f "$entry/SKILL.md" ]; then
+            continue
+        fi
+        if skill_link_is_owned_by_source "$source" "$link"; then
+            unlink "$link" || {
+                echo "FAIL: $label ownership conflict: unable to remove stale $link" >&2
+                return 1
+            }
+            echo "  removed stale: $label/$name"
         fi
     done
 }
@@ -396,13 +545,15 @@ sync_to_home() {
     fi
 
     echo ""
-    echo "=== Syncing to ~/.cursor/skills/ (symlink → $HOME_CURSOR_SKILLS_SRC) ==="
-    if [ ! -d "$HOME_CURSOR_SKILLS_SRC" ]; then
-        echo "  WARN: $HOME_CURSOR_SKILLS_SRC not found — skipping global skills link"
+    echo "=== Syncing to ~/.cursor/skills/ (additive registry from $HOME_CURSOR_SKILLS_SRC) ==="
+    local home_skill_source
+    if ! home_skill_source="$(home_cursor_skills_source)"; then
+        echo "  WARN: $HOME_CURSOR_SKILLS_SRC not found — skipping global skill registry"
         echo "        (agent skills source is required for Claude/Codex/Antigravity global skills)"
     else
         mkdir -p "$(dirname "$CURSOR_SKILLS")"
-        link_skills_dir "$CURSOR_SKILLS" "$HOME_CURSOR_SKILLS_SRC" "$HOME_CURSOR_SKILLS_SRC" "cursor-skills"
+        ensure_additive_skill_root "$CURSOR_SKILLS" || return 1
+        reconcile_owned_skill_links "$home_skill_source" "$CURSOR_SKILLS" "cursor-skills" || return 1
     fi
 
     echo ""
@@ -420,8 +571,8 @@ sync_to_home() {
         [ -f "$persona" ] && echo "  ok: $(basename "$persona")"
     done
 
-    sync_to_codex_home
-    sync_to_antigravity_home
+    sync_to_codex_home || return 1
+    sync_to_antigravity_home || return 1
 }
 
 # Codex CLI/app consumer (~/.codex). Two additive links, neither of which touches
@@ -462,11 +613,12 @@ sync_to_codex_home() {
     fi
 
     echo ""
-    echo "=== Syncing to ~/.codex/skills/ (per-skill symlinks → $CURSOR_SKILLS) ==="
-    if [ ! -d "$CURSOR_SKILLS" ]; then
-        echo "  (no ~/.cursor/skills, skipping — nothing for Codex to load)"
+    echo "=== Syncing to ~/.codex/skills/ (owned per-skill symlinks) ==="
+    local home_skill_source
+    if ! home_skill_source="$(home_cursor_skills_source)"; then
+        echo "  (agent skills source unavailable, skipping — nothing for Codex to load)"
     else
-        link_each_skill "$CURSOR_SKILLS" "$CODEX_SKILLS" "codex-skills"
+        reconcile_owned_skill_links "$home_skill_source" "$CODEX_SKILLS" "codex-skills" "$CODEX_SKILL_RESERVED" || return 1
     fi
 }
 
@@ -509,11 +661,12 @@ sync_to_antigravity_home() {
     fi
 
     echo ""
-    echo "=== Syncing to ~/.gemini/antigravity-cli/skills/ (per-skill symlinks → $CURSOR_SKILLS) ==="
-    if [ ! -d "$CURSOR_SKILLS" ]; then
-        echo "  (no ~/.cursor/skills, skipping — nothing for Antigravity to load)"
+    echo "=== Syncing to ~/.gemini/antigravity-cli/skills/ (owned per-skill symlinks) ==="
+    local home_skill_source
+    if ! home_skill_source="$(home_cursor_skills_source)"; then
+        echo "  (agent skills source unavailable, skipping — nothing for Antigravity to load)"
     else
-        link_each_skill "$CURSOR_SKILLS" "$ANTIGRAVITY_SKILLS" "antigravity-skills" "$ANTIGRAVITY_SKILL_RESERVED"
+        reconcile_owned_skill_links "$home_skill_source" "$ANTIGRAVITY_SKILLS" "antigravity-skills" "$ANTIGRAVITY_SKILL_RESERVED" || return 1
     fi
 }
 
@@ -578,7 +731,7 @@ sync_to_project() {
     # pattern so Codex loads the same skills natively. No-op without skills.
     if [ -d "$project_dir/.cursor/skills" ]; then
         mkdir -p "$project_dir/.codex"
-        link_skills_dir "$project_dir/.codex/skills" "../.cursor/skills" \
+        link_project_skill_consumer_dir "$project_dir/.codex/skills" "../.cursor/skills" \
             "$project_dir/.cursor/skills" "$(basename "$project_dir")/.codex/skills"
     fi
 
@@ -588,7 +741,7 @@ sync_to_project() {
     # (generated above), the same file Codex consumes. No-op without skills.
     if [ -d "$project_dir/.cursor/skills" ]; then
         mkdir -p "$project_dir/.agents"
-        link_skills_dir "$project_dir/.agents/skills" "../.cursor/skills" \
+        link_project_skill_consumer_dir "$project_dir/.agents/skills" "../.cursor/skills" \
             "$project_dir/.cursor/skills" "$(basename "$project_dir")/.agents/skills"
     fi
 }
@@ -667,7 +820,7 @@ sync_push() {
 
     echo ""
     echo "=== [3/3] Fan-out: home + registered projects ==="
-    sync_to_home
+    sync_to_home || exit $?
     sync_all_projects
     echo ""
     echo "Tip: each project listed above may now show modified .cursor/rules/* — review and commit per project."
@@ -709,7 +862,7 @@ sync_pull() {
 
     echo ""
     echo "=== [2/2] Fan-out: home + registered projects ==="
-    sync_to_home
+    sync_to_home || exit $?
     sync_all_projects
 }
 
@@ -873,33 +1026,49 @@ check_home_bin_drift() {
     done
 }
 
-# Check that ~/.cursor/skills is the home-level entrypoint to the canonical
-# agent-skills source. Claude/Codex/Antigravity links are layered on top of this
-# path, so a missing or dangling ~/.cursor/skills makes all global skills vanish
-# even when their downstream links look correct.
+# Check that ~/.cursor/skills is a real additive registry containing only the
+# dev-rules-owned links derived from the configured agent-skills source. Foreign
+# entries are intentionally outside this drift contract.
 check_home_cursor_skills_drift() {
     HOME_CURSOR_SKILLS_DRIFT=0
 
-    if [ ! -d "$HOME_CURSOR_SKILLS_SRC" ]; then
+    local source
+    if ! source="$(home_cursor_skills_source)"; then
         echo "  ✗ SOURCE MISSING: $HOME_CURSOR_SKILLS_SRC (agent skills source unavailable)"
         HOME_CURSOR_SKILLS_DRIFT=1
         return 0
     fi
 
     if [ ! -e "$CURSOR_SKILLS" ] && [ ! -L "$CURSOR_SKILLS" ]; then
-        echo "  ✗ MISSING: ~/.cursor/skills (global skills entrypoint missing)"
+        echo "  ✗ MISSING: ~/.cursor/skills (global skill registry missing)"
         HOME_CURSOR_SKILLS_DRIFT=1
-    elif [ ! -L "$CURSOR_SKILLS" ]; then
-        echo "  ✗ REAL DIR: ~/.cursor/skills (should be symlink → $HOME_CURSOR_SKILLS_SRC)"
+        return 0
+    elif [ -L "$CURSOR_SKILLS" ]; then
+        echo "  ✗ SYMLINK: ~/.cursor/skills (must be a real additive registry)"
         HOME_CURSOR_SKILLS_DRIFT=1
-    else
-        local actual
-        actual="$(readlink "$CURSOR_SKILLS")"
-        if [ "$actual" != "$HOME_CURSOR_SKILLS_SRC" ]; then
-            echo "  ✗ WRONG TARGET: ~/.cursor/skills → $actual (expected → $HOME_CURSOR_SKILLS_SRC)"
-            HOME_CURSOR_SKILLS_DRIFT=1
-        fi
+        return 0
+    elif [ ! -d "$CURSOR_SKILLS" ]; then
+        echo "  ✗ REAL FILE: ~/.cursor/skills (must be a real directory)"
+        HOME_CURSOR_SKILLS_DRIFT=1
+        return 0
     fi
+
+    local entry name link
+    for entry in "$source"/*; do
+        [ -d "$entry" ] || continue
+        [ -f "$entry/SKILL.md" ] || continue
+        name="$(basename "$entry")"
+        link="$CURSOR_SKILLS/$name"
+        if [ -L "$link" ] && { [ "$(readlink "$link")" = "$entry" ] || [ "$link" -ef "$entry" ]; }; then
+            :
+        elif [ ! -e "$link" ] && [ ! -L "$link" ]; then
+            echo "  ✗ MISSING: ~/.cursor/skills/$name (dev-rules-owned skill link missing)"
+            HOME_CURSOR_SKILLS_DRIFT=$((HOME_CURSOR_SKILLS_DRIFT + 1))
+        else
+            echo "  ✗ WRONG: ~/.cursor/skills/$name (not a dev-rules-owned symlink → $entry)"
+            HOME_CURSOR_SKILLS_DRIFT=$((HOME_CURSOR_SKILLS_DRIFT + 1))
+        fi
+    done
 }
 
 # Check that ~/.claude/skills is the single-source symlink → ~/.cursor/skills,
@@ -930,7 +1099,7 @@ check_home_skills_drift() {
 # Check the Codex consumer links in ~/.codex. Only relevant when Codex is
 # installed (~/.codex exists). Each problem → +1 to HOME_CODEX_DRIFT:
 #   - AGENTS.md not a symlink → global/CLAUDE.md (missing / real file / wrong target)
-#   - a ~/.cursor/skills/<name> with no matching ~/.codex/skills/<name> symlink
+#   - a configured agent-skills source entry with no matching ~/.codex/skills/<name> symlink
 # Codex-managed entries (.system, codex-primary-runtime, default.rules) are never
 # inspected — this only enforces dev-rules' own additive links.
 check_home_codex_drift() {
@@ -952,9 +1121,10 @@ check_home_codex_drift() {
         HOME_CODEX_DRIFT=$((HOME_CODEX_DRIFT + 1))
     fi
 
-    [ -d "$CURSOR_SKILLS" ] || return 0
+    local source
+    source="$(home_cursor_skills_source)" || return 0
     local entry name link reserved skip
-    for entry in "$CURSOR_SKILLS"/*; do
+    for entry in "$source"/*; do
         [ -d "$entry" ] || continue
         [ -f "$entry/SKILL.md" ] || continue
         name="$(basename "$entry")"
@@ -964,7 +1134,7 @@ check_home_codex_drift() {
         done
         [ "$skip" -eq 1 ] && continue
         link="$CODEX_SKILLS/$name"
-        if [ -L "$link" ] && [ "$(readlink "$link")" = "$entry" ]; then
+        if [ -L "$link" ] && { [ "$(readlink "$link")" = "$entry" ] || [ "$link" -ef "$entry" ]; }; then
             :
         elif [ ! -e "$link" ] && [ ! -L "$link" ]; then
             echo "  ✗ MISSING: ~/.codex/skills/$name (Codex won't load this skill)"
@@ -980,7 +1150,7 @@ check_home_codex_drift() {
 # check_home_codex_drift; only relevant when Antigravity CLI is installed. Each
 # problem → +1 to HOME_ANTIGRAVITY_DRIFT:
 #   - AGENTS.md not a symlink → global/CLAUDE.md (missing / real file / wrong target)
-#   - a ~/.cursor/skills/<name> with no matching skills/<name> symlink
+#   - a configured agent-skills source entry with no matching skills/<name> symlink
 # Antigravity-managed content (builtin/, brain/, native skills) is never inspected.
 check_home_antigravity_drift() {
     HOME_ANTIGRAVITY_DRIFT=0
@@ -1001,9 +1171,10 @@ check_home_antigravity_drift() {
         HOME_ANTIGRAVITY_DRIFT=$((HOME_ANTIGRAVITY_DRIFT + 1))
     fi
 
-    [ -d "$CURSOR_SKILLS" ] || return 0
+    local source
+    source="$(home_cursor_skills_source)" || return 0
     local entry name link reserved skip
-    for entry in "$CURSOR_SKILLS"/*; do
+    for entry in "$source"/*; do
         [ -d "$entry" ] || continue
         [ -f "$entry/SKILL.md" ] || continue
         name="$(basename "$entry")"
@@ -1013,7 +1184,7 @@ check_home_antigravity_drift() {
         done
         [ "$skip" -eq 1 ] && continue
         link="$ANTIGRAVITY_SKILLS/$name"
-        if [ -L "$link" ] && [ "$(readlink "$link")" = "$entry" ]; then
+        if [ -L "$link" ] && { [ "$(readlink "$link")" = "$entry" ] || [ "$link" -ef "$entry" ]; }; then
             :
         elif [ ! -e "$link" ] && [ ! -L "$link" ]; then
             echo "  ✗ MISSING: ~/.gemini/antigravity-cli/skills/$name (Antigravity won't load this skill)"
@@ -1087,16 +1258,15 @@ check_drift() {
         fi
         echo ""
 
-        # Home Cursor skills entrypoint: ~/.cursor/skills must exist and point
-        # to the canonical mirror's .cursor/skills source. Downstream Claude,
-        # Codex, and Antigravity links intentionally build on this path.
-        echo "=== Checking drift: ~/.cursor/skills vs $HOME_CURSOR_SKILLS_SRC ==="
+        # Home Cursor skills registry: only dev-rules-owned links derived from
+        # the configured source are checked; foreign entries are preserved.
+        echo "=== Checking drift: ~/.cursor/skills registry vs $HOME_CURSOR_SKILLS_SRC ==="
         check_home_cursor_skills_drift
         if [ "$HOME_CURSOR_SKILLS_DRIFT" -eq 0 ]; then
-            echo "  ok: Cursor skills entrypoint healthy"
+            echo "  ok: Cursor skill registry healthy"
         else
             total_drift=$((total_drift + HOME_CURSOR_SKILLS_DRIFT))
-            echo "  Cursor skills entrypoint drifted. Run: $SCRIPT_DIR/sync.sh"
+            echo "  Cursor skill registry drifted. Run: $SCRIPT_DIR/sync.sh"
         fi
         echo ""
 
@@ -1295,17 +1465,17 @@ print_status() {
     done
     [ "$any" -eq 0 ] && echo "  (none — run sync.sh)"
     echo ""
-    echo "Home ~/.cursor/skills (must symlink → $HOME_CURSOR_SKILLS_SRC):"
-    if [ -L "$CURSOR_SKILLS" ]; then
-        local target
-        target="$(readlink "$CURSOR_SKILLS")"
-        if [ "$target" = "$HOME_CURSOR_SKILLS_SRC" ]; then
-            echo "  ✓ → $target"
-        else
-            echo "  ⚠ → $target (not pointing to canonical skills source)"
+    echo "Home ~/.cursor/skills (additive registry; dev-rules source: $HOME_CURSOR_SKILLS_SRC):"
+    if [ -d "$CURSOR_SKILLS" ] && [ ! -L "$CURSOR_SKILLS" ]; then
+        local owned_count=0 skill_source
+        if skill_source="$(home_cursor_skills_source 2>/dev/null)"; then
+            for skill in "$skill_source"/*; do
+                [ -d "$skill" ] && [ -f "$skill/SKILL.md" ] && owned_count=$((owned_count + 1))
+            done
         fi
-    elif [ -e "$CURSOR_SKILLS" ]; then
-        echo "  ⚠ real entry (run sync.sh to convert to symlink)"
+        echo "  ✓ real registry ($owned_count dev-rules-owned skill link(s); foreign entries preserved)"
+    elif [ -e "$CURSOR_SKILLS" ] || [ -L "$CURSOR_SKILLS" ]; then
+        echo "  ⚠ not a real registry (run sync.sh to reconcile)"
     else
         echo "  ✗ missing (global skills will not load)"
     fi
@@ -1449,7 +1619,7 @@ print_status() {
 
 case "${1:-}" in
     --all)
-        sync_to_home
+        sync_to_home || exit $?
         sync_all_projects
         print_status
         ;;
@@ -1503,7 +1673,7 @@ case "${1:-}" in
         sed -n '2,30p' "$0" | sed 's|^#||; s|^ ||'
         ;;
     *)
-        sync_to_home
+        sync_to_home || exit $?
         print_status
         ;;
 esac

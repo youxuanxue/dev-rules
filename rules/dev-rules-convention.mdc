@@ -25,17 +25,17 @@ alwaysApply: true
                                         + 待提交 message 的本地阶段，token 缺失
                                         在此硬拦截
 
-家目录消费端（symlink，由 sync.sh 维护）：
+家目录消费端（由 `sync.sh` 维护；除 additive registry 外为 symlink）：
 ~/.cursor/rules/      → dev-rules/rules/
-~/.cursor/skills      → dev-rules/.cursor/skills（通常再指向 agent-skills）
+~/.cursor/skills      ← additive registry（仅 dev-rules-owned skill links 指向配置的 agent-skills；保留其它 owner 条目）
 ~/.claude/commands/   → dev-rules/commands/
 ~/.claude/CLAUDE.md   → dev-rules/global/CLAUDE.md
 ~/.claude/skills      → ~/.cursor/skills
 ~/.local/bin/<name>   → dev-rules/global/bin/<name>（CLI launcher；secret 留本机 ~/.claude/*.json 不入库）
 ~/.codex/AGENTS.md    → dev-rules/global/CLAUDE.md（Codex 与 Claude 同一宪法）
-~/.codex/skills/<name>→ ~/.cursor/skills/<name>（逐个叠加，不动 Codex 自带 .system/default.rules）
+~/.codex/skills/<name>→ 配置的 agent-skills/<name>（逐个叠加，只维护 dev-rules-owned links，不动 Codex 自带 .system/default.rules）
 ~/.gemini/antigravity-cli/AGENTS.md    → dev-rules/global/CLAUDE.md（Antigravity 与 Claude/Codex 同一宪法）
-~/.gemini/antigravity-cli/skills/<name>→ ~/.cursor/skills/<name>（逐个叠加，不动 Antigravity 自带 builtin）
+~/.gemini/antigravity-cli/skills/<name>→ 配置的 agent-skills/<name>（逐个叠加，只维护 dev-rules-owned links，不动 Antigravity 自带 builtin）
 ```
 
 Codex 消费端要点：Codex 不读 `.cursor/rules/*.mdc`，行为规则经 `AGENTS.md` 的 dev-rules 受管块**指针化**到达（宪法 + 规则索引 + 技能索引 + 全局工具）；`~/.codex/rules/` 是 Codex 自己的命令审批策略（Starlark `.rules`），**dev-rules 永不写入**；`xj-review` 与 `twin` 都是 `.cursor/skills/` 中的三端通用 skill，Claude Code、Codex 与 Antigravity 通过各自的 skill 加载位消费同一份 `SKILL.md`。Codex 自定义 prompt 已被 OpenAI deprecated，可复用工作流一律走 skill，不 symlink commands 到 `~/.codex/prompts/`。
@@ -100,7 +100,7 @@ fan-out 使用 `.registered-projects` 与 `.local-projects` 的并集：跨机�
 - 复用既有确定性工具，不重造：契约 / 分层 / Web surface / 高风险锚点 / 存在性测试 / approved frontmatter / 静默吞错等已由 `dev-rules/scripts/check_*.py` + `templates/preflight.sh` 覆盖；skill / command 应**调用** preflight 取 ground-truth，而非让模型重新肉眼判断（参见 `agent-skills/xj-review/SKILL.md` §0 机械门禁先行）。
 - 反复出现的机械化缺口按 `digital-clone-research.md §二` 落成会失败的脚本 / schema；纯创意步骤不强行工具化。
 
-**skill 加载位的单一事实来源**：skill 只在 `.cursor/skills/` 编辑与提交（Cursor 读 `.cursor`，Claude Code 读 `.claude`，Codex 读 `~/.codex/skills` 与项目 `.codex/skills`，Antigravity 读 `~/.gemini/antigravity-cli/skills` 与项目 `.agents/skills`）。让其它端加载同一份 skill **只能靠 symlink，禁止真实副本**（副本会分叉事实来源）。该 symlink 由 `sync.sh` 确定性维护，不靠人工记忆：home 层 `~/.cursor/skills → ~/Codes/dev-rules/.cursor/skills`（canonical mirror 的 skill 入口，通常再指向 `agent-skills`）、`~/.claude/skills → ~/.cursor/skills`，逐个 `~/.codex/skills/<name> → ~/.cursor/skills/<name>`（叠加式，绝不动 Codex 自带 `.system` / `codex-primary-runtime` / `default.rules`），以及逐个 `~/.gemini/antigravity-cli/skills/<name> → ~/.cursor/skills/<name>`（叠加式，不动 Antigravity 自带 builtin）；项目 fan-out 时，若项目存在 `.cursor/skills/` 则建 `<project>/.claude/skills`、`<project>/.codex/skills`、`<project>/.agents/skills` 三者均 `→ ../.cursor/skills`。`sync.sh --check` 把「缺失 / 真实目录（违禁副本）/ 错误目标 / 源不存在」列为漂移并 exit 1（家目录的 Cursor/Codex/Antigravity 链同样被守卫）。手动建该 symlink 属安装期 debt，应记入项目 `docs/preflight-debt.md`。
+**skill 加载位的单一事实来源**：skill 只在项目的 `.cursor/skills/` 编辑与提交（Cursor 读 `.cursor`，Claude Code 读 `.claude`，Codex 读 `~/.codex/skills` 与项目 `.codex/skills`，Antigravity 读 `~/.gemini/antigravity-cli/skills` 与项目 `.agents/skills`）。让其它端加载同一份 skill **只能靠 symlink，禁止真实副本**（副本会分叉事实来源）。`sync.sh` 确定性维护这些 links：家目录 `~/.cursor/skills` 是 additive consumer registry，不是全目录 source owner；它是真实目录，只创建和清理指向配置 `agent-skills` checkout 的 dev-rules-owned `<name>` links，保留 foreign symlink、real file 与 real directory，并在同名 foreign collision 时 fail closed。`~/.claude/skills → ~/.cursor/skills` 仍是唯一 whole-directory link。Codex 与 Antigravity 都逐个直接 link 配置的 `agent-skills/<name>`，不扫描或接管混合 registry 中的其它 owner 条目；Codex 不动 `.system` / `codex-primary-runtime` / `default.rules`，Antigravity 不动 builtin。项目 fan-out 时，若项目存在 `.cursor/skills/` 则建 `<project>/.claude/skills`、`<project>/.codex/skills`、`<project>/.agents/skills` 三者均 `→ ../.cursor/skills`。`sync.sh --check` 只守卫家目录 registry 中派生自配置 source 的 dev-rules links，另守卫 Claude whole-directory link 与 Codex/Antigravity owned links；foreign registry entries 不算漂移。手动建该 symlink 属安装期 debt，应记入项目 `docs/preflight-debt.md`。
 
 **Codex 加载上限**：Codex 0.122 拒绝 `description` 超过 1024 字符的 `SKILL.md`（静默丢弃该技能，Cursor/Claude 无此限）。为 Codex 复用，`dev-rules/scripts/check_codex_skill_limits.py` 在 preflight 把超限技能列为 exit 1，迫使在 `.cursor/skills/` 源头收敛描述长度，而非让 Codex 端静默缺技能。
 
