@@ -39,7 +39,7 @@ Recall belongs to the script, judgement belongs to the model:
   dedup       -- pure mechanics: normalize-key dedup, severity sort, same-topic
                  merge, R-00x numbering. Output is review.schema.json shaped.
 
-CLI mirrors loop_state.py / `python3 -m scripts.twin`: argparse subcommands,
+CLI mirrors loop_state.py: argparse subcommands,
 `key=value` stdout lines the model forwards verbatim, `--json` for machine
 reads. No state file. Exit codes: 0 = ok, 2 = usage/IO error. `selftest`
 exits 0 on pass, 1 on failure.

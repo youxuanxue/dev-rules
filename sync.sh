@@ -31,7 +31,6 @@
 #   ├── global/CLAUDE.md
 #   ├── global/hooks/*                         Claude Code 全局 hooks（脚本）
 #   ├── global/bin/*                           CLI launchers（claude-kiro 等；secret 留 ~/.claude/ 本地文件）
-#   └── personas/*.md                          xuejiao twin persona 版本化源
 #        │
 #        ├──→ ~/.cursor/rules/*.mdc          本地 Cursor 交互式会话（symlink）
 #        ├──→ ~/.claude/commands/*           本地 Claude Code 自定义命令（symlink）
@@ -45,7 +44,6 @@
 #   为什么 home 入口用 symlink，项目用 real copy？
 #     - home 规则/命令同机即时生效，无需重 sync
 #     - 项目要 git track + 云端 VM 克隆时不能依赖 home 目录
-#     - twin persona 直接读取 DEV_RULES/personas 源文件，并由 twin health 阻止运行中写入
 #
 #   两个失效模式 + 各自的兜底：
 #     - 本机修改 + push  →  --push wrapper 一步搞定（pull ~/Codes + fan-out）
@@ -57,7 +55,6 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RULES_DIR="$SCRIPT_DIR/rules"
 COMMANDS_DIR="$SCRIPT_DIR/commands"
 GLOBAL_DIR="$SCRIPT_DIR/global"
-PERSONAS_DIR="$SCRIPT_DIR/personas"
 
 # Canonical local mirror (the symlink target). symlinks must always point here,
 # never into a project's submodule (which would couple home rules to a project).
@@ -67,7 +64,6 @@ HOME_COMMANDS_DIR="$HOME_CANONICAL/commands"
 HOME_GLOBAL_DIR="$HOME_CANONICAL/global"
 HOME_HOOKS_DIR="$HOME_GLOBAL_DIR/hooks"
 HOME_BIN_DIR="$HOME_GLOBAL_DIR/bin"
-HOME_PERSONAS_DIR="$HOME_CANONICAL/personas"
 
 CURSOR_HOME="$HOME/.cursor/rules"
 CLAUDE_COMMANDS="$HOME/.claude/commands"
@@ -333,9 +329,10 @@ normalize_skill_path() {
     python3 -c 'import os, sys; print(os.path.realpath(os.path.abspath(sys.argv[1])))' "$1"
 }
 
-# A managed link is recognized only when its normalized target is within the
-# normalized source boundary. This remains safe for stale dangling links while
-# preserving foreign links whose textual target merely shares a source prefix.
+# Normalized source containment is an ownership test only. It remains safe for
+# stale dangling links while preserving foreign links whose textual target
+# merely shares a source prefix; desired links themselves must retain their
+# direct configured source spelling.
 skill_link_is_owned_by_source() {
     local source="$1" link="$2" target absolute_target normalized_target normalized_source
     [ -L "$link" ] || return 1
@@ -369,7 +366,7 @@ reconcile_owned_skill_links() {
         skill_name_is_reserved "$name" "$reserved_list" && continue
         link="$destination/$name"
         if [ -L "$link" ]; then
-            if [ "$(readlink "$link")" = "$entry" ] || [ "$link" -ef "$entry" ]; then
+            if [ "$(readlink "$link")" = "$entry" ]; then
                 continue
             fi
             if ! skill_link_is_owned_by_source "$source" "$link"; then
@@ -388,7 +385,7 @@ reconcile_owned_skill_links() {
         name="$(basename "$entry")"
         skill_name_is_reserved "$name" "$reserved_list" && continue
         link="$destination/$name"
-        if [ -L "$link" ] && { [ "$(readlink "$link")" = "$entry" ] || [ "$link" -ef "$entry" ]; }; then
+        if [ -L "$link" ] && [ "$(readlink "$link")" = "$entry" ]; then
             echo "  ok: $label/$name"
         else
             if [ -L "$link" ]; then
@@ -564,12 +561,6 @@ sync_to_home() {
         mkdir -p "$(dirname "$CLAUDE_SKILLS")"
         link_skills_dir "$CLAUDE_SKILLS" "$CURSOR_SKILLS" "$CURSOR_SKILLS" "skills"
     fi
-
-    echo ""
-    echo "=== Twin personas source ($HOME_PERSONAS_DIR) ==="
-    for persona in "$HOME_PERSONAS_DIR"/*.md; do
-        [ -f "$persona" ] && echo "  ok: $(basename "$persona")"
-    done
 
     sync_to_codex_home || return 1
     sync_to_antigravity_home || return 1
@@ -1059,7 +1050,7 @@ check_home_cursor_skills_drift() {
         [ -f "$entry/SKILL.md" ] || continue
         name="$(basename "$entry")"
         link="$CURSOR_SKILLS/$name"
-        if [ -L "$link" ] && { [ "$(readlink "$link")" = "$entry" ] || [ "$link" -ef "$entry" ]; }; then
+        if [ -L "$link" ] && [ "$(readlink "$link")" = "$entry" ]; then
             :
         elif [ ! -e "$link" ] && [ ! -L "$link" ]; then
             echo "  ✗ MISSING: ~/.cursor/skills/$name (dev-rules-owned skill link missing)"
@@ -1134,7 +1125,7 @@ check_home_codex_drift() {
         done
         [ "$skip" -eq 1 ] && continue
         link="$CODEX_SKILLS/$name"
-        if [ -L "$link" ] && { [ "$(readlink "$link")" = "$entry" ] || [ "$link" -ef "$entry" ]; }; then
+        if [ -L "$link" ] && [ "$(readlink "$link")" = "$entry" ]; then
             :
         elif [ ! -e "$link" ] && [ ! -L "$link" ]; then
             echo "  ✗ MISSING: ~/.codex/skills/$name (Codex won't load this skill)"
@@ -1184,7 +1175,7 @@ check_home_antigravity_drift() {
         done
         [ "$skip" -eq 1 ] && continue
         link="$ANTIGRAVITY_SKILLS/$name"
-        if [ -L "$link" ] && { [ "$(readlink "$link")" = "$entry" ] || [ "$link" -ef "$entry" ]; }; then
+        if [ -L "$link" ] && [ "$(readlink "$link")" = "$entry" ]; then
             :
         elif [ ! -e "$link" ] && [ ! -L "$link" ]; then
             echo "  ✗ MISSING: ~/.gemini/antigravity-cli/skills/$name (Antigravity won't load this skill)"
@@ -1441,11 +1432,6 @@ print_status() {
         [ -f "$cmd" ] && echo "  $(basename "$cmd")"
     done
     echo ""
-    echo "Twin personas in mirror:"
-    for persona in "$HOME_PERSONAS_DIR"/*.md; do
-        [ -f "$persona" ] && echo "  $(basename "$persona")"
-    done
-    echo ""
     echo "Home ~/.cursor/rules/ (must symlink → $HOME_RULES_DIR):"
     local any=0
     for rule in "$CURSOR_HOME"/*.mdc; do
@@ -1539,15 +1525,6 @@ print_status() {
         done
         [ "$bin_any" -eq 0 ] && echo "  (none in canonical mirror)"
     fi
-    echo ""
-    echo "Twin personas source ($HOME_PERSONAS_DIR):"
-    local persona_any=0
-    for persona in "$HOME_PERSONAS_DIR"/*.md; do
-        [ -e "$persona" ] || continue
-        persona_any=1
-        [ -f "$persona" ] && echo "  ✓ $(basename "$persona")"
-    done
-    [ "$persona_any" -eq 0 ] && echo "  ✗ missing"
     echo ""
     echo "Codex consumer (~/.codex, must mirror constitution + skills):"
     if [ ! -d "$CODEX_HOME_DIR" ]; then
