@@ -16,7 +16,7 @@ Twin becomes an independent product repository:
 
 The split follows ownership rather than file location. Everything that exists only to build, run, install, document, test, or distribute Twin belongs to the Twin repository. `dev-rules` keeps development policy and project gates; `agent-skills` keeps only skills whose owners remain there.
 
-This document is the approval anchor for removing Twin product ownership from `dev-rules`. After cutover it remains a migration decision record, while the live Twin architecture and agent contract are owned by the Twin repository.
+This document is the approval anchor for removing Twin product ownership from `dev-rules`. After cutover it remains a migration decision record, while the live Twin architecture and runtime interfaces are owned by the Twin repository.
 
 ## Why the existing design is rejected
 

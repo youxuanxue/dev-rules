@@ -76,7 +76,6 @@ fan-out 使用 `.registered-projects` 与 `.local-projects` 的并集：跨机�
 
 - `global/CLAUDE.md`：会话级硬纪律，只写 Agent 每次都要执行的短规则。
 - `rules/product-dev.mdc`：研发路径、风险分级、PR / commit 形状与完成自检。
-- `rules/agent-contract-enforcement.mdc`：WebUI / API / CLI / MCP 契约、安全基线与跨端对齐。
 - `rules/test-philosophy.mdc`：Story 与测试强度的升级条件。
 - `commands/*.md`：命令执行步骤与输出契约，不承载新的长期规则体系。
 - `README.md`：短入口索引；不展开接入细节、哲学、风险分级或测试方法。

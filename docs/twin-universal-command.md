@@ -40,4 +40,4 @@ twin run <workspace> --supervisor host/claude --json
 
 交接会递增 state revision 并写审计事件；旧 route 和旧 token 继续 fail closed。相同 route 的重复交接是幂等操作。
 
-安装检查使用 `twin doctor`。完整 host 操作契约见 `docs/twin-supervisor-runbook.md`，live CLI/schema 清单见生成文件 `docs/agent_integration.md`。
+安装检查使用 `twin doctor`。完整 host 操作说明见 `docs/twin-supervisor-runbook.md`；实时命令面以 `twin --help` 为准，schema 以仓库中的 `schemas/twin.*.schema.json` 为准。

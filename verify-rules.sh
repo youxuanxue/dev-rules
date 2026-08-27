@@ -155,12 +155,10 @@ fi
 
 section "twin host workflow has one skill owner"
 if [ ! -e "$COMMANDS_DIR/twin.md" ] && \
-   grep -Fq 'agent-skills/twin/SKILL.md' "$GLOBAL_DIR/CLAUDE.md" && \
-   ! grep -Fq 'Claude Command Surface' "$SCRIPT_DIR/docs/agent_integration.md" && \
-   ! grep -Fq 'commands/twin.md' "$SCRIPT_DIR/scripts/export_agent_contract.py"; then
+   grep -Fq 'agent-skills/twin/SKILL.md' "$GLOBAL_DIR/CLAUDE.md"; then
     ok "twin host workflow is owned only by the shared skill"
 else
-    fail "twin host workflow must not be duplicated in commands/twin.md or generated CLI docs"
+    fail "twin host workflow must not be duplicated in commands/twin.md"
 fi
 
 section "stale Claude command cleanup preserves user commands"
@@ -193,6 +191,35 @@ if (
 else
     cat /tmp/dev-rules-command-cleanup.log | sed 's/^/    /'
     fail "sync must remove only stale dev-rules-managed command symlinks"
+fi
+
+section "project rule fan-out removes retired managed rules"
+if (
+    set -eu
+    test_home="$(mktemp -d)"
+    test_canonical="$test_home/Codes/dev-rules"
+    test_project="$test_home/Codes/demo-project"
+    cleanup() {
+        rm -rf "$test_home"
+    }
+    trap cleanup EXIT
+
+    mkdir -p "$test_canonical/rules" "$test_project/.cursor/rules"
+    cp "$RULES_DIR/product-dev.mdc" "$test_canonical/rules/product-dev.mdc"
+    cp "$RULES_DIR/product-dev.mdc" "$test_project/.cursor/rules/product-dev.mdc"
+    cp "$RULES_DIR/test-philosophy.mdc" "$test_project/.cursor/rules/retired-rule.mdc"
+
+    env -u CODEX_HOME -u ANTIGRAVITY_HOME \
+        HOME="$test_home" DEV_RULES_HOME="$test_canonical" \
+        bash "$SCRIPT_DIR/sync.sh" --project "$test_project" > "$test_home/sync.log"
+
+    test -f "$test_project/.cursor/rules/product-dev.mdc"
+    test ! -e "$test_project/.cursor/rules/retired-rule.mdc"
+) > /tmp/dev-rules-retired-project-rule.log 2>&1; then
+    ok "project fan-out removes retired managed rules"
+else
+    sed 's/^/    /' /tmp/dev-rules-retired-project-rule.log
+    fail "project fan-out must remove retired managed rules"
 fi
 
 section "home skill registry is additive and owner-safe"

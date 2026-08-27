@@ -63,14 +63,13 @@ Active workspace 指针按当前项目 cwd 隔离，主路径为 `~/.twin/active
 
 ## 内部兼容入口
 
-`twin next`、`worker-turn`、`review-context`、`review` 等低层命令只保留给测试和未绑定的旧流程，不出现在公开 help 或生成契约里。Workspace 一旦绑定 route，低层 worker/review mutation 会 fail closed；host 只能走 `run` 返回的 token-bound submit command。
+`twin next`、`worker-turn`、`review-context`、`review` 等低层命令只保留给测试和未绑定的旧流程，不出现在公开 help。Workspace 一旦绑定 route，低层 worker/review mutation 会 fail closed；host 只能走 `run` 返回的 token-bound submit command。
 
 ## 验证
 
 ```bash
 twin doctor
 python3 -m scripts.twin validate --fixtures
-python3 scripts/export_agent_contract.py --check
 PREFLIGHT_BASE=origin/main bash scripts/preflight.sh
 ```
 

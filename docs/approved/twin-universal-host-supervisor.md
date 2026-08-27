@@ -16,11 +16,11 @@ Deliver one universal twin host-supervisor path. Codex must be able to supervise
 - `twin run <workspace> --supervisor host/<provider>` drives deterministic actions until host judgment, a bounded wait, a human gate, or a terminal state is reached.
 - The CLI action payload is self-describing. It includes bounded context, the expected decision shape, state revision, one-time action token, and the exact deterministic submission command.
 - `agent-skills/twin/SKILL.md` is the single host-workflow owner. Claude `/twin`, Codex `$twin`, and Antigravity consume that same skill through the symlinks managed by `sync.sh`.
-- The generated Agent contract owns only live CLI and schema inventories; it does not copy a host-specific command surface.
+- Live CLI discovery comes from `twin --help`; schemas remain versioned files and are validated directly.
 - Host providers initially include `claude`, `codex`, and `antigravity`. The current host performs only instruction and review judgment; Python owns validation and artifact mutation.
 - Supervisor route is persisted. A different route cannot silently submit a decision. Legacy workspaces bind lazily on their first universal `twin run`.
 - `twin handoff <workspace> --supervisor host/<provider>` is the only route-transfer path. It requires no pending action, holds the workspace driver lock, advances the state revision, and writes an audit event. Same-route handoff is idempotent; the old route and tokens remain invalid.
-- Route-bound workspaces reject low-level worker/review mutation outside the driver submission protocol. Compatibility commands remain callable for unbound legacy/test flows but are hidden from public help and the generated Agent contract.
+- Route-bound workspaces reject low-level worker/review mutation outside the driver submission protocol. Compatibility commands remain callable for unbound legacy/test flows but are hidden from public help.
 - State revisions and action tokens reject stale, duplicate, wrong-action, wrong-run, and cross-workspace submissions.
 - Existing worker routing remains unchanged: `claude_headless`, direct `local_cli`, or optional CAO.
 
@@ -41,7 +41,7 @@ Deliver one universal twin host-supervisor path. Codex must be able to supervise
 ## Validation
 
 - Python 3.9 and 3.12 fixture suites.
-- Real launcher and generated Agent contract checks.
+- Real launcher, CLI help, and schema checks.
 - Shared-skill loading and stale Claude command cleanup checks.
 - Codex host protocol smoke over an isolated fixture workspace.
 - Negative tests for stale revision, duplicate token, route drift, wrong run, and legacy workspace binding.

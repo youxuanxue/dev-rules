@@ -702,6 +702,24 @@ sync_to_project() {
         fi
     done
 
+    # .cursor/rules is a managed mirror: check_project_drift already treats any
+    # rule missing from the canonical source as an orphan. Reconcile the same
+    # invariant during fan-out so deleting a canonical rule also removes every
+    # generated project copy instead of leaving stale Agent instructions.
+    for target in "$target_rules"/*.mdc; do
+        [ -f "$target" ] || continue
+        local basename
+        basename="$(basename "$target")"
+        if [ ! -f "$source_rules_dir/$basename" ]; then
+            unlink "$target" || {
+                echo "  FAIL: unable to remove retired rule $target" >&2
+                return 1
+            }
+            echo "  removed retired rule: $basename → $(basename "$project_dir")"
+            changed=1
+        fi
+    done
+
     if [ "$changed" -eq 0 ]; then
         echo "  ok: $(basename "$project_dir") (all rules up to date)"
     fi

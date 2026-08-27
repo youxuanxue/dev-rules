@@ -976,25 +976,6 @@ def _driver_protocol_errors(root: Path) -> list[str]:
     for internal_command in ("next", "watch", "supervisor-context", "worker-turn", "review-context", "validate"):
         if any(line.startswith(f"    {internal_command}") for line in help_lines):
             errors.append(f"twin help must hide internal command {internal_command!r}")
-    from scripts.export_agent_contract import _twin_cli_rows
-
-    contract_commands = {row[0] for row in _twin_cli_rows()}
-    expected_contract_commands = {
-        "twin bootstrap",
-        "twin doctor",
-        "twin handoff",
-        "twin respond",
-        "twin run",
-        "twin scaffold",
-        "twin status",
-        "twin submit-instruction",
-        "twin submit-review",
-    }
-    if contract_commands != expected_contract_commands:
-        errors.append(
-            "generated Agent contract command surface drifted: "
-            f"expected={sorted(expected_contract_commands)!r} actual={sorted(contract_commands)!r}"
-        )
     return errors
 
 
@@ -1038,7 +1019,7 @@ def _behavior_helper_errors() -> list[str]:
     if slugify_goal("纯中文目标") != "twin-goal-fc22c137e7":
         errors.append("Chinese-only goal slugs must be stable across Python processes")
     changed = changed_files_from_status(
-        " M docs/agent_integration.md\n"
+        " M docs/twin-design.md\n"
         " M pyproject.toml\n"
         " M tests/test_entry_runtimes.py\n"
         "?? .wtree-session.json\n"
@@ -1046,7 +1027,7 @@ def _behavior_helper_errors() -> list[str]:
         "R  old/path.py -> new/path.py\n"
     )
     expected = [
-        "docs/agent_integration.md",
+        "docs/twin-design.md",
         "pyproject.toml",
         "tests/test_entry_runtimes.py",
         "zw_brain/shared/iaf_oidc.py",

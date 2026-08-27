@@ -32,8 +32,6 @@
 
 任务拆解仅在高风险路径下走 Claude Code 原生 plan mode（落到 `docs/approved/*`，参见 `rules/product-dev.mdc` §高风险路径）；低/常规风险直接执行，不进 plan mode。
 
-Agent-facing CLI 与 artifact 契约以 `docs/agent_integration.md` 为导航入口，由 `scripts/export_agent_contract.py` 从 live code 生成；禁止在 `AGENTS.md` 复制命令清单。
-
 新增命令编辑 `dev-rules/commands/*.md`，运行 `dev-rules/sync.sh` 后立即在所有会话生效（symlink）。
 
 Agent Skills 只在 `.cursor/skills/` 编辑与提交；`.claude/skills` 只能是指向 `.cursor/skills` 的 symlink，禁止创建真实副本（否则 Claude Code 看不到 skill）。该 symlink 由 `sync.sh` 确定性维护（home 层 `~/.claude/skills`、项目 fan-out 层 `<project>/.claude/skills`）并经 `--check` 校验，不靠人工建链；细则见 `rules/dev-rules-convention.mdc`。

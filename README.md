@@ -8,7 +8,6 @@
 | --- | --- |
 | `rules/dev-rules-convention.mdc` | `dev-rules` submodule 约定、同步顺序、接入方式 |
 | `rules/product-dev.mdc` | 默认单 PR、高风险升级路径、PR / commit 形状、自检纪律 |
-| `rules/agent-contract-enforcement.mdc` | WebUI / API / CLI / MCP 契约同步、安全基线、跨端对齐 |
 | `rules/test-philosophy.mdc` | 按风险匹配 Story 强度、测试设计、Story ↔ Test 对齐 |
 
 ## twin 入口
@@ -35,7 +34,7 @@
 | `sync.sh --pull` | 仅从 canonical `main` 拉取 `origin/main`，再 fan-out 到本机已落地项目；非 `main` fail-closed |
 | `sync.sh --check` | 检查项目 `.cursor/rules/` 与 submodule 是否 drift |
 | `verify-rules.sh` | 验证 dev-rules 仓库自身完整性 |
-| `templates/install-hooks.sh` | 安装 pre-commit + commit-msg hook（后者硬拦高风险锚点 / 契约删除公告缺失） |
+| `templates/install-hooks.sh` | 安装 pre-commit + commit-msg hook（后者硬拦高风险锚点缺失） |
 | `templates/preflight.sh` | 消费项目默认门禁模板 |
 | `scripts/preflight.sh` | dev-rules 源仓库自己的提交门禁 |
 | `schemas/review.schema.json` | `/user:xj-review` 输出契约 |
@@ -46,11 +45,8 @@
 | `docs/twin-supervisor-runbook.md` | supervisor 每轮调用契约 |
 | `docs/twin-cao-operator-guide.md` | CAO/Codex worker 的安装、路由、验证和排障指南 |
 | `docs/twin-universal-command.md` | twin 三端通用 CLI 与 host supervisor 决策 |
-| `docs/agent_integration.md` | 从 live twin CLI 与 schemas 生成的 Agent 集成契约 |
 | `templates/twin-workspace/` | 三端共用的 twin workspace 起点模板 |
 | `global/CLAUDE.md` | Claude Code 全局工作宪法 |
-
-Agent 契约变更后运行 `python3 scripts/export_agent_contract.py`，并用 `python3 scripts/export_agent_contract.py --check` 检查漂移；`docs/agent_integration.md` 禁止手工编辑。
 
 ## 接入与日常使用
 

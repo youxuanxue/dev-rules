@@ -34,14 +34,6 @@ else
     fail "./sync-stats.sh missing or not executable"
 fi
 
-section "agent contract export"
-if python3 scripts/export_agent_contract.py --check > /tmp/dev-rules-agent-contract.log 2>&1; then
-    ok "generated agent contract matches live CLI and schemas"
-else
-    cat /tmp/dev-rules-agent-contract.log | sed 's/^/    /'
-    fail "agent contract drift (run: python3 scripts/export_agent_contract.py)"
-fi
-
 section "twin fixtures (schema, privacy, dry-run)"
 # Scrub GIT_* env so the fixture's nested `git init/add/commit` inside a
 # TemporaryDirectory does not leak into the parent repo when this script

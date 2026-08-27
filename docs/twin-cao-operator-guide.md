@@ -170,7 +170,6 @@ twin 每轮创建 fresh CAO terminal，使用 `teardown=true`，并在 `run.json
 ```bash
 twin validate --fixtures
 python3 scripts/twin/worktree.py
-python3 scripts/export_agent_contract.py --check
 ./scripts/preflight.sh
 ```
 

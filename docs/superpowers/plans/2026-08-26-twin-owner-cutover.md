@@ -293,10 +293,6 @@ Expected: all runtime artifacts are under `~/.twin/workspaces`; the disposable t
 - Delete: `/Users/feng/Codes/dev-rules/docs/approved/twin-universal-host-supervisor.md`
 - Delete: `/Users/feng/Codes/dev-rules/.testing/user-stories/stories/US-088-twin-universal-runtime.md`
 - Delete: `/Users/feng/Codes/dev-rules/.testing/user-stories/verify_quality.py`
-- Delete if Twin-only: `/Users/feng/Codes/dev-rules/.github/workflows/agent-contract.yml`
-- Modify or delete: `/Users/feng/Codes/dev-rules/scripts/export_agent_contract.py`
-- Modify or delete: `/Users/feng/Codes/dev-rules/docs/agent_contract.notes.md`
-- Modify or delete: `/Users/feng/Codes/dev-rules/docs/agent_integration.md`
 - Modify: `/Users/feng/Codes/dev-rules/scripts/gen_codex_agents.py`
 - Modify: `/Users/feng/Codes/dev-rules/scripts/preflight.sh`
 - Modify: `/Users/feng/Codes/dev-rules/verify-rules.sh`
@@ -346,7 +342,7 @@ Use `git rm` with the exact paths listed in this task. Do not use broad filesyst
 
 - [ ] **Step 5: Remove Twin-specific generator and gate branches**
 
-Delete `_twin_cli_rows()`, Twin schema enumeration, Twin sections in generated Agent integration, Twin-specific AGENTS navigation, fixture/story checks, persona checks, worktree selftests, launcher documentation, and special hook comments/branches. If `scripts/export_agent_contract.py` and its two docs have no non-Twin responsibility after removal, delete all three rather than inventing a new purpose.
+Delete Twin-specific AGENTS navigation, fixture/story checks, persona checks, worktree selftests, launcher documentation, and special hook comments/branches.
 
 Keep the generic additive skill reconciler from Task 1. Do not add a special exclusion named `twin`; ownership isolation must come from source-root reconciliation, not product-name conditionals.
 
@@ -505,7 +501,7 @@ git -C dev-rules checkout --detach "$dev_rules_removal_sha"
 test "$(git -C dev-rules rev-parse HEAD)" = "$dev_rules_removal_sha"
 python3 dev-rules/scripts/gen_codex_agents.py --project "$PWD"
 python3 dev-rules/scripts/gen_codex_agents.py --project "$PWD" --check
-! rg -n 'twin.*dev-rules/docs/agent_integration|dev-rules.*twin|shared twin' AGENTS.md
+! rg -n 'dev-rules.*twin|shared twin' AGENTS.md
 ```
 
 Expected: the gitlink points to the merged dev-rules removal commit and the generated managed block no longer advertises Twin through dev-rules. Do not hand-edit the managed block.

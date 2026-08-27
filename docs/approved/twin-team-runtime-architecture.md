@@ -13,7 +13,7 @@ Build a real Agent team by separating governance, execution, capabilities, and v
 ## Approved architecture
 
 - `twin` owns goals, bounded plans, supervisor review, artifact state, and human gates.
-- `wtree.py` is the only worktree implementation. `wts` remains the human wrapper and `git-worktree-submodule` remains the Agent contract.
+- `wtree.py` is the only worktree implementation. `wts` remains the human wrapper and `git-worktree-submodule` remains the Agent worktree interface.
 - Worker execution is selected through a backend interface. Claude headless remains the default; `local_cli` directly runs installed Claude/Codex/Gemini CLIs, while CAO supplies remote, profile-managed and long-tail multi-provider execution through `POST /terminals/run-step`.
 - Claude Dynamic Workflow is an optional read-only research accelerator. It produces a sourced `research.yaml`; the twin supervisor remains responsible for the final `goal.yaml` and `plan.yaml`.
 - Skills and MCP tools provide specialist capabilities. Tests, preflight, and independent review remain the evidence-based verification layer.
