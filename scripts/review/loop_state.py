@@ -29,7 +29,7 @@ human-intervention point the project's determinism-automation principle
 reserves (global CLAUDE.md §1, product-dev §180). low/normal push
 autonomously.
 
-CLI mirrors `python3 -m scripts.twin`: argparse subcommands, `key=value`
+CLI uses argparse subcommands and `key=value`
 stdout lines the model forwards verbatim, `--json` for machine reads.
 Exit codes: 0 = verdict=continue, 1 = verdict=halt (stop-the-line),
 2 = usage/IO error. `selftest` exits 0 on pass, 1 on failure.

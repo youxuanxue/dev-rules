@@ -115,53 +115,39 @@ else
     ok ".cursor/skills -> ../../agent-skills"
 fi
 
-# ── twin persona files present ─────────────────────────────────────────
-# personas/ is the single source of truth for supervisor + worker persona.
-# Missing files break the twin harness silently, so assert them here.
-section "twin persona files present"
-for required in personas/supervisor-persona.md personas/worker-persona.md; do
-    if [ -f "$SCRIPT_DIR/$required" ]; then
-        ok "$required"
-    else
-        fail "$required missing"
-    fi
-done
-
-section "twin workspace does not own persona"
-if grep -R "persona snapshot\|copy the persona\|workspace / \"worker-persona.md\"\|workspace / \"supervisor-persona.md\"\|read_text_file" \
-        "$SCRIPT_DIR/scripts/twin" "$SCRIPT_DIR/docs" "$SCRIPT_DIR/schemas" \
-        > /dev/null 2>&1; then
-    fail "twin must use DEV_RULES/personas persona files directly, not workspace persona snapshots"
-else
-    ok "twin runtime/docs do not require workspace persona snapshots"
-fi
-
-section "twin persona source path"
-old_persona_path_found=0
-persona_scan_files=("$SCRIPT_DIR/sync.sh" "$SCRIPT_DIR/.gitignore")
-while IFS= read -r file; do
-    persona_scan_files+=("$file")
-done < <(find "$SCRIPT_DIR/scripts/twin" "$SCRIPT_DIR/docs" -type f ! -name '*.pyc' ! -path '*/__pycache__/*')
-for forbidden in "~/.xuejiao-twin" ".xuejiao-twin" "secure-twin-persona" "TWIN_HOME"; do
-    if grep -F "$forbidden" "${persona_scan_files[@]}" > /dev/null 2>&1; then
-        old_persona_path_found=1
-    fi
-done
-if [ "$old_persona_path_found" -eq 1 ]; then
-    fail "twin must not use ~/.xuejiao-twin or secure persona snapshots; use DEV_RULES/personas directly"
-else
-    ok "twin uses DEV_RULES/personas directly"
-fi
-
-section "twin host workflow has one skill owner"
-if [ ! -e "$COMMANDS_DIR/twin.md" ] && \
-   grep -Fq 'agent-skills/twin/SKILL.md' "$GLOBAL_DIR/CLAUDE.md" && \
-   ! grep -Fq 'Claude Command Surface' "$SCRIPT_DIR/docs/agent_integration.md" && \
-   ! grep -Fq 'commands/twin.md' "$SCRIPT_DIR/scripts/export_agent_contract.py"; then
-    ok "twin host workflow is owned only by the shared skill"
-else
-    fail "twin host workflow must not be duplicated in commands/twin.md or generated CLI docs"
-fi
+# ── product-owner residue ─────────────────────────────────────────────
+# The approved migration record and its implementation plans intentionally
+# retain historical context; all other tracked content must be product-neutral.
+section "product-owner residue"
+product_word='twin'
+product_heading='Twin'
+persona_suffix='persona'
+owner_patterns=(
+    "scripts/$product_word"
+    "schemas/$product_word\\."
+    "global/bin/$product_word"
+    "agent-skills/$product_word"
+    "$product_word doctor"
+    "$product_word run"
+    "supervisor-$persona_suffix"
+    "worker-$persona_suffix"
+    "$product_heading (CLI|Artifact Schemas|Agent Contract)"
+)
+while IFS= read -r -d '' tracked; do
+    case "$tracked" in
+        docs/approved/remove-twin-product-ownership.md|\
+        docs/superpowers/plans/2026-08-26-twin-independent-repository.md|\
+        docs/superpowers/plans/2026-08-26-twin-owner-cutover.md)
+            continue
+            ;;
+    esac
+    [ -f "$SCRIPT_DIR/$tracked" ] || continue
+    for owner_pattern in "${owner_patterns[@]}"; do
+        if grep -Eiq -- "$owner_pattern" "$SCRIPT_DIR/$tracked"; then
+            fail "$tracked contains retired product-owner residue: $owner_pattern"
+        fi
+    done
+done < <(git -C "$SCRIPT_DIR" ls-files -z)
 
 section "stale Claude command cleanup preserves user commands"
 if (
@@ -176,7 +162,7 @@ if (
     mkdir -p "$test_canonical/commands" "$test_home/.claude/commands"
     touch "$test_canonical/commands/keep.md" "$test_home/user-command.md"
     ln -s "$test_canonical/commands/keep.md" "$test_home/.claude/commands/keep.md"
-    ln -s "$test_canonical/commands/twin.md" "$test_home/.claude/commands/twin.md"
+    ln -s "$test_canonical/commands/removed.md" "$test_home/.claude/commands/removed.md"
     ln -s "$test_home/user-command.md" "$test_home/.claude/commands/user.md"
     ln -s "$test_home/missing-command.md" "$test_home/.claude/commands/user-dangling.md"
 
@@ -184,7 +170,7 @@ if (
         HOME="$test_home" DEV_RULES_HOME="$test_canonical" \
         bash "$SCRIPT_DIR/sync.sh" > "$test_home/sync.log"
 
-    test ! -L "$test_home/.claude/commands/twin.md"
+    test ! -L "$test_home/.claude/commands/removed.md"
     test "$(readlink "$test_home/.claude/commands/keep.md")" = "$test_canonical/commands/keep.md"
     test "$(readlink "$test_home/.claude/commands/user.md")" = "$test_home/user-command.md"
     test "$(readlink "$test_home/.claude/commands/user-dangling.md")" = "$test_home/missing-command.md"
@@ -228,10 +214,10 @@ if (
     assert test "$(readlink "$test_home/.claude/skills")" = "$test_home/.cursor/skills"
 
     # Phase B: preserve foreign and local registry entries on later reconciles.
-    mkdir -p "$test_home/.twin/skills/twin" "$test_home/.cursor/skills/local-user"
-    touch "$test_home/.twin/skills/twin/SKILL.md"
-    ln -s "$test_home/.twin/skills/twin" "$test_home/.cursor/skills/twin"
-    foreign_twin_target="$(readlink "$test_home/.cursor/skills/twin")"
+    mkdir -p "$test_home/.foreign/skills/independent" "$test_home/.cursor/skills/local-user"
+    touch "$test_home/.foreign/skills/independent/SKILL.md"
+    ln -s "$test_home/.foreign/skills/independent" "$test_home/.cursor/skills/independent"
+    foreign_skill_target="$(readlink "$test_home/.cursor/skills/independent")"
 
     env -u CODEX_HOME -u ANTIGRAVITY_HOME \
         HOME="$test_home" DEV_RULES_HOME="$test_canonical" \
@@ -240,7 +226,7 @@ if (
     assert test -d "$test_home/.cursor/skills"
     assert test ! -L "$test_home/.cursor/skills"
     assert test "$(readlink "$test_home/.cursor/skills/demo")" = "$test_agent_skills/demo"
-    assert test "$(readlink "$test_home/.cursor/skills/twin")" = "$foreign_twin_target"
+    assert test "$(readlink "$test_home/.cursor/skills/independent")" = "$foreign_skill_target"
     assert test -d "$test_home/.cursor/skills/local-user"
     assert test ! -L "$test_home/.cursor/skills/local-user"
     assert test "$(readlink "$test_home/.claude/skills")" = "$test_home/.cursor/skills"
@@ -249,6 +235,49 @@ if (
 else
     cat /tmp/dev-rules-additive-skill-registry.log | sed 's/^/    /'
     fail "sync must materialize an additive home skill registry without replacing foreign entries"
+fi
+
+section "owned skill links use direct source spellings"
+if (
+    set -eu
+    test_home="$(mktemp -d)"
+    source_link="$(readlink "$SCRIPT_DIR/.cursor/skills")"
+    source="$(cd -L "$(dirname "$SCRIPT_DIR/.cursor/skills")/$source_link" && pwd -L)"
+    skill_name="xj-review"
+    cleanup() {
+        rm -rf "$test_home"
+    }
+    trap cleanup EXIT
+
+    test -f "$source/$skill_name/SKILL.md"
+    mkdir -p "$test_home/.alias" "$test_home/.cursor/skills"
+    ln -s "$source/$skill_name" "$test_home/.alias/$skill_name"
+    ln -s "$test_home/.alias/$skill_name" "$test_home/.cursor/skills/$skill_name"
+
+    env -u CODEX_HOME -u ANTIGRAVITY_HOME \
+        HOME="$test_home" DEV_RULES_HOME="$SCRIPT_DIR" \
+        bash "$SCRIPT_DIR/sync.sh" > "$test_home/reconcile.log"
+
+    actual="$(readlink "$test_home/.cursor/skills/$skill_name")"
+    if [ "$actual" != "$source/$skill_name" ]; then
+        echo "indirect alias was not canonicalized: $actual" >&2
+        exit 1
+    fi
+
+    unlink "$test_home/.cursor/skills/$skill_name"
+    ln -s "$test_home/.alias/$skill_name" "$test_home/.cursor/skills/$skill_name"
+    if env -u CODEX_HOME -u ANTIGRAVITY_HOME \
+        HOME="$test_home" DEV_RULES_HOME="$SCRIPT_DIR" \
+        bash "$SCRIPT_DIR/sync.sh" --check > "$test_home/alias-drift.log" 2>&1; then
+        echo "expected drift check to reject an indirect owned alias" >&2
+        exit 1
+    fi
+    grep -Fq "WRONG: ~/.cursor/skills/$skill_name" "$test_home/alias-drift.log"
+) > /tmp/dev-rules-skill-link-spelling.log 2>&1; then
+    ok "sync canonicalizes owned skill links and drift rejects indirect aliases"
+else
+    cat /tmp/dev-rules-skill-link-spelling.log | sed 's/^/    /'
+    fail "owned skill links must use their direct configured source spelling"
 fi
 
 section "home skill registry fails closed on foreign ownership collisions"
@@ -397,14 +426,6 @@ else
     fail "sync must fail closed for unsafe Cursor, Codex, and Antigravity skill roots"
 fi
 
-section "twin persona source is read-only"
-if grep -q 'disallowed_tools=worker_disallowed_tools()' "$SCRIPT_DIR/scripts/twin/worker.py" && \
-   grep -q 'Self-verification before accepted_done' "$PERSONAS_DIR/supervisor-persona.md"; then
-    ok "worker denies persona source writes and supervisor self-verifies before accepted_done"
-else
-    fail "twin worker must deny persona writes and supervisor persona must include Self-verification section"
-fi
-
 section "global hook self-tests"
 if python3 "$GLOBAL_DIR/hooks/gh-pr-guard.py" --self-test > /tmp/dev-rules-gh-pr-guard.log 2>&1; then
     ok "gh-pr-guard.py self-test"
@@ -516,19 +537,6 @@ if [ -d "$GLOBAL_DIR/bin" ]; then
 fi
 if [ "$LAUNCHER_TESTED" = "0" ]; then
     ok "no global/bin launcher exposes --self-test mode"
-fi
-
-# ── twin worktree isolation self-test ─────────────────────────────────
-# worktree.py runs its assertions when invoked directly (no --self-test
-# flag), so the generic check_*/gen_* loop above does not reach it. Run it
-# explicitly: it exercises deterministic path/branch derivation, the env gate,
-# shared wtree.py create/reuse, fail-closed resolution, and safe cleanup.
-section "twin worktree isolation self-test"
-if python3 "$SCRIPT_DIR/scripts/twin/worktree.py" > /tmp/dev-rules-twin-worktree.log 2>&1; then
-    ok "scripts/twin/worktree.py selftest"
-else
-    sed 's/^/    /' /tmp/dev-rules-twin-worktree.log
-    fail "scripts/twin/worktree.py selftest failed"
 fi
 
 # ── LaunchAgent reality matches doc promise (macOS dev only) ───────────
