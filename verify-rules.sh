@@ -115,39 +115,84 @@ else
     ok ".cursor/skills -> ../../agent-skills"
 fi
 
+product_owner_residue() {
+    local root="$1" product_word='twin' product_heading='Twin' persona_suffix='persona'
+    local tracked owner_pattern violations=0
+    local owner_patterns=(
+        "scripts/$product_word"
+        "schemas/$product_word\\."
+        "global/bin/$product_word"
+        "agent-skills/$product_word"
+        "$product_word doctor"
+        "$product_word run"
+        "supervisor-$persona_suffix"
+        "worker-$persona_suffix"
+        "$product_heading (CLI|Artifact Schemas|Agent Contract)"
+    )
+    while IFS= read -r -d '' tracked; do
+        case "$tracked" in
+            docs/approved/remove-twin-product-ownership.md|\
+            docs/superpowers/plans/2026-08-26-twin-independent-repository.md|\
+            docs/superpowers/plans/2026-08-26-twin-owner-cutover.md)
+                continue
+                ;;
+        esac
+        for owner_pattern in "${owner_patterns[@]}"; do
+            if printf '%s\n' "$tracked" | grep -Eiq -- "$owner_pattern"; then
+                printf '%s contains retired product-owner residue: %s\n' "$tracked" "$owner_pattern"
+                violations=1
+                continue
+            fi
+            [ -f "$root/$tracked" ] || continue
+            if grep -Eiq -- "$owner_pattern" "$root/$tracked"; then
+                printf '%s contains retired product-owner residue: %s\n' "$tracked" "$owner_pattern"
+                violations=1
+            fi
+        done
+    done < <(git -C "$root" ls-files -z)
+    return "$violations"
+}
+
 # ── product-owner residue ─────────────────────────────────────────────
 # The approved migration record and its implementation plans intentionally
 # retain historical context; all other tracked content must be product-neutral.
 section "product-owner residue"
-product_word='twin'
-product_heading='Twin'
-persona_suffix='persona'
-owner_patterns=(
-    "scripts/$product_word"
-    "schemas/$product_word\\."
-    "global/bin/$product_word"
-    "agent-skills/$product_word"
-    "$product_word doctor"
-    "$product_word run"
-    "supervisor-$persona_suffix"
-    "worker-$persona_suffix"
-    "$product_heading (CLI|Artifact Schemas|Agent Contract)"
-)
-while IFS= read -r -d '' tracked; do
-    case "$tracked" in
-        docs/approved/remove-twin-product-ownership.md|\
-        docs/superpowers/plans/2026-08-26-twin-independent-repository.md|\
-        docs/superpowers/plans/2026-08-26-twin-owner-cutover.md)
-            continue
-            ;;
-    esac
-    [ -f "$SCRIPT_DIR/$tracked" ] || continue
-    for owner_pattern in "${owner_patterns[@]}"; do
-        if grep -Eiq -- "$owner_pattern" "$SCRIPT_DIR/$tracked"; then
-            fail "$tracked contains retired product-owner residue: $owner_pattern"
-        fi
-    done
-done < <(git -C "$SCRIPT_DIR" ls-files -z)
+product_residue_log="$(mktemp)"
+if product_owner_residue "$SCRIPT_DIR" > "$product_residue_log"; then
+    ok "tracked paths and file contents are product-neutral"
+else
+    while IFS= read -r residue; do
+        fail "$residue"
+    done < "$product_residue_log"
+fi
+unlink "$product_residue_log"
+
+section "product-owner residue detects tracked paths"
+if (
+    set -eu
+    fixture="$(mktemp -d)"
+    fixture_product='twin'
+    fixture_path="scripts/$fixture_product/new.py"
+    cleanup() {
+        rm -rf "$fixture"
+    }
+    trap cleanup EXIT
+
+    mkdir -p "$fixture/$(dirname "$fixture_path")"
+    : > "$fixture/$fixture_path"
+    git -C "$fixture" init -q
+    git -C "$fixture" add -- "$fixture_path"
+    if product_owner_residue "$fixture" > "$fixture/residue.log"; then
+        echo "expected tracked product-owner pathname to fail" >&2
+        exit 1
+    fi
+    grep -Fq "$fixture_path contains retired product-owner residue" "$fixture/residue.log"
+) > /tmp/dev-rules-product-owner-path.log 2>&1; then
+    ok "product-owner residue gate rejects empty tracked matching paths"
+else
+    cat /tmp/dev-rules-product-owner-path.log | sed 's/^/    /'
+    fail "product-owner residue gate must inspect tracked pathnames before contents"
+fi
 
 section "stale Claude command cleanup preserves user commands"
 if (
@@ -241,22 +286,27 @@ section "owned skill links use direct source spellings"
 if (
     set -eu
     test_home="$(mktemp -d)"
-    source_link="$(readlink "$SCRIPT_DIR/.cursor/skills")"
-    source="$(cd -L "$(dirname "$SCRIPT_DIR/.cursor/skills")/$source_link" && pwd -L)"
-    skill_name="xj-review"
+    test_canonical="$test_home/Codes/dev-rules"
+    test_agent_skills="$test_home/Codes/agent-skills"
+    source="$test_agent_skills"
+    skill_name="demo"
     cleanup() {
         rm -rf "$test_home"
     }
     trap cleanup EXIT
 
+    mkdir -p "$test_agent_skills/$skill_name" "$test_canonical/.cursor" \
+        "$test_home/.alias" "$test_home/.cursor/skills"
+    touch "$test_agent_skills/$skill_name/SKILL.md"
+    ln -s "$test_agent_skills" "$test_canonical/.cursor/skills"
+    ln -s "$SCRIPT_DIR/sync.sh" "$test_canonical/sync.sh"
     test -f "$source/$skill_name/SKILL.md"
-    mkdir -p "$test_home/.alias" "$test_home/.cursor/skills"
     ln -s "$source/$skill_name" "$test_home/.alias/$skill_name"
     ln -s "$test_home/.alias/$skill_name" "$test_home/.cursor/skills/$skill_name"
 
     env -u CODEX_HOME -u ANTIGRAVITY_HOME \
-        HOME="$test_home" DEV_RULES_HOME="$SCRIPT_DIR" \
-        bash "$SCRIPT_DIR/sync.sh" > "$test_home/reconcile.log"
+        HOME="$test_home" DEV_RULES_HOME="$test_canonical" \
+        bash "$test_canonical/sync.sh" > "$test_home/reconcile.log"
 
     actual="$(readlink "$test_home/.cursor/skills/$skill_name")"
     if [ "$actual" != "$source/$skill_name" ]; then
@@ -267,8 +317,8 @@ if (
     unlink "$test_home/.cursor/skills/$skill_name"
     ln -s "$test_home/.alias/$skill_name" "$test_home/.cursor/skills/$skill_name"
     if env -u CODEX_HOME -u ANTIGRAVITY_HOME \
-        HOME="$test_home" DEV_RULES_HOME="$SCRIPT_DIR" \
-        bash "$SCRIPT_DIR/sync.sh" --check > "$test_home/alias-drift.log" 2>&1; then
+        HOME="$test_home" DEV_RULES_HOME="$test_canonical" \
+        bash "$test_canonical/sync.sh" --check > "$test_home/alias-drift.log" 2>&1; then
         echo "expected drift check to reject an indirect owned alias" >&2
         exit 1
     fi
