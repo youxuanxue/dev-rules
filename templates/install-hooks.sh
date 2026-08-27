@@ -10,7 +10,7 @@
 #   2. $REPO_ROOT/dev-rules/templates/preflight.sh  ← dev-rules 模板（通用检查段，见模板文件头）
 #
 # 固定 hook：
-#   commit-msg — token 类门禁（高风险锚点、契约删除公告）的硬拦截点。
+#   commit-msg — 高风险审批锚点的硬拦截点。
 #   pre-commit 结构上读不到待提交 message（COMMIT_EDITMSG 此时还是上一条），
 #   commit-msg 是本地唯一同时知道 staged paths + message 的阶段，
 #   token 缺失在这里被硬拦截而不是等到 CI。

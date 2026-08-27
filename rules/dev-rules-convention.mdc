@@ -20,10 +20,9 @@ alwaysApply: true
 └── .git/hooks/{pre-commit,commit-msg} ← install-hooks.sh 安装；pre-commit 按
                                         scripts/preflight.sh
                                         → dev-rules/templates/preflight.sh fallback；
-                                        commit-msg 直跑 token 类检查（高风险锚点、
-                                        契约删除公告）——唯一同时知道 staged paths
-                                        + 待提交 message 的本地阶段，token 缺失
-                                        在此硬拦截
+                                        commit-msg 直跑高风险审批锚点检查——唯一同时
+                                        知道 staged paths + 待提交 message 的本地阶段，
+                                        token 缺失在此硬拦截
 
 家目录消费端（由 `sync.sh` 维护；除 additive registry 外为 symlink）：
 ~/.cursor/rules/      → dev-rules/rules/
