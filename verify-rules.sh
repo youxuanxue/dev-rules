@@ -195,6 +195,102 @@ else
     fail "sync must remove only stale dev-rules-managed command symlinks"
 fi
 
+section "home skill registry is additive and owner-safe"
+if (
+    set -eu
+    test_home="$(mktemp -d)"
+    test_canonical="$test_home/Codes/dev-rules"
+    test_agent_skills="$test_home/Codes/agent-skills"
+    assert() {
+        "$@" || exit 1
+    }
+    cleanup() {
+        rm -rf "$test_home"
+    }
+    trap cleanup EXIT
+
+    mkdir -p "$test_agent_skills/demo" "$test_canonical/.cursor" \
+        "$test_home/.cursor" "$test_home/.claude"
+    touch "$test_agent_skills/demo/SKILL.md"
+
+    # Phase A: migrate the pure legacy chain to an additive registry.
+    ln -s "$test_agent_skills" "$test_canonical/.cursor/skills"
+    ln -s "$test_canonical/.cursor/skills" "$test_home/.cursor/skills"
+    ln -s "$test_home/.cursor/skills" "$test_home/.claude/skills"
+
+    env -u CODEX_HOME -u ANTIGRAVITY_HOME \
+        HOME="$test_home" DEV_RULES_HOME="$test_canonical" \
+        bash "$SCRIPT_DIR/sync.sh" > "$test_home/phase-a.log"
+
+    assert test -d "$test_home/.cursor/skills"
+    assert test ! -L "$test_home/.cursor/skills"
+    assert test "$(readlink "$test_home/.cursor/skills/demo")" = "$test_agent_skills/demo"
+    assert test "$(readlink "$test_home/.claude/skills")" = "$test_home/.cursor/skills"
+
+    # Phase B: preserve foreign and local registry entries on later reconciles.
+    mkdir -p "$test_home/.twin/skills/twin" "$test_home/.cursor/skills/local-user"
+    touch "$test_home/.twin/skills/twin/SKILL.md"
+    ln -s "$test_home/.twin/skills/twin" "$test_home/.cursor/skills/twin"
+    foreign_twin_target="$(readlink "$test_home/.cursor/skills/twin")"
+
+    env -u CODEX_HOME -u ANTIGRAVITY_HOME \
+        HOME="$test_home" DEV_RULES_HOME="$test_canonical" \
+        bash "$SCRIPT_DIR/sync.sh" > "$test_home/phase-b.log"
+
+    assert test -d "$test_home/.cursor/skills"
+    assert test ! -L "$test_home/.cursor/skills"
+    assert test "$(readlink "$test_home/.cursor/skills/demo")" = "$test_agent_skills/demo"
+    assert test "$(readlink "$test_home/.cursor/skills/twin")" = "$foreign_twin_target"
+    assert test -d "$test_home/.cursor/skills/local-user"
+    assert test ! -L "$test_home/.cursor/skills/local-user"
+    assert test "$(readlink "$test_home/.claude/skills")" = "$test_home/.cursor/skills"
+) > /tmp/dev-rules-additive-skill-registry.log 2>&1; then
+    ok "sync materializes the additive home skill registry and preserves foreign entries"
+else
+    cat /tmp/dev-rules-additive-skill-registry.log | sed 's/^/    /'
+    fail "sync must materialize an additive home skill registry without replacing foreign entries"
+fi
+
+section "home skill registry fails closed on foreign ownership collisions"
+if (
+    set -eu
+    test_home="$(mktemp -d)"
+    test_canonical="$test_home/Codes/dev-rules"
+    test_agent_skills="$test_home/Codes/agent-skills"
+    assert() {
+        "$@" || exit 1
+    }
+    cleanup() {
+        rm -rf "$test_home"
+    }
+    trap cleanup EXIT
+
+    mkdir -p "$test_agent_skills/collision" "$test_canonical/.cursor" \
+        "$test_home/.cursor/skills" "$test_home/.foreign/collision"
+    printf 'dev-rules skill\n' > "$test_agent_skills/collision/SKILL.md"
+    printf 'foreign skill\n' > "$test_home/.foreign/collision/SKILL.md"
+    ln -s "$test_agent_skills" "$test_canonical/.cursor/skills"
+    ln -s "$test_home/.foreign/collision" "$test_home/.cursor/skills/collision"
+    foreign_target="$(readlink "$test_home/.cursor/skills/collision")"
+    cp "$test_home/.foreign/collision/SKILL.md" "$test_home/foreign-before"
+
+    if env -u CODEX_HOME -u ANTIGRAVITY_HOME \
+        HOME="$test_home" DEV_RULES_HOME="$test_canonical" \
+        bash "$SCRIPT_DIR/sync.sh" > "$test_home/collision.log" 2>&1; then
+        echo "expected sync collision to fail" >&2
+        exit 1
+    fi
+
+    assert grep -Fq "ownership conflict" "$test_home/collision.log"
+    assert test "$(readlink "$test_home/.cursor/skills/collision")" = "$foreign_target"
+    assert cmp -s "$test_home/foreign-before" "$test_home/.foreign/collision/SKILL.md"
+) > /tmp/dev-rules-additive-skill-collision.log 2>&1; then
+    ok "sync fails closed and preserves foreign same-name skill links"
+else
+    cat /tmp/dev-rules-additive-skill-collision.log | sed 's/^/    /'
+    fail "sync must fail closed on foreign same-name skill links"
+fi
+
 section "twin persona source is read-only"
 if grep -q 'disallowed_tools=worker_disallowed_tools()' "$SCRIPT_DIR/scripts/twin/worker.py" && \
    grep -q 'Self-verification before accepted_done' "$PERSONAS_DIR/supervisor-persona.md"; then

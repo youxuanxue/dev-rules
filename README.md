@@ -22,7 +22,7 @@
 
 ## Agent Skills
 
-`.cursor/skills` 是指向 `$HOME/Codes/agent-skills` 的 symlink，作为 Skills 的编辑与提交入口；不要在 `.claude/skills` 创建真实副本。Cursor、Claude Code、Codex、Antigravity CLI 四端同源消费：Codex 经 `~/.codex/AGENTS.md` + `~/.codex/skills`，Antigravity 经 `~/.gemini/antigravity-cli/AGENTS.md` + `~/.gemini/antigravity-cli/skills`（工作区 `.agents/skills`），两者共用项目根 `AGENTS.md` 受管块；细则见 `rules/dev-rules-convention.mdc`。
+项目 `.cursor/skills` 是 Skills 的编辑与提交入口；不要在 `.claude/skills` 创建真实副本。家目录 `~/.cursor/skills` 则是 additive consumer registry：dev-rules 只维护指向配置 `agent-skills` checkout 的自有 links，保留其它 owner 的 symlink、文件和目录；`~/.claude/skills` 保持指向该 registry。Cursor、Claude Code、Codex、Antigravity CLI 四端同源消费：Codex 经 `~/.codex/AGENTS.md` + `~/.codex/skills`，Antigravity 经 `~/.gemini/antigravity-cli/AGENTS.md` + `~/.gemini/antigravity-cli/skills`（工作区 `.agents/skills`），两者直接消费 dev-rules-owned agent-skills links，不接管 home registry 的 foreign entries，并共用项目根 `AGENTS.md` 受管块；细则见 `rules/dev-rules-convention.mdc`。
 
 代码审查工作流是 `agent-skills/xj-review/SKILL.md`（三端可调用：Claude Code/Cursor 用 `/xj-review`，Codex 用 `$xj-review` 或描述触发）；输出契约 `schemas/review.schema.json`，机械门禁与熔断复用 `scripts/preflight.sh` / `scripts/review/loop_state.py`。
 
