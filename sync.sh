@@ -224,10 +224,16 @@ link_project_skill_consumer_dir() {
     fi
     if [ -e "$link" ] && [ ! -L "$link" ]; then
         local backup="$link.bak.$(date +%Y%m%d%H%M%S)"
-        mv "$link" "$backup"
+        mv "$link" "$backup" || {
+            echo "  FAIL: unable to back up $label at $link" >&2
+            return 1
+        }
         echo "  backup: $link → $backup (was a real copy; single source is $guard)"
     fi
-    ln -sfn "$target" "$link"
+    ln -sfn "$target" "$link" || {
+        echo "  FAIL: unable to link $label at $link → $target" >&2
+        return 1
+    }
     echo "  linked: $label → $target"
 }
 
@@ -559,7 +565,7 @@ sync_to_home() {
         echo "  (no ~/.cursor/skills, skipping — nothing for Claude Code to load)"
     else
         mkdir -p "$(dirname "$CLAUDE_SKILLS")"
-        link_skills_dir "$CLAUDE_SKILLS" "$CURSOR_SKILLS" "$CURSOR_SKILLS" "skills"
+        link_skills_dir "$CLAUDE_SKILLS" "$CURSOR_SKILLS" "$CURSOR_SKILLS" "skills" || return 1
     fi
 
     sync_to_codex_home || return 1
@@ -670,12 +676,15 @@ sync_to_project() {
         return 0
     fi
     if [ ! -d "$source_rules_dir" ]; then
-        echo "  SKIP (source missing): $source_rules_dir"
-        return 0
+        echo "  FAIL: source rules directory missing: $source_rules_dir" >&2
+        return 1
     fi
 
     local target_rules="$project_dir/.cursor/rules"
-    mkdir -p "$target_rules"
+    mkdir -p "$target_rules" || {
+        echo "  FAIL: unable to create managed rules directory $target_rules" >&2
+        return 1
+    }
 
     local changed=0
     for rule in "$source_rules_dir"/*.mdc; do
@@ -687,8 +696,29 @@ sync_to_project() {
         if [ -f "$target" ] && diff -q "$rule" "$target" > /dev/null 2>&1; then
             :
         else
-            cp "$rule" "$target"
+            cp "$rule" "$target" || {
+                echo "  FAIL: unable to copy rule $rule to $target" >&2
+                return 1
+            }
             echo "  copied: $basename → $(basename "$project_dir")"
+            changed=1
+        fi
+    done
+
+    # .cursor/rules is a managed mirror: check_project_drift already treats any
+    # rule missing from the canonical source as an orphan. Reconcile the same
+    # invariant during fan-out so deleting a canonical rule also removes every
+    # generated project copy instead of leaving stale Agent instructions.
+    for target in "$target_rules"/*.mdc; do
+        [ -f "$target" ] || continue
+        local basename
+        basename="$(basename "$target")"
+        if [ ! -f "$source_rules_dir/$basename" ]; then
+            unlink "$target" || {
+                echo "  FAIL: unable to remove retired rule $target" >&2
+                return 1
+            }
+            echo "  removed retired rule: $basename → $(basename "$project_dir")"
             changed=1
         fi
     done
@@ -702,28 +732,29 @@ sync_to_project() {
     # Claude Code reads .claude). Relative target so the link is portable across
     # clones/machines and commits cleanly. No-op when the project has no skills.
     if [ -d "$project_dir/.cursor/skills" ]; then
-        mkdir -p "$project_dir/.claude"
+        mkdir -p "$project_dir/.claude" || return 1
         link_skills_dir "$project_dir/.claude/skills" "../.cursor/skills" \
-            "$project_dir/.cursor/skills" "$(basename "$project_dir")/.claude/skills"
+            "$project_dir/.cursor/skills" "$(basename "$project_dir")/.claude/skills" || return 1
     fi
 
     # Codex consumer (project layer). Codex reads <repo>/AGENTS.md as project
     # instructions; it ignores .cursor/rules/*.mdc and has no behavioral-rules
     # dir, so dev-rules capabilities are injected as a generated managed block
     # in AGENTS.md (constitution + rule index + skill index + commands).
-    if [ -f "$GEN_CODEX_AGENTS" ]; then
-        if python3 "$GEN_CODEX_AGENTS" --project "$project_dir"; then
-            :
-        else
-            echo "  WARN: gen_codex_agents.py failed for $(basename "$project_dir")"
-        fi
+    if [ ! -f "$GEN_CODEX_AGENTS" ]; then
+        echo "  FAIL: AGENTS generator missing: $GEN_CODEX_AGENTS" >&2
+        return 1
+    fi
+    if ! python3 "$GEN_CODEX_AGENTS" --project "$project_dir"; then
+        echo "  FAIL: AGENTS generation failed for $(basename "$project_dir")" >&2
+        return 1
     fi
     # Codex also reads project-level .codex/skills/ — mirror the .claude/skills
     # pattern so Codex loads the same skills natively. No-op without skills.
     if [ -d "$project_dir/.cursor/skills" ]; then
-        mkdir -p "$project_dir/.codex"
+        mkdir -p "$project_dir/.codex" || return 1
         link_project_skill_consumer_dir "$project_dir/.codex/skills" "../.cursor/skills" \
-            "$project_dir/.cursor/skills" "$(basename "$project_dir")/.codex/skills"
+            "$project_dir/.cursor/skills" "$(basename "$project_dir")/.codex/skills" || return 1
     fi
 
     # Antigravity CLI reads project-level .agents/skills/ (its Workspace
@@ -731,10 +762,12 @@ sync_to_project() {
     # extra link — Antigravity reads the project-root AGENTS.md managed block
     # (generated above), the same file Codex consumes. No-op without skills.
     if [ -d "$project_dir/.cursor/skills" ]; then
-        mkdir -p "$project_dir/.agents"
+        mkdir -p "$project_dir/.agents" || return 1
         link_project_skill_consumer_dir "$project_dir/.agents/skills" "../.cursor/skills" \
-            "$project_dir/.cursor/skills" "$(basename "$project_dir")/.agents/skills"
+            "$project_dir/.cursor/skills" "$(basename "$project_dir")/.agents/skills" || return 1
     fi
+
+    return 0
 }
 
 sync_local() {
@@ -747,7 +780,7 @@ sync_local() {
     fi
 
     echo "=== Syncing to parent project: $(basename "$parent_dir")/.cursor/rules/ (real copies) ==="
-    sync_to_project "$parent_dir"
+    sync_to_project "$parent_dir" || return 1
 
     # Auto-register: future --pull / --push fan-out will include this project
     auto_register "$parent_dir"
@@ -812,7 +845,7 @@ sync_push() {
     echo ""
     echo "=== [3/3] Fan-out: home + registered projects ==="
     sync_to_home || exit $?
-    sync_all_projects
+    sync_all_projects || return 1
     echo ""
     echo "Tip: each project listed above may now show modified .cursor/rules/* — review and commit per project."
 }
@@ -854,7 +887,7 @@ sync_pull() {
     echo ""
     echo "=== [2/2] Fan-out: home + registered projects ==="
     sync_to_home || exit $?
-    sync_all_projects
+    sync_all_projects || return 1
 }
 
 check_project_drift() {
@@ -1393,15 +1426,18 @@ list_projects() {
 sync_all_projects() {
     echo ""
     echo "=== Syncing to materialized projects (registered + local-only, source: $HOME_RULES_DIR) ==="
-    local any=0 name url project
+    local any=0 failed=0 name url project
     while IFS=$'\t' read -r name url project; do
         any=1
-        sync_to_project "$project" "$HOME_RULES_DIR"
+        if ! sync_to_project "$project" "$HOME_RULES_DIR"; then
+            failed=1
+        fi
     done < <(iter_local_projects)
     if [ "$any" -eq 0 ]; then
         echo "  (no materialized projects on this machine)"
         echo "  (registered projects without a local clone, and local-only projects on other machines, are listed by --status / --list when materialized)"
     fi
+    return "$failed"
 }
 
 print_status() {
@@ -1597,17 +1633,17 @@ print_status() {
 case "${1:-}" in
     --all)
         sync_to_home || exit $?
-        sync_all_projects
+        sync_all_projects || exit $?
         print_status
         ;;
     --local)
-        sync_local
+        sync_local || exit $?
         ;;
     --push)
-        sync_push
+        sync_push || exit $?
         ;;
     --pull)
-        sync_pull
+        sync_pull || exit $?
         ;;
     --check)
         check_drift
@@ -1634,7 +1670,7 @@ case "${1:-}" in
         ;;
     --project)
         [ -z "${2:-}" ] && { echo "Usage: $0 --project /path/to/project"; exit 1; }
-        sync_to_project "$2" "$HOME_RULES_DIR"
+        sync_to_project "$2" "$HOME_RULES_DIR" || exit $?
         ;;
     --register)
         [ -z "${2:-}" ] && { echo "Usage: $0 --register /path/to/project"; exit 1; }

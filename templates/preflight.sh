@@ -132,19 +132,6 @@ else
     skip "dev-rules/sync.sh not available"
 fi
 
-# ---- 检查 4: WebUI/API/CLI/MCP 契约不漂移 ----（对应 agent-contract-enforcement.mdc）
-section "agent contract drift"
-if [ -f scripts/export_agent_contract.py ]; then
-    if "$PYTHON_BIN" scripts/export_agent_contract.py --check > /tmp/preflight-contract.log 2>&1; then
-        ok "contract docs in sync with code"
-    else
-        cat /tmp/preflight-contract.log | sed 's/^/    /'
-        fail "contract docs have drifted (regenerate via '$PYTHON_BIN scripts/export_agent_contract.py')"
-    fi
-else
-    skip "scripts/export_agent_contract.py not present (enable for contract-bearing projects)"
-fi
-
 # ---- 检查 5: User Story ↔ Test 漂移 ----（对应 test-philosophy.mdc）
 section "user story / test alignment"
 if [ -f .testing/user-stories/verify_quality.py ]; then
@@ -265,21 +252,6 @@ if [ -f .cursor/cloud-agent.env ] && [ -x dev-rules/templates/cloud-agent-bootst
     fi
 else
     skip ".cursor/cloud-agent.env not present (cloud-agent contract not declared for this project)"
-fi
-
-# ---- 检查 10: 公共契约删除必须有显式说明锚点 ----
-# 阶段语义与检查 13 相同：staged 删除并入判定，pre-commit 读不到待提交
-# message，staged-only 删除只 WARN；commit-msg hook 硬拦截。成功路径回显日志。
-section "contract deletion notice"
-if [ -f dev-rules/scripts/check_contract_deletion_notice.py ]; then
-    if "$PYTHON_BIN" dev-rules/scripts/check_contract_deletion_notice.py --base "${PREFLIGHT_BASE:-origin/main}" > /tmp/preflight-contract-delete.log 2>&1; then
-        cat /tmp/preflight-contract-delete.log | sed 's/^/    /'
-    else
-        cat /tmp/preflight-contract-delete.log | sed 's/^/    /'
-        fail "contract deletion detected without explicit notice token"
-    fi
-else
-    skip "dev-rules/scripts/check_contract_deletion_notice.py not present"
 fi
 
 # ---- 检查 11: 后端/业务逻辑改动必须对齐 Web surface ----

@@ -31,7 +31,7 @@
 - 每个文件、规则、脚本必须挣得自己的位置；说不出价值的直接删除。
 - 高风险变更先回答「这个功能应不应该存在」，再回答「怎么实现」。
 - 默认单 PR 单一意图；只有真实决策边界或风险隔离才拆 PR（见 `rules/product-dev.mdc`）。
-- WebUI/API/CLI/MCP 表面最小化：每个导出符号（含 UI 页面与组件）必须有真实消费者，"以备将来" 的导出禁止存在（见 `rules/agent-contract-enforcement.mdc`）。
+- WebUI/API/CLI/MCP 表面最小化：每个导出符号（含 UI 页面与组件）必须有真实消费者，"以备将来" 的导出禁止存在。
 
 ### 确定性自动化运营和运维 — 决定「怎么做」与「做多少」
 
@@ -90,7 +90,6 @@
 | `.cursor/rules/` 与 submodule 同步 (`dev-rules-convention.mdc`)                                                      | `dev-rules/sync.sh --check`                                                                       | pre-commit / CI      | exit 1，阻断提交                  |
 | dev-rules 仓库自身完整性（README / frontmatter / 哲学映射 / 幽灵路径 / global 关键文件 / LaunchAgent 实装） (`dev-rules-convention.mdc`) | `dev-rules/verify-rules.sh`                                                                       | 子模块提交前               | exit 1                       |
 | 先子模块后父仓库（submodule SHA 必须在 dev-rules 中真实存在） (`dev-rules-convention.mdc`)                                          | `scripts/preflight.sh` 段 2                                                                        | pre-commit / CI      | exit 1                       |
-| WebUI/API/CLI/MCP 契约不漂移 (`agent-contract-enforcement.mdc`)                                                          | `python scripts/export_agent_contract.py --check`                                                 | preflight: agent contract export / CI   | exit 1                       |
 | 分支命名前缀（`prototype/` `feature/` `fix/` `chore/` `docs/` `merge/` `cursor/`） (`product-dev.mdc`)                    | `scripts/preflight.sh` 段 1                                                                        | pre-commit           | exit 1                       |
 | User Story ↔ Test 不漂移 (`test-philosophy.mdc`)                                                                     | `python .testing/user-stories/verify_quality.py`                                                  | preflight: story-test alignment / CI   | exit 1                       |
 | `docs/approved/` 在非高风险 / 非原型路径中被修改时必须触发 reviewer 明确确认 (`product-dev.mdc`)                                          | `scripts/preflight.sh` 段 6                                                                        | PR 检查                | warn → reviewer 必须确认         |
@@ -105,9 +104,8 @@
 | dev-rules 编辑后所有消费端及时更新（不依赖人记住 N 个 sync 命令）                                                                        | `dev-rules/sync.sh --push`（push + ~/Codes pull + 所有项目 fan-out 原子动作）                               | 编辑者主动                | 不跑则下一次 LaunchAgent 兜底        |
 | 设计契约型数字（cap / SLO / 预算等）不漂移 (本文档 §三)                                                                                  | `dev-rules/sync-stats.sh --check`（基于 `.stats.json` 注册表 + 文档内 `<!-- stat:NAME -->` 占位符；仅服务真实契约，禁止虚荣计数）  | preflight: stats drift check / CI   | exit 1                       |
 | 云端 Agent / 本地 Agent 运行环境一致（CLI、secrets、Claude gateway） (`product-dev.mdc` §云端 Agent)                              | `dev-rules/templates/cloud-agent-bootstrap.sh --check`（读 `.cursor/cloud-agent.env`）               | preflight: cloud-agent consistency / CI / 云端 install | exit 1（REQUIRED 缺失）           |
-| 公共契约删除必须有显式说明锚点（`agent-contract-enforcement.mdc` / `product-dev.mdc`） | `dev-rules/scripts/check_contract_deletion_notice.py` → `scripts/preflight.sh`（contract deletion notice） | pre-commit / CI | exit 1；阻断静默删约 |
-| 有 Web surface 的仓库中，后端服务/业务逻辑改动必须同 PR 对齐 Web 页面、配置、契约或 Story；确无影响时必须在 commit message 显式说明（`agent-contract-enforcement.mdc` / `product-dev.mdc`） | `dev-rules/scripts/check_web_surface_alignment.py`（项目可用 `.preflight/web-surface-alignment.conf` 覆写路径与 token）→ `scripts/preflight.sh`（web surface alignment） | pre-commit / CI | exit 1；阻断后端上线后 Web 缺配置/缺呈现 |
-| 分层依赖不可反转（`agent-contract-enforcement.mdc`） | `dev-rules/scripts/check_layer_dependency_inversion.py`（读取 `.preflight/layer-deps.json`）→ `scripts/preflight.sh`（layer dependency inversion） | pre-commit / CI（有配置时） | exit 1；阻断反向依赖 |
+| 有 Web surface 的仓库中，后端服务/业务逻辑改动必须同 PR 对齐 Web 页面、配置、契约或 Story；确无影响时必须在 commit message 显式说明（`product-dev.mdc`） | `dev-rules/scripts/check_web_surface_alignment.py`（项目可用 `.preflight/web-surface-alignment.conf` 覆写路径与 token）→ `scripts/preflight.sh`（web surface alignment） | pre-commit / CI | exit 1；阻断后端上线后 Web 缺配置/缺呈现 |
+| 项目声明的分层依赖不可反转（`.preflight/layer-deps.json`） | `dev-rules/scripts/check_layer_dependency_inversion.py`（读取 `.preflight/layer-deps.json`）→ `scripts/preflight.sh`（layer dependency inversion） | pre-commit / CI（有配置时） | exit 1；阻断反向依赖 |
 | 高风险改动必须绑定审批锚点（`product-dev.mdc`） | `dev-rules/scripts/check_high_risk_anchor.py`（默认覆盖通用高风险目录，项目可用 `.preflight/high-risk-anchor.conf` 覆写）→ `scripts/preflight.sh`（high-risk approval anchor） | pre-commit / CI | exit 1；阻断无锚点高风险改动 |
 | release 敏感语境提交禁止 skip-ci marker（`product-dev.mdc`） | `dev-rules/scripts/check_release_skip_ci_safety.py`（项目可用 `.preflight/release-skip-ci.conf` 覆写分支/标签/marker）→ `scripts/preflight.sh`（release skip-ci safety） | pre-commit / CI（release 语境） | exit 1；阻断流水线静默跳过风险 |
 | GitHub Actions workflow 硬失败 pattern：job-level `if: env.*`（HTTP 422，所有 job 拒绝启动）、`claude -p` 缺 `--allowedTools`（permission-mode default，exit 0 零产出）、`claude -p --output`（该 flag 不存在） | `dev-rules/scripts/check_workflow_yaml.py`（扫描 `.github/workflows/*.yml` 三类 pattern）→ `scripts/preflight.sh`（workflow yaml hard-failure patterns） | pre-commit / CI | exit 1；fix：job-level if 改为 `vars.*` 或 `github.event.inputs.*`；`claude -p` 加 `--allowedTools` 并用 `2>&1 \| tee /tmp/out.txt` + `set -o pipefail` |

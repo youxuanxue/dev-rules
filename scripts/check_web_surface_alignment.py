@@ -54,11 +54,10 @@ DEFAULTS = {
     "web_surface_paths": _WEB_SURFACE,
     "alignment_paths": [
         *_WEB_SURFACE,
-        r"^docs/(?:agent_integration\.md|openapi(?:/.*|\.ya?ml|\.json)?|spec-delta-|approved/)",
+        r"^docs/(?:openapi(?:/.*|\.ya?ml|\.json)?|spec-delta-|approved/)",
         r"^openapi(?:/.*|\.ya?ml|\.json)?$",
         r"^api/(?:openapi|contract)(?:/.*|\.ya?ml|\.json)?$",
         r"^schemas?/",
-        r"^scripts/export_agent_contract\.py$",
         r"^\.testing/user-stories/",
     ],
     "web_roots": [
