@@ -81,16 +81,40 @@ resolve_repo() {
 }
 
 worktree_from_json() {
-    python3 -c 'import json,sys; print(json.load(sys.stdin)["worktree"])'
+    local json
+    json="$(cat)"
+    if [[ -z "${json//[[:space:]]/}" ]]; then
+        die "wtree create produced no JSON output (see wtree error above)"
+    fi
+    python3 -c 'import json,sys; print(json.load(sys.stdin)["worktree"])' <<<"$json"
+}
+
+resolve_worktree_slug() {
+    local repo="$1"
+    local slug="$2"
+    local repo_name candidate
+
+    if [[ -d "$slug" ]]; then
+        echo "$(cd "$slug" && pwd)"
+        return 0
+    fi
+
+    repo_name="$(basename "$repo")"
+    candidate="$(cd "$repo/.." && pwd)/${repo_name}-wt-${slug}"
+    if [[ -d "$candidate" ]]; then
+        echo "$candidate"
+        return 0
+    fi
+
+    return 1
 }
 
 resolve_open_target() {
     local repo="$1"
     local raw="$2"
-    local target repo_name candidate
+    local target
 
-    if [[ -d "$raw" ]]; then
-        echo "$(cd "$raw" && pwd)"
+    if resolve_worktree_slug "$repo" "$raw"; then
         return 0
     fi
 
@@ -100,14 +124,7 @@ resolve_open_target() {
         return 0
     fi
 
-    repo_name="$(basename "$repo")"
-    candidate="$(cd "$repo/.." && pwd)/${repo_name}-wt-${raw}"
-    if [[ -d "$candidate" ]]; then
-        echo "$candidate"
-        return 0
-    fi
-
-    die "open target not found: $raw (tried directory path and ${repo_name}-wt-${raw})"
+    die "open target not found: $raw (tried directory path and $(basename "$repo")-wt-${raw})"
 }
 
 normalize_runtime() {
@@ -234,6 +251,13 @@ PY
 create_worktree() {
     local repo="$1"
     local slug="$2"
+    local existing=""
+
+    if existing="$(resolve_worktree_slug "$repo" "$slug")"; then
+        echo "$existing"
+        return 0
+    fi
+
     python3 "$WTREE" create --repo "$repo" --no-open-workspace --json "$slug" | worktree_from_json
 }
 
@@ -295,6 +319,27 @@ SH
         echo "  ok: --model rejects non-Claude runtimes"
     else
         echo "  x non-Claude --model returned the wrong error"
+        sed 's/^/      /' "$output_file"
+        fails=$((fails + 1))
+    fi
+
+    reuse_repo="$tmp/reuse-repo"
+    reuse_wt="$tmp/reuse-repo-wt-existing"
+    mkdir -p "$reuse_repo" "$reuse_wt"
+    cat > "$tmp/wtree-reuse.py" <<'PY'
+import sys
+
+if "open-workspace" in sys.argv:
+    sys.exit(0)
+print("create should not be called", file=sys.stderr)
+sys.exit(1)
+PY
+    if WTREE_SCRIPT="$tmp/wtree-reuse.py" "$self" --repo "$reuse_repo" existing ide \
+        >"$output_file" 2>&1 \
+        && grep -qF "worktree: $reuse_wt" "$output_file"; then
+        echo "  ok: reuses existing default worktree slug"
+    else
+        echo "  x did not reuse existing default worktree slug"
         sed 's/^/      /' "$output_file"
         fails=$((fails + 1))
     fi
