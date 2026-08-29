@@ -17,7 +17,8 @@ usage() {
     cat <<'EOF'
 Usage:
   wts <slug> [agent|codex|claude|ide]
-      Create an isolated worktree from origin/main and start a session.
+      Create ../<repo>-wt-<slug> from origin/main and start a session.
+      A bare slug never means a directory inside the repo.
       Default: current terminal + agent --workspace <worktree>.
 
   wts open <path-or-slug> [agent|codex|claude|ide]
@@ -89,42 +90,74 @@ worktree_from_json() {
     python3 -c 'import json,sys; print(json.load(sys.stdin)["worktree"])' <<<"$json"
 }
 
-resolve_worktree_slug() {
-    local repo="$1"
-    local slug="$2"
-    local repo_name candidate
+is_path_arg() {
+    case "$1" in
+        /* | ~ | ~/* | . | .. | ./* | ../* | */*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
 
-    if [[ -d "$slug" ]]; then
-        echo "$(cd "$slug" && pwd)"
+expand_path_arg() {
+    local raw="$1"
+    case "$raw" in
+        "~") echo "$HOME" ;;
+        "~/"*) echo "$HOME/${raw#~/}" ;;
+        *) echo "$raw" ;;
+    esac
+}
+
+resolve_explicit_path() {
+    local raw
+    raw="$(expand_path_arg "$1")"
+    if [[ -d "$raw" ]]; then
+        echo "$(cd "$raw" && pwd)"
         return 0
     fi
+    return 1
+}
 
+resolve_default_worktree() {
+    local repo="$1"
+    local slug="$2"
+    local repo_name parent candidate
     repo_name="$(basename "$repo")"
-    candidate="$(cd "$repo/.." && pwd)/${repo_name}-wt-${slug}"
+    parent="$(cd "$repo/.." && pwd)"
+    candidate="${parent}/${repo_name}-wt-${slug}"
     if [[ -d "$candidate" ]]; then
         echo "$candidate"
         return 0
     fi
-
+    if [[ "$slug" == "${repo_name}-wt-"* ]]; then
+        candidate="${parent}/${slug}"
+        if [[ -d "$candidate" ]]; then
+            echo "$candidate"
+            return 0
+        fi
+    fi
     return 1
+}
+
+resolve_worktree_slug() {
+    local repo="$1"
+    local slug="$2"
+
+    # Bare slugs never mean a cwd-relative directory. Otherwise `wts deploy`
+    # reuses an in-repo `deploy/` folder instead of ../<repo>-wt-deploy.
+    if is_path_arg "$slug" && resolve_explicit_path "$slug"; then
+        return 0
+    fi
+    resolve_default_worktree "$repo" "$slug"
 }
 
 resolve_open_target() {
     local repo="$1"
     local raw="$2"
-    local target
 
     if resolve_worktree_slug "$repo" "$raw"; then
         return 0
     fi
 
-    target="$(cd "$(dirname "$raw")" 2>/dev/null && pwd)/$(basename "$raw")" || true
-    if [[ -n "${target:-}" && -d "$target" ]]; then
-        echo "$target"
-        return 0
-    fi
-
-    die "open target not found: $raw (tried directory path and $(basename "$repo")-wt-${raw})"
+    die "open target not found: $raw (tried $(basename "$repo")-wt-${raw})"
 }
 
 normalize_runtime() {
@@ -340,6 +373,84 @@ PY
         echo "  ok: reuses existing default worktree slug"
     else
         echo "  x did not reuse existing default worktree slug"
+        sed 's/^/      /' "$output_file"
+        fails=$((fails + 1))
+    fi
+
+    if WTREE_SCRIPT="$tmp/wtree-reuse.py" "$self" --repo "$reuse_repo" reuse-repo-wt-existing ide \
+        >"$output_file" 2>&1 \
+        && grep -qF "worktree: $reuse_wt" "$output_file"; then
+        echo "  ok: reuses full <repo>-wt-<slug> name"
+    else
+        echo "  x did not reuse full <repo>-wt-<slug> name"
+        sed 's/^/      /' "$output_file"
+        fails=$((fails + 1))
+    fi
+
+    if WTREE_SCRIPT="$tmp/wtree-reuse.py" "$self" --repo "$reuse_repo" open "$reuse_wt" ide \
+        >"$output_file" 2>&1 \
+        && grep -qF "worktree: $reuse_wt" "$output_file"; then
+        echo "  ok: open accepts explicit worktree path"
+    else
+        echo "  x open did not accept explicit worktree path"
+        sed 's/^/      /' "$output_file"
+        fails=$((fails + 1))
+    fi
+
+    collision_root="$tmp/collision"
+    collision_repo="$collision_root/repo"
+    collision_inrepo="$collision_repo/deploy"
+    collision_wt="$collision_root/repo-wt-created"
+    mkdir -p "$collision_inrepo" "$collision_wt"
+    cat > "$tmp/wtree-collision.py" <<'PY'
+import json
+import os
+import sys
+
+if "open-workspace" in sys.argv:
+    sys.exit(0)
+if "create" not in sys.argv:
+    print("expected create", file=sys.stderr)
+    sys.exit(1)
+print(json.dumps({"worktree": os.environ["WTS_SELF_TEST_WORKTREE"]}))
+PY
+    if (
+        cd "$collision_repo" &&
+        WTS_SELF_TEST_WORKTREE="$collision_wt" WTREE_SCRIPT="$tmp/wtree-collision.py" \
+            "$self" --repo "$collision_repo" deploy ide
+    ) >"$output_file" 2>&1 \
+        && grep -qF "worktree: $collision_wt" "$output_file" \
+        && ! grep -qF "worktree: $collision_inrepo" "$output_file"; then
+        echo "  ok: bare slug ignores in-repo directory"
+    else
+        echo "  x bare slug reused in-repo directory"
+        sed 's/^/      /' "$output_file"
+        fails=$((fails + 1))
+    fi
+
+    if (
+        cd "$collision_repo" &&
+        WTREE_SCRIPT="$tmp/wtree-reuse.py" "$self" --repo "$collision_repo" open deploy ide
+    ) >"$output_file" 2>&1; then
+        echo "  x open bare slug reused in-repo directory"
+        sed 's/^/      /' "$output_file"
+        fails=$((fails + 1))
+    elif grep -qF "open target not found: deploy" "$output_file"; then
+        echo "  ok: open bare slug ignores in-repo directory"
+    else
+        echo "  x open bare slug returned the wrong error"
+        sed 's/^/      /' "$output_file"
+        fails=$((fails + 1))
+    fi
+
+    if (
+        cd "$collision_repo" &&
+        WTREE_SCRIPT="$tmp/wtree-reuse.py" "$self" --repo "$collision_repo" ./deploy ide
+    ) >"$output_file" 2>&1 \
+        && grep -qF "worktree: $collision_inrepo" "$output_file"; then
+        echo "  ok: explicit relative path still opens that directory"
+    else
+        echo "  x explicit relative path was not honored"
         sed 's/^/      /' "$output_file"
         fails=$((fails + 1))
     fi
