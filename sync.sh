@@ -1220,6 +1220,17 @@ check_home_antigravity_drift() {
     done
 }
 
+check_go_cache_boundary_drift() {
+    HOME_GO_CACHE_DRIFT=0
+    local manifest="$HOME/Library/Application Support/dev-rules/go-cache-boundary.json"
+    if [ ! -f "$manifest" ]; then
+        return 0
+    fi
+    if ! (cd "$SCRIPT_DIR" && python3 -m scripts.go_cache_boundary.cli check); then
+        HOME_GO_CACHE_DRIFT=1
+    fi
+}
+
 check_drift() {
     # Two distinct invocation contexts:
     #   1. SCRIPT_DIR == HOME_CANONICAL → we are the canonical mirror at ~/Codes/dev-rules/.
@@ -1327,6 +1338,18 @@ check_drift() {
         else
             total_drift=$((total_drift + HOME_ANTIGRAVITY_DRIFT))
             echo "  Antigravity links drifted. Run: $SCRIPT_DIR/sync.sh"
+        fi
+        echo ""
+
+        # Go cache boundary: only machines that already have a local manifest
+        # are checked. Uninstalled machines must not be reported as drift.
+        echo "=== Checking drift: local Go cache boundary ==="
+        check_go_cache_boundary_drift
+        if [ "$HOME_GO_CACHE_DRIFT" -eq 0 ]; then
+            echo "  ok: not installed or boundary matches manifest"
+        else
+            total_drift=$((total_drift + HOME_GO_CACHE_DRIFT))
+            echo "  Go cache boundary drifted. Run: dev-go doctor"
         fi
         echo ""
 

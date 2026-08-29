@@ -50,6 +50,14 @@ else
     fail "pipeline selftest failed"
 fi
 
+section "go cache boundary helpers"
+if python3 -m unittest scripts.test_go_cache_boundary > /tmp/dev-rules-go-cache-boundary.log 2>&1; then
+    ok "go-cache-boundary asserts pass"
+else
+    cat /tmp/dev-rules-go-cache-boundary.log | sed 's/^/    /'
+    fail "go-cache-boundary tests failed"
+fi
+
 echo ""
 if [ "$errors" -eq 0 ]; then
     echo "=== preflight: PASS ==="

@@ -1,0 +1,1 @@
+"""Local Go cache boundary helpers. Apply actions stay opt-in."""

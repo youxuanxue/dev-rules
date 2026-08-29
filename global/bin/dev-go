@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# dest-go — supported human/Agent entry for the Go cache boundary.
+# doctor/check stay read-only. cold uses a task-owned DevCache directory.
+# Other args pass through the real Go binary in the caller's cwd, holding the
+# activity lock and requiring an already-mounted DevCache when installed.
+set -euo pipefail
+
+resolve_root() {
+    if [[ -n "${DEV_RULES_ROOT:-}" ]]; then
+        echo "$DEV_RULES_ROOT"
+        return
+    fi
+    local bin_dir
+    bin_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    echo "$(cd "$bin_dir/../.." && pwd)"
+}
+
+ROOT="$(resolve_root)"
+export DEV_GO_USER_PWD="$PWD"
+
+cd "$ROOT"
+if [[ "${1:-}" == "doctor" || "${1:-}" == "check" || "${1:-}" == "cold" ]]; then
+    exec python3 -m scripts.go_cache_boundary.cli "$@"
+fi
+exec python3 -m scripts.go_cache_boundary.cli run -- "$@"
