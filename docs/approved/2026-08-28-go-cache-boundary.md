@@ -2,8 +2,10 @@
 approved_by: user-chat-2026-08-28
 status: approved
 risk_level: high
-related_prs: []
-related_commits: []
+related_prs:
+  - https://github.com/youxuanxue/dev-rules/pull/102
+related_commits:
+  - cf84333
 ---
 
 # Go cache boundary
