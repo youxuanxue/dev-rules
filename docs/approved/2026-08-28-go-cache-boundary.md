@@ -4,8 +4,10 @@ status: approved
 risk_level: high
 related_prs:
   - https://github.com/youxuanxue/dev-rules/pull/102
+  - https://github.com/youxuanxue/sub2api/pull/1877
 related_commits:
   - cf84333
+  - 4c49852a2
 ---
 
 # Go cache boundary
