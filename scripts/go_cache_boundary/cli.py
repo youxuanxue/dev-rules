@@ -10,7 +10,7 @@ from pathlib import Path
 
 from scripts.go_cache_boundary.check import check_boundary
 from scripts.go_cache_boundary.goflags import merge_trimpath
-from scripts.go_cache_boundary.manifest import load_manifest
+from scripts.go_cache_boundary.manifest import load_manifest, manifest_path
 from scripts.go_cache_boundary.mount import ensure_mounted
 from scripts.go_cache_boundary.probe import probe_volume
 from scripts.go_cache_boundary.runtime import (
@@ -108,7 +108,24 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("go_args", nargs="*")
     args = parser.parse_args(argv)
     home = Path.home()
-    result = check_boundary(home=home, probe=probe_volume)
+
+    def go_env(name: str) -> str:
+        if not manifest_path(home).is_file():
+            return ""
+        real = _resolve_real_go(home, True)
+        completed = subprocess.run(
+            [real, "env", name],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        return completed.stdout.strip()
+
+    result = check_boundary(
+        home=home,
+        probe=probe_volume,
+        go_env=go_env if args.command in {"doctor", "check"} else None,
+    )
     if args.command == "cold":
         return _run_cold(home, args.go_args, result)
     if args.command == "run":

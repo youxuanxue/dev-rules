@@ -77,15 +77,64 @@ class ManifestCheckTest(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertTrue(any("reserve" in problem for problem in result.problems))
 
-    def _write_manifest(self, home: Path) -> None:
+    def test_missing_guard_symlink_is_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            volume = home / "DevCache"
+            self._write_manifest(home, volume=volume)
+            (home / "Library/Caches/dev-go/build").unlink()
+            (home / "Library/Caches/dev-go/build").mkdir()
+            probe = Mock(
+                return_value={
+                    "volume_uuid": "vol-1",
+                    "encrypted": True,
+                    "quota_bytes": QUOTA_BYTES,
+                    "reserve_bytes": 0,
+                    "mounted": True,
+                    "mount_path": str(volume),
+                }
+            )
+            result = check_boundary(
+                home=home,
+                probe=probe,
+                go_env={"GOCACHE": str(home / "Library/Caches/dev-go/build"), "GOMODCACHE": str(home / "Library/Caches/dev-go/mod"), "GOTMPDIR": str(home / "Library/Caches/dev-go/tmp")}.get,
+            )
+        self.assertFalse(result.ok)
+        self.assertTrue(any("guard" in problem for problem in result.problems))
+
+    def test_go_env_mismatch_is_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            volume = home / "DevCache"
+            self._write_manifest(home, volume=volume)
+            probe = Mock(
+                return_value={
+                    "volume_uuid": "vol-1",
+                    "encrypted": True,
+                    "quota_bytes": QUOTA_BYTES,
+                    "reserve_bytes": 0,
+                    "mounted": True,
+                    "mount_path": str(volume),
+                }
+            )
+            result = check_boundary(
+                home=home,
+                probe=probe,
+                go_env=lambda name: "/tmp/go-build" if name == "GOCACHE" else str(home / "Library/Caches/dev-go" / name.lower().replace("gomodcache", "mod").replace("gotmpdir", "tmp")),
+            )
+        self.assertFalse(result.ok)
+        self.assertTrue(any("GOCACHE" in problem for problem in result.problems))
+
+    def _write_manifest(self, home: Path, volume: Path | None = None) -> None:
         path = home / "Library" / "Application Support" / "dev-rules" / MANIFEST_NAME
         path.parent.mkdir(parents=True)
+        mount_path = str(volume) if volume is not None else "/Volumes/DevCache"
         path.write_text(
             json.dumps(
                 {
                     "container_uuid": "ctr-1",
                     "volume_uuid": "vol-1",
-                    "mount_path": "/Volumes/DevCache",
+                    "mount_path": mount_path,
                     "quota_bytes": QUOTA_BYTES,
                     "guard_paths": {
                         "build": str(home / "Library/Caches/dev-go/build"),
@@ -97,6 +146,15 @@ class ManifestCheckTest(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+        if volume is not None:
+            identity = volume / ".dev-go-vol-1"
+            for name in ("build", "mod", "tmp"):
+                (identity / name).mkdir(parents=True)
+                guard = home / "Library/Caches/dev-go" / name
+                guard.parent.mkdir(parents=True, exist_ok=True)
+                if guard.exists() or guard.is_symlink():
+                    continue
+                guard.symlink_to(identity / name)
         self.assertEqual(load_manifest(home)["volume_uuid"], "vol-1")
 
 
@@ -122,6 +180,31 @@ class InstallerSafetyTest(unittest.TestCase):
             with self.assertRaises(InstallError) as raised:
                 plan_install(InstallRequest(home=home, apply=False), diskutil=Mock())
         self.assertIn("foreign", str(raised.exception))
+
+    def test_foreign_go_symlink_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            shim = home / ".local/bin/go"
+            shim.parent.mkdir(parents=True)
+            target = home / "other-go"
+            target.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            target.chmod(0o755)
+            shim.symlink_to(target)
+            with self.assertRaises(InstallError) as raised:
+                plan_install(InstallRequest(home=home, apply=False), diskutil=Mock())
+        self.assertIn("foreign", str(raised.exception))
+
+    def test_owned_dev_go_shim_is_allowed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            dest_go = home / ".local/bin/dev-go"
+            dest_go.parent.mkdir(parents=True)
+            dest_go.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            dest_go.chmod(0o755)
+            shim = home / ".local/bin/go"
+            shim.symlink_to(dest_go)
+            plan = plan_install(InstallRequest(home=home, apply=False), diskutil=Mock())
+        self.assertFalse(plan.applied)
 
     def test_uuid_mismatch_fails_closed_and_does_not_apply(self) -> None:
         diskutil = Mock()
@@ -352,6 +435,13 @@ class ColdWorkspaceTest(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+        identity = volume / ".dev-go-vol-1"
+        for name in ("build", "mod", "tmp"):
+            (identity / name).mkdir(parents=True, exist_ok=True)
+            guard = home / "Library/Caches/dev-go" / name
+            guard.parent.mkdir(parents=True, exist_ok=True)
+            if not guard.exists() and not guard.is_symlink():
+                guard.symlink_to(identity / name)
         bindir = home / "bin"
         bindir.mkdir()
         plist = VOLUME_PLIST.replace(b"/Volumes/DevCache", str(volume).encode())
@@ -413,7 +503,10 @@ class ColdWorkspaceTest(unittest.TestCase):
             recorded = (home / "gocache-path").read_text(encoding="utf-8").strip()
             self.assertTrue(recorded.startswith(str(volume)))
             self.assertFalse(Path(recorded).exists())
-            self.assertEqual(list(volume.iterdir()), [])
+            self.assertEqual(
+                [path.name for path in volume.iterdir() if path.name.startswith("cold-")],
+                [],
+            )
 
     def test_dev_go_cold_fails_closed_when_not_installed(self) -> None:
         repo = Path(__file__).resolve().parents[1]
@@ -506,7 +599,9 @@ class ColdWorkspaceTest(unittest.TestCase):
                 env=env,
             )
             self.assertNotEqual(completed.returncode, 0)
-            self.assertIn("not mounted", completed.stderr)
+            self.assertTrue(
+                "not mounted" in completed.stderr or "mount mismatch" in completed.stderr
+            )
             self.assertNotIn("unlock-attempted", completed.stderr)
             self.assertFalse((home / "gocache-path").exists())
 

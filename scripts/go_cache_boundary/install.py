@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
 from scripts.go_cache_boundary.manifest import QUOTA_BYTES, load_manifest, manifest_path
+
+
+def _owned_go_shim(shim: Path) -> bool:
+    return shim.is_symlink() and Path(os.path.realpath(shim)).name == "dev-go"
 
 
 class InstallError(RuntimeError):
@@ -33,7 +38,7 @@ def plan_install(
     diskutil: Callable[..., object],
 ) -> InstallPlan:
     shim = request.home / ".local" / "bin" / "go"
-    if shim.exists() and not shim.is_symlink():
+    if shim.exists() and not _owned_go_shim(shim):
         raise InstallError("foreign ~/.local/bin/go is present; refuse to overwrite")
 
     if manifest_path(request.home).is_file():
