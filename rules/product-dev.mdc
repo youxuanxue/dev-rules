@@ -227,12 +227,9 @@ spec delta 是意图载体，不是审批基线；若命中高风险条件，必
 
 ### Fork 仓库上游治理（Upstream Merge）纪律
 
-凡 fork 自外部开源项目的仓库，其上游对齐工作流统一遵循 `agent-skills` 中的 `upstream-merge` SOP：
+Fork 仓库对齐外部上游时，加载 `agent-skills` 的 [upstream-merge SOP](https://github.com/youxuanxue/agent-skills/blob/main/upstream-merge/SKILL.md)。该 skill 是保留上游历史、A/B/C 提交职责、冲突审计和合并收尾流程的唯一 owner；分支命名、PR 格式与审批沿用本规则，worktree 操作沿用 `git-worktree-submodule`。
 
-- **主线历史保全**：严禁 `git rebase` 或 `push -f` 覆盖公共历史；必须使用非快进合并（`git merge --no-ff`）保留 fork 仓库的 PR 链条与已合并 commit。
-- **三类 Commit 形状**：分支提交严格区分为 `A. Merge Harness Commit`（纯粹解冲突与废弃文件清理，保编译）、`B. Invariant Commit`（项目专属不可逾越原则恢复）、`C. Convergence Commit`（分叉收敛）。
-- **验证与审计**：合并前必须通过 `audit.mjs` 进行 `merge-tree` dry-run 冲突推演；合并后必须通过项目本地全量 preflight（编译、单测、格式化），并在 PR body 中列出上游合入清单、不变量守卫项与审计数据。
-- **项目特异性承载**：项目本地通过自身专属 upstream merge skill 仅声明项目特有的不可逾越原则（Invariants）、冲突裁决清单和验证门禁命令，底层通用流程复用公共规范。
+项目本地仅补充已有不变量 owner、冲突裁决与验证命令，复用通用 SOP。若 skill 尚未可用，先通过既有 Skills Core 安装入口取得；不得仅凭本段摘要跳过完整流程。审计 helper 按加载到的 skill 目录定位，在宿主仓库 workdir 执行。
 
 ## 代码质量门禁
 
