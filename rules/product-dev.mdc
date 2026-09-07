@@ -225,6 +225,15 @@ spec delta 是意图载体，不是审批基线；若命中高风险条件，必
 - release 敏感分支/语境下提交消息禁止出现 `[skip ci]` / `[ci skip]`，避免流水线静默跳过。
 - PR 合并后必须继续监控目标分支 CI 状态，直到合并 commit / merge queue 关联检查全绿；若出现失败、取消或长时间 pending，立即报告并进入修复或人工决策。
 
+### Fork 仓库上游治理（Upstream Merge）纪律
+
+凡 fork 自外部开源项目的仓库，其上游对齐工作流统一遵循 `agent-skills` 中的 `upstream-merge` SOP：
+
+- **主线历史保全**：严禁 `git rebase` 或 `push -f` 覆盖公共历史；必须使用非快进合并（`git merge --no-ff`）保留 fork 仓库的 PR 链条与已合并 commit。
+- **三类 Commit 形状**：分支提交严格区分为 `A. Merge Harness Commit`（纯粹解冲突与废弃文件清理，保编译）、`B. Invariant Commit`（项目专属不可逾越原则恢复）、`C. Convergence Commit`（分叉收敛）。
+- **验证与审计**：合并前必须通过 `audit.mjs` 进行 `merge-tree` dry-run 冲突推演；合并后必须通过项目本地全量 preflight（编译、单测、格式化），并在 PR body 中列出上游合入清单、不变量守卫项与审计数据。
+- **项目特异性承载**：项目本地通过自身专属 upstream merge skill 仅声明项目特有的不可逾越原则（Invariants）、冲突裁决清单和验证门禁命令，底层通用流程复用公共规范。
+
 ## 代码质量门禁
 
 - 新增功能：至少 1 个正向测试 + 1 个负向测试
