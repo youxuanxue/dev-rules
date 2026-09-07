@@ -255,6 +255,66 @@ else
     fail "project fan-out must remove retired managed rules"
 fi
 
+section "project fan-out and check share project-pinned sources"
+if (
+    set -eu
+    test_home="$(mktemp -d)"
+    test_canonical="$test_home/Codes/dev-rules"
+    test_project="$test_home/Codes/demo-project"
+    cleanup() {
+        rm -rf "$test_home"
+    }
+    trap cleanup EXIT
+
+    mkdir -p "$test_canonical/rules" "$test_canonical/.cursor/skills" "$test_project/.cursor/rules" \
+        "$test_project/dev-rules/rules" "$test_project/dev-rules/scripts"
+    ln -s "$SCRIPT_DIR/sync.sh" "$test_canonical/sync.sh"
+    cp "$RULES_DIR/product-dev.mdc" "$test_canonical/rules/shared.mdc"
+    cp "$RULES_DIR/test-philosophy.mdc" "$test_project/dev-rules/rules/shared.mdc"
+    cp "$RULES_DIR/test-philosophy.mdc" "$test_project/dev-rules/rules/project-only.mdc"
+    cp "$RULES_DIR/product-dev.mdc" "$test_project/.cursor/rules/canonical-only.mdc"
+    printf 'local-only://demo\t%s\n' "$test_project" > "$test_canonical/.local-projects"
+    printf '%s\n' \
+        'import pathlib, sys' \
+        'project = pathlib.Path(sys.argv[sys.argv.index("--project") + 1])' \
+        'target = project / "AGENTS.md"' \
+        'expected = "<!-- dev-rules:codex BEGIN --> project-pinned-generator"' \
+        'if "--check" in sys.argv:' \
+        '    sys.exit(0 if target.read_text() == expected else 1)' \
+        'target.write_text(expected)' \
+        > "$test_project/dev-rules/scripts/gen_codex_agents.py"
+
+    # Exercise explicit sync and the same all-project fan-out used by --pull.
+    for action in --all --project; do
+        sync_args=("$action")
+        if [ "$action" = --project ]; then
+            sync_args+=("$test_project")
+        fi
+        cp "$test_canonical/rules/shared.mdc" "$test_project/.cursor/rules/shared.mdc"
+        env -u CODEX_HOME -u ANTIGRAVITY_HOME \
+            HOME="$test_home" DEV_RULES_HOME="$test_canonical" \
+            bash "$test_canonical/sync.sh" "${sync_args[@]}" > "$test_home/sync.log" || {
+                cat "$test_home/sync.log"
+                exit 1
+            }
+        cmp "$test_project/dev-rules/rules/shared.mdc" "$test_project/.cursor/rules/shared.mdc"
+        cmp "$test_project/dev-rules/rules/project-only.mdc" "$test_project/.cursor/rules/project-only.mdc"
+        test ! -e "$test_project/.cursor/rules/canonical-only.mdc"
+        grep -Fq project-pinned-generator "$test_project/AGENTS.md"
+        env -u CODEX_HOME -u ANTIGRAVITY_HOME \
+            HOME="$test_home" DEV_RULES_HOME="$test_canonical" \
+            bash "$test_canonical/sync.sh" --check > "$test_home/check.log" || {
+                cat "$test_home/check.log"
+                exit 1
+            }
+    done
+) > /tmp/dev-rules-project-source.log 2>&1; then
+    ok "project sync and drift check agree on pinned rules and generator"
+else
+    sed 's/^/    /' /tmp/dev-rules-project-source.log
+    fail "project fan-out must preserve project-pinned rules and generator"
+fi
+
 section "project rule fan-out fails closed on copy errors"
 if (
     set -eu

@@ -667,9 +667,19 @@ sync_to_antigravity_home() {
     fi
 }
 
+project_source_path() {
+    local candidate="$1/dev-rules/$2"
+    if [ -e "$candidate" ]; then
+        printf '%s\n' "$candidate"
+    else
+        printf '%s\n' "$3"
+    fi
+}
+
 sync_to_project() {
     local project_dir="$1"
-    local source_rules_dir="${2:-$RULES_DIR}"
+    local source_rules_dir
+    source_rules_dir="$(project_source_path "$project_dir" rules "${2:-$RULES_DIR}")"
 
     if [ ! -d "$project_dir" ]; then
         echo "  SKIP (not found): $project_dir"
@@ -705,10 +715,7 @@ sync_to_project() {
         fi
     done
 
-    # .cursor/rules is a managed mirror: check_project_drift already treats any
-    # rule missing from the canonical source as an orphan. Reconcile the same
-    # invariant during fan-out so deleting a canonical rule also removes every
-    # generated project copy instead of leaving stale Agent instructions.
+    # Remove generated rules absent from the selected source, matching drift checks.
     for target in "$target_rules"/*.mdc; do
         [ -f "$target" ] || continue
         local basename
@@ -741,11 +748,13 @@ sync_to_project() {
     # instructions; it ignores .cursor/rules/*.mdc and has no behavioral-rules
     # dir, so dev-rules capabilities are injected as a generated managed block
     # in AGENTS.md (constitution + rule index + skill index + commands).
-    if [ ! -f "$GEN_CODEX_AGENTS" ]; then
-        echo "  FAIL: AGENTS generator missing: $GEN_CODEX_AGENTS" >&2
+    local gen
+    gen="$(project_source_path "$project_dir" scripts/gen_codex_agents.py "$GEN_CODEX_AGENTS")"
+    if [ ! -f "$gen" ]; then
+        echo "  FAIL: AGENTS generator missing: $gen" >&2
         return 1
     fi
-    if ! python3 "$GEN_CODEX_AGENTS" --project "$project_dir"; then
+    if ! python3 "$gen" --project "$project_dir"; then
         echo "  FAIL: AGENTS generation failed for $(basename "$project_dir")" >&2
         return 1
     fi
@@ -900,14 +909,10 @@ check_project_drift() {
         return 1
     fi
 
-    # Source of truth = project's OWN dev-rules submodule (locked to its SHA),
-    # not the canonical mirror. Each project legitimately versions its rules
-    # by submodule SHA; canonical advancing beyond a project is normal.
-    # Falls back to $RULES_DIR (this script's own rules) only when the project
-    # has no submodule (rare; typically a non-submodule project that copied rules).
-    local source_rules="$project_dir/dev-rules/rules"
-    if [ ! -d "$source_rules" ]; then
-        source_rules="$RULES_DIR"
+    # Write and check use the same project-pinned source, with canonical fallback.
+    local source_rules
+    source_rules="$(project_source_path "$project_dir" rules "$HOME_RULES_DIR")"
+    if [ "$source_rules" = "$HOME_RULES_DIR" ]; then
         echo "  note: $project_dir has no dev-rules/ submodule; comparing against canonical mirror"
     fi
 
@@ -943,8 +948,8 @@ check_project_drift() {
     # check matches what that project would regenerate; falls back to this copy.
     if [ -f "$project_dir/AGENTS.md" ] && \
        grep -q 'dev-rules:codex BEGIN' "$project_dir/AGENTS.md" 2>/dev/null; then
-        local gen="$project_dir/dev-rules/scripts/gen_codex_agents.py"
-        [ -f "$gen" ] || gen="$GEN_CODEX_AGENTS"
+        local gen
+        gen="$(project_source_path "$project_dir" scripts/gen_codex_agents.py "$GEN_CODEX_AGENTS")"
         if [ -f "$gen" ]; then
             if ! python3 "$gen" --project "$project_dir" --check > /tmp/dev-rules-codex-block.log 2>&1; then
                 sed 's/^/  /' /tmp/dev-rules-codex-block.log
@@ -1425,7 +1430,7 @@ list_projects() {
 
 sync_all_projects() {
     echo ""
-    echo "=== Syncing to materialized projects (registered + local-only, source: $HOME_RULES_DIR) ==="
+    echo "=== Syncing to materialized projects (project-pinned source; fallback: $HOME_RULES_DIR) ==="
     local any=0 failed=0 name url project
     while IFS=$'\t' read -r name url project; do
         any=1
