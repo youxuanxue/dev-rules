@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #
 # wts — create an isolated git worktree (shared-submodule layout) and start an
-# interactive agent session in the current terminal (Cursor Agent CLI / Codex / Claude Code).
+# interactive agent session in the current terminal (Cursor Agent CLI / Codex / Claude Code / Gemini CLI).
 #
 # Canonical source: dev-rules/global/bin/wts (symlinked to ~/.local/bin/wts by sync.sh).
 # Under the hood: git-worktree-submodule/scripts/wtree.py
 #
 # Usage:
-#   wts <slug> [agent|codex|claude|ide]   # create worktree + exec session here (default: agent)
+#   wts <slug> [agent|codex|claude|gemini|ide]   # create worktree + exec session here (default: agent)
 #   wts open <path-or-slug> [runtime]     # attach session to an existing worktree
 #   wts --iterm <slug> [runtime]          # open a new iTerm window instead
 #
@@ -16,17 +16,17 @@ set -euo pipefail
 usage() {
     cat <<'EOF'
 Usage:
-  wts <slug> [agent|codex|claude|ide]
+  wts <slug> [agent|codex|claude|gemini|ide]
       Create ../<repo>-wt-<slug> from origin/main and start a session.
       A bare slug never means a directory inside the repo.
       Default: current terminal + agent --workspace <worktree>.
 
-  wts open <path-or-slug> [agent|codex|claude|ide]
+  wts open <path-or-slug> [agent|codex|claude|gemini|ide]
       Open an existing worktree without creating a new one.
 
 Options:
   --repo PATH    Superproject path (default: git root from cwd)
-  --model MODEL  Pass a model to the Claude runtime
+  --model MODEL  Pass a model to the Claude or Gemini runtime
   --iterm        Open a new iTerm window instead of the current terminal
   --here         Same as default (accepted for compatibility)
   -h, --help     Show this help
@@ -34,11 +34,12 @@ Options:
 Examples:
   cd ~/Codes/sub2api && wts prob
   cd ~/Codes/sub2api && wts prob codex
+  cd ~/Codes/sub2api && wts prob gemini --model gemini-3.8-flash
   cd ~/Codes/sub2api && wts --iterm prob agent
   cd ~/Codes/sub2api && wts open prob
 
 Environment:
-  WTREE_SCRIPT / AGENT_BIN / CODEX_BIN / CLAUDE_BIN   Override binaries
+  WTREE_SCRIPT / AGENT_BIN / CODEX_BIN / CLAUDE_BIN / GEMINI_BIN   Override binaries
   WTS_HERE=0     Same as --iterm (open iTerm)
 EOF
 }
@@ -164,11 +165,33 @@ normalize_runtime() {
     case "$1" in
         cursor | agent) echo "agent" ;;
         ide | cursor-ide) echo "ide" ;;
+        gemini | gemini-cli) echo "gemini" ;;
         codex | claude) echo "$1" ;;
         *)
-            die "unknown runtime: $1 (expected agent, codex, claude, or ide)"
+            die "unknown runtime: $1 (expected agent, codex, claude, gemini, or ide)"
             ;;
     esac
+}
+
+resolve_gemini_bin() {
+    if [[ -n "${GEMINI_BIN:-}" && -x "$GEMINI_BIN" ]]; then
+        echo "$GEMINI_BIN"
+        return 0
+    fi
+    local found=""
+    found="$(command -v gemini 2>/dev/null || true)"
+    if [[ -n "$found" && -x "$found" ]]; then
+        echo "$found"
+        return 0
+    fi
+    local candidate
+    for candidate in "$HOME/.local/bin/gemini" "/opt/homebrew/bin/gemini" "/usr/local/bin/gemini"; do
+        if [[ -x "$candidate" ]]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    die "gemini not found in PATH (set GEMINI_BIN)"
 }
 
 resolve_agent_bin() {
@@ -222,6 +245,14 @@ session_command() {
             local claude_bin="${CLAUDE_BIN:-$(command -v claude 2>/dev/null || echo "$HOME/.local/bin/claude")}"
             [[ -x "$claude_bin" ]] || die "claude not found in PATH (set CLAUDE_BIN)"
             cmd=("$claude_bin")
+            if [[ -n "$model" ]]; then
+                cmd+=("--model" "$model")
+            fi
+            ;;
+        gemini)
+            local gemini_bin
+            gemini_bin="$(resolve_gemini_bin)"
+            cmd=("$gemini_bin")
             if [[ -n "$model" ]]; then
                 cmd+=("--model" "$model")
             fi
@@ -332,6 +363,37 @@ SH
         fails=$((fails + 1))
     fi
 
+    gemini_argv_file="$tmp/gemini-argv"
+    cat > "$tmp/gemini" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$WTS_SELF_TEST_ARGV"
+SH
+    chmod +x "$tmp/gemini"
+
+    if WTS_SELF_TEST_WORKTREE="$worktree" WTREE_SCRIPT="$tmp/wtree.py" \
+        GEMINI_BIN="$tmp/gemini" WTS_SELF_TEST_ARGV="$gemini_argv_file" \
+        "$self" --repo "$repo" seedance gemini --model gemini-3.8-flash \
+        >"$output_file" 2>&1 \
+        && [[ "$(printf '%s\n' --model gemini-3.8-flash)" == "$(cat "$gemini_argv_file")" ]]; then
+        echo "  ok: gemini receives --model"
+    else
+        echo "  x gemini did not receive --model gemini-3.8-flash"
+        sed 's/^/      /' "$output_file"
+        fails=$((fails + 1))
+    fi
+
+    if WTS_SELF_TEST_WORKTREE="$worktree" WTREE_SCRIPT="$tmp/wtree.py" \
+        GEMINI_BIN="$tmp/gemini" WTS_SELF_TEST_ARGV="$gemini_argv_file" \
+        "$self" --repo "$repo" seedance gemini \
+        >"$output_file" 2>&1 \
+        && [[ "" == "$(cat "$gemini_argv_file")" ]]; then
+        echo "  ok: gemini succeeds without --model"
+    else
+        echo "  x gemini failed without --model"
+        sed 's/^/      /' "$output_file"
+        fails=$((fails + 1))
+    fi
+
     if "$self" --repo "$repo" seedance claude --model >"$output_file" 2>&1; then
         echo "  x --model without a value succeeded"
         fails=$((fails + 1))
@@ -346,12 +408,12 @@ SH
     if WTS_SELF_TEST_WORKTREE="$worktree" WTREE_SCRIPT="$tmp/wtree.py" \
         "$self" --repo "$repo" seedance agent --model gpt-5.6 \
         >"$output_file" 2>&1; then
-        echo "  x agent accepted Claude's --model option"
+        echo "  x agent accepted unsupported --model option"
         fails=$((fails + 1))
-    elif grep -qF -- '--model is only supported with the claude runtime' "$output_file"; then
-        echo "  ok: --model rejects non-Claude runtimes"
+    elif grep -qF -- '--model is only supported with the claude and gemini runtimes' "$output_file"; then
+        echo "  ok: --model rejects unsupported runtimes"
     else
-        echo "  x non-Claude --model returned the wrong error"
+        echo "  x unsupported --model returned the wrong error"
         sed 's/^/      /' "$output_file"
         fails=$((fails + 1))
     fi
@@ -507,7 +569,7 @@ main() {
                 cmd="create"
                 shift
                 ;;
-            agent | cursor | codex | claude | ide | cursor-ide)
+            agent | cursor | codex | claude | gemini | gemini-cli | ide | cursor-ide)
                 runtime="$(normalize_runtime "$1")"
                 shift
                 ;;
@@ -533,7 +595,7 @@ main() {
         usage >&2
         exit 1
     }
-    [[ -z "$model" || "$runtime" == "claude" ]] || die "--model is only supported with the claude runtime"
+    [[ -z "$model" || "$runtime" == "claude" || "$runtime" == "gemini" ]] || die "--model is only supported with the claude and gemini runtimes"
 
     WTREE="$(resolve_wtree_script)"
     repo="$(resolve_repo "$repo")"
