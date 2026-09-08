@@ -252,7 +252,7 @@ session_command() {
         gemini)
             local gemini_bin
             gemini_bin="$(resolve_gemini_bin)"
-            cmd=("$gemini_bin")
+            cmd=("$gemini_bin" "--yolo")
             if [[ -n "$model" ]]; then
                 cmd+=("--model" "$model")
             fi
@@ -374,7 +374,7 @@ SH
         GEMINI_BIN="$tmp/gemini" WTS_SELF_TEST_ARGV="$gemini_argv_file" \
         "$self" --repo "$repo" seedance gemini --model gemini-3.8-flash \
         >"$output_file" 2>&1 \
-        && [[ "$(printf '%s\n' --model gemini-3.8-flash)" == "$(cat "$gemini_argv_file")" ]]; then
+        && [[ "$(printf '%s\n' --yolo --model gemini-3.8-flash)" == "$(cat "$gemini_argv_file")" ]]; then
         echo "  ok: gemini receives --model"
     else
         echo "  x gemini did not receive --model gemini-3.8-flash"
@@ -386,7 +386,7 @@ SH
         GEMINI_BIN="$tmp/gemini" WTS_SELF_TEST_ARGV="$gemini_argv_file" \
         "$self" --repo "$repo" seedance gemini \
         >"$output_file" 2>&1 \
-        && [[ "" == "$(cat "$gemini_argv_file")" ]]; then
+        && [[ "$(printf '%s\n' --yolo)" == "$(cat "$gemini_argv_file")" ]]; then
         echo "  ok: gemini succeeds without --model"
     else
         echo "  x gemini failed without --model"
