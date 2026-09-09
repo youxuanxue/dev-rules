@@ -224,6 +224,22 @@ prepare_agent_cli() {
     echo "session-workdir: $WTS_AGENT_WORKTREE"
 }
 
+ensure_worktree_skill_links() {
+    local worktree="$1"
+    if [[ -d "$worktree/.cursor/skills" ]]; then
+        mkdir -p "$worktree/.agents" "$worktree/.claude" "$worktree/.codex" 2>/dev/null || true
+        if [[ ! -e "$worktree/.agents/skills" && ! -L "$worktree/.agents/skills" ]]; then
+            ln -s ../.cursor/skills "$worktree/.agents/skills" 2>/dev/null || true
+        fi
+        if [[ ! -e "$worktree/.claude/skills" && ! -L "$worktree/.claude/skills" ]]; then
+            ln -s ../.cursor/skills "$worktree/.claude/skills" 2>/dev/null || true
+        fi
+        if [[ ! -e "$worktree/.codex/skills" && ! -L "$worktree/.codex/skills" ]]; then
+            ln -s ../.cursor/skills "$worktree/.codex/skills" 2>/dev/null || true
+        fi
+    fi
+}
+
 session_command() {
     local runtime="$1"
     local worktree="$2"
@@ -258,6 +274,7 @@ session_command() {
             fi
             ;;
         ide)
+            ensure_worktree_skill_links "$worktree"
             python3 "$WTREE" open-workspace --worktree "$worktree"
             echo "worktree: $worktree"
             echo "→ 在新 Cursor IDE 窗口里新开 Agent Chat 继续"
@@ -275,6 +292,8 @@ launch_session() {
     local worktree="$1"
     shift
     local -a cmd=("$@")
+
+    ensure_worktree_skill_links "$worktree"
 
     if [[ "${WTS_HERE:-1}" -eq 1 ]] || [[ "$(uname -s)" != "Darwin" ]]; then
         cd "$worktree" || die "cd failed: $worktree"
@@ -448,6 +467,25 @@ PY
         sed 's/^/      /' "$output_file"
         fails=$((fails + 1))
     fi
+
+    # Skill links self-test
+    skills_repo="$tmp/skills-repo"
+    skills_wt="$tmp/skills-repo-wt-test"
+    mkdir -p "$skills_repo/.cursor/skills/demo-skill" "$skills_wt/.cursor/skills/demo-skill"
+    touch "$skills_wt/.cursor/skills/demo-skill/SKILL.md"
+    if WTS_SELF_TEST_WORKTREE="$skills_wt" WTREE_SCRIPT="$tmp/wtree.py" \
+        GEMINI_BIN="$tmp/gemini" WTS_SELF_TEST_ARGV="$gemini_argv_file" \
+        "$self" --repo "$skills_repo" test gemini >"$output_file" 2>&1 \
+        && [[ -L "$skills_wt/.agents/skills" ]] \
+        && [[ -L "$skills_wt/.claude/skills" ]] \
+        && [[ -L "$skills_wt/.codex/skills" ]]; then
+        echo "  ok: ensures worktree skill consumer links"
+    else
+        echo "  x failed to ensure worktree skill consumer links"
+        sed 's/^/      /' "$output_file"
+        fails=$((fails + 1))
+    fi
+
 
     if WTREE_SCRIPT="$tmp/wtree-reuse.py" "$self" --repo "$reuse_repo" open "$reuse_wt" ide \
         >"$output_file" 2>&1 \

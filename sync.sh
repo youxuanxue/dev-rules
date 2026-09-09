@@ -103,6 +103,13 @@ ANTIGRAVITY_SKILLS="$ANTIGRAVITY_HOME_DIR/skills"
 # skills live elsewhere and our additive links never touch unrelated dest entries).
 ANTIGRAVITY_SKILL_RESERVED=".DS_Store"
 
+# Gemini CLI (@google/gemini-cli) consumer (~/.gemini). Gemini CLI discovers
+# user skills from ~/.gemini/skills (Storage.getUserSkillsDir()) and workspace
+# skills from <project>/.agents/skills (Storage.getProjectAgentSkillsDir()).
+GEMINI_HOME_DIR="${GEMINI_HOME:-$HOME/.gemini}"
+GEMINI_SKILLS="$GEMINI_HOME_DIR/skills"
+GEMINI_SKILL_RESERVED=".DS_Store"
+
 LAUNCH_AGENT_LABEL="local.dev-rules.sync"
 LAUNCH_AGENT_PLIST="$HOME/Library/LaunchAgents/${LAUNCH_AGENT_LABEL}.plist"
 
@@ -570,6 +577,7 @@ sync_to_home() {
 
     sync_to_codex_home || return 1
     sync_to_antigravity_home || return 1
+    sync_to_gemini_home || return 1
 }
 
 # Codex CLI/app consumer (~/.codex). Two additive links, neither of which touches
@@ -627,6 +635,24 @@ sync_to_codex_home() {
 # Antigravity ignores .cursor/rules/*.mdc just like Codex; behavioral rules reach it
 # through AGENTS.md (the constitution references them; each project's AGENTS.md block
 # indexes them). No-op when Antigravity CLI isn't installed.
+# Gemini CLI consumer (~/.gemini/skills). Reconciles owned agent-skills links
+# into ~/.gemini/skills so official @google/gemini-cli loads the same global skills.
+# No-op when ~/.gemini does not exist (Gemini CLI not installed or used).
+sync_to_gemini_home() {
+    if [ ! -d "$GEMINI_HOME_DIR" ]; then
+        return 0
+    fi
+
+    echo ""
+    echo "=== Syncing to ~/.gemini/skills/ (Gemini CLI consumer) ==="
+    local home_skill_source
+    if ! home_skill_source="$(home_cursor_skills_source)"; then
+        echo "  (agent skills source unavailable, skipping — nothing for Gemini CLI to load)"
+    else
+        reconcile_owned_skill_links "$home_skill_source" "$GEMINI_SKILLS" "gemini-skills" "$GEMINI_SKILL_RESERVED" || return 1
+    fi
+}
+
 sync_to_antigravity_home() {
     if [ ! -d "$ANTIGRAVITY_HOME_DIR" ]; then
         echo ""
@@ -1181,6 +1207,37 @@ check_home_codex_drift() {
 #   - AGENTS.md not a symlink → global/CLAUDE.md (missing / real file / wrong target)
 #   - a configured agent-skills source entry with no matching skills/<name> symlink
 # Antigravity-managed content (builtin/, brain/, native skills) is never inspected.
+# Check the Gemini CLI consumer links in ~/.gemini/skills. Only relevant
+# when ~/.gemini exists.
+check_home_gemini_drift() {
+    HOME_GEMINI_DRIFT=0
+    [ -d "$GEMINI_HOME_DIR" ] || return 0
+
+    local source
+    source="$(home_cursor_skills_source)" || return 0
+    local entry name link reserved skip
+    for entry in "$source"/*; do
+        [ -d "$entry" ] || continue
+        [ -f "$entry/SKILL.md" ] || continue
+        name="$(basename "$entry")"
+        skip=0
+        for reserved in $GEMINI_SKILL_RESERVED; do
+            [ "$name" = "$reserved" ] && skip=1 && break
+        done
+        [ "$skip" -eq 1 ] && continue
+        link="$GEMINI_SKILLS/$name"
+        if [ -L "$link" ] && [ "$(readlink "$link")" = "$entry" ]; then
+            :
+        elif [ ! -e "$link" ] && [ ! -L "$link" ]; then
+            echo "  ✗ MISSING: ~/.gemini/skills/$name (Gemini CLI won't load this skill)"
+            HOME_GEMINI_DRIFT=$((HOME_GEMINI_DRIFT + 1))
+        else
+            echo "  ✗ WRONG: ~/.gemini/skills/$name (not a symlink → $entry)"
+            HOME_GEMINI_DRIFT=$((HOME_GEMINI_DRIFT + 1))
+        fi
+    done
+}
+
 check_home_antigravity_drift() {
     HOME_ANTIGRAVITY_DRIFT=0
     [ -d "$ANTIGRAVITY_HOME_DIR" ] || return 0
@@ -1332,6 +1389,18 @@ check_drift() {
         else
             total_drift=$((total_drift + HOME_ANTIGRAVITY_DRIFT))
             echo "  Antigravity links drifted. Run: $SCRIPT_DIR/sync.sh"
+        fi
+        echo ""
+
+        # Gemini CLI consumer drift: ~/.gemini/skills per-skill symlinks
+        # (only when ~/.gemini exists).
+        echo "=== Checking drift: ~/.gemini/skills (Gemini CLI consumer) ==="
+        check_home_gemini_drift
+        if [ "$HOME_GEMINI_DRIFT" -eq 0 ]; then
+            echo "  ok: Gemini CLI skills links healthy (or Gemini CLI not installed)"
+        else
+            total_drift=$((total_drift + HOME_GEMINI_DRIFT))
+            echo "  Gemini CLI links drifted. Run: $SCRIPT_DIR/sync.sh"
         fi
         echo ""
 
@@ -1609,6 +1678,20 @@ print_status() {
             done
         fi
         echo "  skills: $antigravity_linked dev-rules symlink(s) in ~/.gemini/antigravity-cli/skills (managed entries untouched)"
+    fi
+
+    echo ""
+    echo "Gemini CLI consumer (~/.gemini/skills):"
+    if [ ! -d "$GEMINI_HOME_DIR" ]; then
+        echo "  ⊘ not installed ($GEMINI_HOME_DIR absent)"
+    else
+        local gemini_linked=0
+        if [ -d "$GEMINI_SKILLS" ]; then
+            for s in "$GEMINI_SKILLS"/*; do
+                [ -L "$s" ] && gemini_linked=$((gemini_linked + 1))
+            done
+        fi
+        echo "  skills: $gemini_linked dev-rules symlink(s) in ~/.gemini/skills"
     fi
     echo ""
     echo "LaunchAgent ($LAUNCH_AGENT_LABEL):"
