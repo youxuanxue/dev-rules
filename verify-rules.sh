@@ -834,6 +834,11 @@ if (
         unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_NAMESPACE \
               GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES \
               GIT_COMMON_DIR GIT_PREFIX
+        local v
+        for v in $(compgen -v GIT_CONFIG_ 2>/dev/null || true); do
+            unset "$v"
+        done
+        unset GIT_CONFIG_COUNT
     }
     git_clean() (
         unset_git_env

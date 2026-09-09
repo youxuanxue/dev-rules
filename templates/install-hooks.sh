@@ -34,6 +34,11 @@ git_hook_path() {
     local name="$1"
     local path
     path="$(git -C "$REPO_ROOT" rev-parse --git-path "hooks/$name")"
+    if [ "$path" = "/$name" ] || [ "$path" = "/hooks/$name" ]; then
+        local git_common
+        git_common="$(git -C "$REPO_ROOT" rev-parse --git-common-dir)"
+        path="$git_common/hooks/$name"
+    fi
     case "$path" in
         /*) printf '%s\n' "$path" ;;
         *) printf '%s\n' "$REPO_ROOT/$path" ;;
