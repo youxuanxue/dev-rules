@@ -468,15 +468,19 @@ if [ ${#LINT_CMDS[@]} -eq 0 ]; then
     skip "no local linter detected (set .preflight/local-lint.conf to enable)"
 else
     lint_errors=0
+    _lint_wt_hash="$(git rev-parse --show-toplevel 2>/dev/null | shasum -a 256 | cut -c1-12 || echo "$$")"
+    _lint_log="/tmp/preflight-local-lint-${_lint_wt_hash}.log"
     for cmd in "${LINT_CMDS[@]}"; do
-        if eval "$cmd" > /tmp/preflight-local-lint.log 2>&1; then
+        if eval "$cmd" > "$_lint_log" 2>&1; then
             ok "$cmd"
         else
-            cat /tmp/preflight-local-lint.log | sed 's/^/    /'
+            cat "$_lint_log" | sed 's/^/    /'
             fail "linter failed: $cmd"
             lint_errors=$((lint_errors + 1))
         fi
     done
+    rm -f "$_lint_log"
+
 fi
 
 # ---- 检查 20: 静默吞错形态（|| true / --no-verify / except: pass / continue-on-error） ----
