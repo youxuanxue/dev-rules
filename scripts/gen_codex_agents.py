@@ -11,7 +11,7 @@ idempotent managed block inside AGENTS.md that POINTS at:
 
   - the constitution (dev-rules/global/CLAUDE.md),
   - the behavioral rule set (.cursor/rules/*.mdc — name + one-line each),
-  - the available skills (.cursor/skills/*/SKILL.md — name + description),
+  - an on-demand skill index (.cursor/skill-index.md — name + description),
   - navigation to globally available review tooling.
 
 Everything inside the block is derived mechanically from on-disk artifacts —
@@ -147,7 +147,6 @@ def has_dev_rules_submodule(project: pathlib.Path) -> bool:
 def render_block(project: pathlib.Path) -> str:
     """Render the managed block body from on-disk artifacts (deterministic)."""
     rules = collect_rules(project)
-    skills = collect_skills(project)
     constitution = (
         "dev-rules/global/CLAUDE.md"
         if has_dev_rules_submodule(project)
@@ -192,22 +191,19 @@ def render_block(project: pathlib.Path) -> str:
     lines.append("")
 
     lines.append("## 可用技能（progressive disclosure）")
-    if skills:
+    if collect_skills(project):
         lines.append(
-            "以下技能源在 `.cursor/skills/`（与 `~/.cursor/skills` 同源）；"
-            "Codex 也可经 `~/.codex/skills/<name>` 原生加载。需要时读对应 `SKILL.md`："
+            "优先使用会话提供的技能目录；需要发现项目技能时读 "
+            "[技能索引](.cursor/skill-index.md)，再只读匹配的 `SKILL.md`。"
+            "正文中的参考文档按触发条件读取，不全量展开。"
         )
-        lines.append("")
-        for name, desc in skills:
-            suffix = f" — {desc}" if desc else ""
-            lines.append(f"- **{name}**{suffix}")
     else:
         lines.append("- （本项目 `.cursor/skills/` 暂无技能）")
     lines.append("")
 
     lines.append("## 全局技能与工具")
     lines.append(
-        "- 代码审查走三端通用 skill `xj-review`（上面技能索引里）：先跑 `preflight.sh` 取 "
+        "- 代码审查走三端通用 skill `xj-review`：先跑 `preflight.sh` 取 "
         "ground-truth，再按风险分级审；Codex 里描述\"review 这个 diff/PR\"即触发。"
     )
     lines.append("")
@@ -239,23 +235,35 @@ def desired_text(project: pathlib.Path) -> str:
     return compose(existing, render_block(project))
 
 
+def skill_index_text(project: pathlib.Path) -> str:
+    """Discovery fallback, generated from the same skill manifests as before."""
+    lines = ["# 项目技能索引", "", "由 gen_codex_agents.py 生成，勿手编。仅在需要发现技能时读取。", ""]
+    for name, desc in collect_skills(project):
+        lines.append(f"- [{name}](skills/{name}/SKILL.md)" + (f" — {desc}" if desc else ""))
+    return "\n".join(lines) + "\n"
+
+
 def run(project: pathlib.Path, *, check: bool) -> int:
     if not project.is_dir():
         return cli_fail(PREFIX, f"project not found: {project}")
     agents = project / "AGENTS.md"
-    want = desired_text(project)
-    have = agents.read_text(encoding="utf-8") if agents.is_file() else ""
-    if want == have:
-        print(f"[{PREFIX}] {agents}: managed block up to date")
-        return 0
-    if check:
+    outputs = {agents: desired_text(project)}
+    # Keep the consumer index outside skills: that directory may be a shared
+    # source symlink, and generating consumer metadata must not mutate it.
+    index = project / ".cursor" / "skill-index.md"
+    if collect_skills(project) or index.is_file():
+        outputs[index] = skill_index_text(project)
+    drift = [path for path, want in outputs.items()
+             if not path.is_file() or path.read_text(encoding="utf-8") != want]
+    if drift and check:
         return cli_fail(
             PREFIX,
-            f"{agents}: dev-rules managed block drifted",
+            "generated navigation drifted: " + ", ".join(str(p) for p in drift),
             "run: dev-rules/sync.sh --project " + str(project),
         )
-    agents.write_text(want, encoding="utf-8")
-    print(f"[{PREFIX}] {agents}: managed block written")
+    for path in drift:
+        path.write_text(outputs[path], encoding="utf-8")
+    print(f"[{PREFIX}] {project}: navigation " + ("written" if drift else "up to date"))
     return 0
 
 
@@ -290,8 +298,19 @@ def _self_test() -> int:
             failures.append("markers missing from block")
         if "alpha.mdc" not in block or "Alpha rule" not in block:
             failures.append("rule index not rendered")
-        if "**demo**" not in block or "A demo skill" not in block:
-            failures.append("skill index not rendered")
+        if ".cursor/skill-index.md" not in block or "A demo skill" in block:
+            failures.append("skill discovery must be on demand")
+        if "[demo](skills/demo/SKILL.md) — A demo skill" not in skill_index_text(proj):
+            failures.append("skill discovery index lost manifest information")
+        # Both outputs must be generated and checked. A missing index must
+        # fail even when AGENTS itself is current; rebuilding is idempotent.
+        if run(proj, check=False) or run(proj, check=True):
+            failures.append("initial navigation generation/check failed")
+        index = proj / ".cursor" / "skill-index.md"
+        index.unlink()
+        if run(proj, check=True) != 1:
+            failures.append("missing skill index was accepted")
+        run(proj, check=False)
         if "xj-review" not in block:
             failures.append("review navigation not rendered")
         # generator self-reference path is consumer-relative. Without a vendored
@@ -347,6 +366,19 @@ def _self_test() -> int:
             failures.append("submodule gen path missing dev-rules/ prefix")
         if "经 `scripts/gen_codex_agents.py`" in sub_block:
             failures.append("submodule block still emits bare scripts/ gen path")
+
+    with tempfile.TemporaryDirectory() as tmp3:
+        root = pathlib.Path(tmp3)
+        shared = root / "shared"
+        (shared / "demo").mkdir(parents=True)
+        (shared / "demo" / "SKILL.md").write_text("---\nname: demo\ndescription: shared\n---\n")
+        project = root / "consumer"
+        (project / ".cursor").mkdir(parents=True)
+        (project / ".cursor" / "skills").symlink_to(shared, target_is_directory=True)
+        before = sorted(shared.rglob("*"))
+        run(project, check=False)
+        if before != sorted(shared.rglob("*")) or run(project, check=True):
+            failures.append("consumer generation mutated shared skill source or drifted")
 
     if failures:
         return cli_fail(PREFIX, "self-test failed", *failures)
