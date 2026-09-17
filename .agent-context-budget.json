@@ -1,0 +1,23 @@
+{
+  "groups": [
+    {
+      "name": "constitution",
+      "patterns": [
+        "global/CLAUDE.md"
+      ],
+      "max_file_bytes": 4000,
+      "max_total_bytes": 4000
+    },
+    {
+      "name": "rules",
+      "patterns": [
+        "rules/*.mdc"
+      ],
+      "max_file_bytes": 7000,
+      "max_total_bytes": 16000
+    }
+  ],
+  "references": [
+    "docs/agent-guides/*.md"
+  ]
+}

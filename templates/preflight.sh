@@ -399,6 +399,17 @@ else
     skip "no skills found (.cursor/skills or <name>/SKILL.md) to check against Codex limit"
 fi
 
+section "agent context budgets and reference links"
+if [ -f .agent-context-budget.json ]; then
+    if "$PYTHON_BIN" dev-rules/scripts/check_agent_context.py --root "$REPO_ROOT"; then
+        ok "instruction budgets and reference links pass"
+    else
+        fail "agent context grew beyond its budget or has broken reference links"
+    fi
+else
+    skip "no .agent-context-budget.json (repository has not opted in)"
+fi
+
 # ---- 检查 18a: 删除文件不得留下打包元数据 / frontmatter 悬空引用 ----
 # preflight 不构建 wheel，hatchling 等打包后端会在 CI 才报错；硬化这条软约束。
 section "deleted files not still referenced (config/frontmatter)"

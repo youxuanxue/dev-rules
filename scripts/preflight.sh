@@ -22,6 +22,13 @@ else
     fail "./verify-rules.sh missing or not executable"
 fi
 
+section "agent context budgets and reference links"
+if python3 scripts/check_agent_context.py --root "$REPO_ROOT"; then
+    ok "instruction budgets and reference links pass"
+else
+    fail "instruction budget or reference drift"
+fi
+
 section "sync-stats.sh --check (doc stats vs live values)"
 if [ -x ./sync-stats.sh ]; then
     if ./sync-stats.sh --check > /tmp/dev-rules-stats.log 2>&1; then
