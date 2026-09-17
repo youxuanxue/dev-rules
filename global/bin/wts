@@ -26,7 +26,7 @@ Usage:
 
 Options:
   --repo PATH    Superproject path (default: git root from cwd)
-  --model MODEL  Pass a model to the Claude or Gemini runtime
+  --model MODEL  Pass a model to the Claude, Codex, or Gemini runtime
   --iterm        Open a new iTerm window instead of the current terminal
   --here         Same as default (accepted for compatibility)
   -h, --help     Show this help
@@ -256,6 +256,9 @@ session_command() {
             local codex_bin="${CODEX_BIN:-$(command -v codex 2>/dev/null || true)}"
             [[ -n "$codex_bin" ]] || die "codex not found in PATH (set CODEX_BIN)"
             cmd=("$codex_bin" "-C" "$worktree")
+            if [[ -n "$model" ]]; then
+                cmd+=("--model" "$model")
+            fi
             ;;
         claude)
             local claude_bin="${CLAUDE_BIN:-$(command -v claude 2>/dev/null || echo "$HOME/.local/bin/claude")}"
@@ -389,6 +392,25 @@ printf '%s\n' "$@" > "$WTS_SELF_TEST_ARGV"
 SH
     chmod +x "$tmp/gemini"
 
+    codex_argv_file="$tmp/codex-argv"
+    cat > "$tmp/codex" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$WTS_SELF_TEST_ARGV"
+SH
+    chmod +x "$tmp/codex"
+
+    if WTS_SELF_TEST_WORKTREE="$worktree" WTREE_SCRIPT="$tmp/wtree.py" \
+        CODEX_BIN="$tmp/codex" WTS_SELF_TEST_ARGV="$codex_argv_file" \
+        "$self" --repo "$repo" seedance codex --model glm-5.3 \
+        >"$output_file" 2>&1 \
+        && [[ "$(printf '%s\n' -C "$worktree" --model glm-5.3)" == "$(cat "$codex_argv_file")" ]]; then
+        echo "  ok: codex receives --model"
+    else
+        echo "  x codex did not receive --model glm-5.3"
+        sed 's/^/      /' "$output_file"
+        fails=$((fails + 1))
+    fi
+
     if WTS_SELF_TEST_WORKTREE="$worktree" WTREE_SCRIPT="$tmp/wtree.py" \
         GEMINI_BIN="$tmp/gemini" WTS_SELF_TEST_ARGV="$gemini_argv_file" \
         "$self" --repo "$repo" seedance gemini --model gemini-3.8-flash \
@@ -429,7 +451,7 @@ SH
         >"$output_file" 2>&1; then
         echo "  x agent accepted unsupported --model option"
         fails=$((fails + 1))
-    elif grep -qF -- '--model is only supported with the claude and gemini runtimes' "$output_file"; then
+    elif grep -qF -- '--model is only supported with the claude, codex, and gemini runtimes' "$output_file"; then
         echo "  ok: --model rejects unsupported runtimes"
     else
         echo "  x unsupported --model returned the wrong error"
@@ -633,7 +655,7 @@ main() {
         usage >&2
         exit 1
     }
-    [[ -z "$model" || "$runtime" == "claude" || "$runtime" == "gemini" ]] || die "--model is only supported with the claude and gemini runtimes"
+    [[ -z "$model" || "$runtime" == "claude" || "$runtime" == "codex" || "$runtime" == "gemini" ]] || die "--model is only supported with the claude, codex, and gemini runtimes"
 
     WTREE="$(resolve_wtree_script)"
     repo="$(resolve_repo "$repo")"
