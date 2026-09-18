@@ -61,7 +61,7 @@ Examples:
 
 Notes:
   • Reuses ../<repo>-wt-<slug> if it already exists.
-  • kimi first run: inside the TUI, /login (OAuth or Platform API key).
+  • kimi auth: /login (OAuth), /provider, or ~/.kimi-code/config.toml
   • kimi binary: ~/.kimi-code/bin/kimi (official install) or PATH / KIMI_BIN.
   • agent / ide / dsh do not accept --model.
 
@@ -567,6 +567,39 @@ SH
         echo "  ok: kimi succeeds without --model"
     else
         echo "  x kimi failed without --model"
+        sed 's/^/      /' "$output_file"
+        fails=$((fails + 1))
+    fi
+
+    if WTS_SELF_TEST_WORKTREE="$worktree" WTREE_SCRIPT="$tmp/wtree.py" \
+        KIMI_BIN="$tmp/kimi" WTS_SELF_TEST_ARGV="$kimi_argv_file" \
+        "$self" --repo "$repo" seedance kimi-code --model kimi-k3 \
+        >"$output_file" 2>&1 \
+        && [[ "$(printf '%s\n' --model kimi-k3)" == "$(cat "$kimi_argv_file")" ]]; then
+        echo "  ok: kimi-code alias maps to kimi"
+    else
+        echo "  x kimi-code alias did not map to kimi"
+        sed 's/^/      /' "$output_file"
+        fails=$((fails + 1))
+    fi
+
+    # Official install path: ~/.kimi-code/bin/kimi must resolve when PATH has no kimi.
+    official_home="$tmp/official-home"
+    mkdir -p "$official_home/.kimi-code/bin"
+    cat > "$official_home/.kimi-code/bin/kimi" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$WTS_SELF_TEST_ARGV"
+SH
+    chmod +x "$official_home/.kimi-code/bin/kimi"
+    if HOME="$official_home" PATH="/usr/bin:/bin" \
+        WTS_SELF_TEST_WORKTREE="$worktree" WTREE_SCRIPT="$tmp/wtree.py" \
+        WTS_SELF_TEST_ARGV="$kimi_argv_file" \
+        env -u KIMI_BIN "$self" --repo "$repo" seedance kimi --model kimi-k3 \
+        >"$output_file" 2>&1 \
+        && [[ "$(printf '%s\n' --model kimi-k3)" == "$(cat "$kimi_argv_file")" ]]; then
+        echo "  ok: resolves official ~/.kimi-code/bin/kimi"
+    else
+        echo "  x did not resolve official ~/.kimi-code/bin/kimi"
         sed 's/^/      /' "$output_file"
         fails=$((fails + 1))
     fi
