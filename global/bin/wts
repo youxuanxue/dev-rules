@@ -1,46 +1,74 @@
 #!/usr/bin/env bash
 #
 # wts — create an isolated git worktree (shared-submodule layout) and start an
-# interactive agent session in the current terminal (Cursor Agent CLI / Codex / Claude Code / Gemini CLI).
+# interactive agent session in the current terminal (Cursor Agent CLI / Codex /
+# Claude Code / Gemini CLI / Kimi Code CLI / DeepSeek Harness).
 #
 # Canonical source: dev-rules/global/bin/wts (symlinked to ~/.local/bin/wts by sync.sh).
 # Under the hood: git-worktree-submodule/scripts/wtree.py
 #
 # Usage:
-#   wts <slug> [agent|codex|claude|gemini|ide]   # create worktree + exec session here (default: agent)
-#   wts open <path-or-slug> [runtime]     # attach session to an existing worktree
-#   wts --iterm <slug> [runtime]          # open a new iTerm window instead
-#
+#   wts <slug> [runtime]              # create + exec (default runtime: agent)
+#   wts open <path-or-slug> [runtime]
+#   wts --iterm <slug> [runtime]
+#   wts --help                        # runtimes / options / examples
 set -euo pipefail
 
 usage() {
     cat <<'EOF'
 Usage:
-  wts <slug> [agent|codex|claude|gemini|ide]
-      Create ../<repo>-wt-<slug> from origin/main and start a session.
-      A bare slug never means a directory inside the repo.
-      Default: current terminal + agent --workspace <worktree>.
+  wts <slug> [runtime]
+      Create ../<repo>-wt-<slug> from origin/main (branch chore/<slug>) and
+      start a session in that worktree. Bare slugs never mean an in-repo dir.
+      Default runtime: agent. Default launch: current terminal (not iTerm).
 
-  wts open <path-or-slug> [agent|codex|claude|gemini|ide]
-      Open an existing worktree without creating a new one.
+  wts open <path-or-slug> [runtime]
+      Attach a session to an existing worktree (no create).
+
+  wts create <slug> [runtime]
+      Same as the default create path (explicit subcommand).
+
+Runtimes:
+  agent     Cursor Agent CLI — agent --workspace <wt> --trust  (default)
+  codex     Codex CLI        — codex -C <wt> [--model …]
+  claude    Claude Code      — claude [--model …]
+  gemini    Gemini CLI       — gemini --yolo [--model …]
+  kimi      Kimi Code CLI    — kimi [--model …]
+  dsh       DeepSeek Harness — dsh web  (model via ~/.dsh/settings.yaml)
+  ide       Open Cursor IDE window on the worktree (no CLI agent)
+
+  Aliases: cursor→agent, cursor-ide→ide, gemini-cli→gemini,
+           kimi-code→kimi, deepseek|deepseek-harness→dsh
 
 Options:
   --repo PATH    Superproject path (default: git root from cwd)
-  --model MODEL  Pass a model to the Claude, Codex, or Gemini runtime
+  --model MODEL  Forward --model to claude / codex / gemini / kimi only
   --iterm        Open a new iTerm window instead of the current terminal
-  --here         Same as default (accepted for compatibility)
+  --here         Current terminal (default; accepted for compatibility)
+  --self-test    Run launcher self-tests and exit
   -h, --help     Show this help
 
 Examples:
   cd ~/Codes/sub2api && wts prob
   cd ~/Codes/sub2api && wts prob codex
   cd ~/Codes/sub2api && wts prob gemini --model gemini-3.8-flash
+  cd ~/Codes/sub2api && wts prob kimi
+  cd ~/Codes/sub2api && wts prob kimi --model <alias-from-config.toml>
+  cd ~/Codes/sub2api && wts prob dsh
   cd ~/Codes/sub2api && wts --iterm prob agent
   cd ~/Codes/sub2api && wts open prob
+  cd ~/Codes/sub2api && wts open ../sub2api-wt-prob kimi
+
+Notes:
+  • Reuses ../<repo>-wt-<slug> if it already exists.
+  • kimi first run: inside the TUI, /login (OAuth or Platform API key).
+  • kimi binary: ~/.kimi-code/bin/kimi (official install) or PATH / KIMI_BIN.
+  • agent / ide / dsh do not accept --model.
 
 Environment:
-  WTREE_SCRIPT / AGENT_BIN / CODEX_BIN / CLAUDE_BIN / GEMINI_BIN   Override binaries
-  WTS_HERE=0     Same as --iterm (open iTerm)
+  WTREE_SCRIPT   Override path to wtree.py
+  AGENT_BIN / CODEX_BIN / CLAUDE_BIN / GEMINI_BIN / KIMI_BIN / DSH_BIN
+  WTS_HERE=0     Same as --iterm
 EOF
 }
 
@@ -166,32 +194,71 @@ normalize_runtime() {
         cursor | agent) echo "agent" ;;
         ide | cursor-ide) echo "ide" ;;
         gemini | gemini-cli) echo "gemini" ;;
+        kimi | kimi-code) echo "kimi" ;;
+        dsh | deepseek | deepseek-harness) echo "dsh" ;;
         codex | claude) echo "$1" ;;
         *)
-            die "unknown runtime: $1 (expected agent, codex, claude, gemini, or ide)"
+            die "unknown runtime: $1 (expected agent, codex, claude, gemini, kimi, dsh, or ide)"
             ;;
     esac
 }
 
-resolve_gemini_bin() {
-    if [[ -n "${GEMINI_BIN:-}" && -x "$GEMINI_BIN" ]]; then
-        echo "$GEMINI_BIN"
+resolve_named_bin() {
+    local name="$1"
+    local env_var="$2"
+    local env_val="${!env_var:-}"
+    if [[ -n "$env_val" && -x "$env_val" ]]; then
+        echo "$env_val"
         return 0
     fi
     local found=""
-    found="$(command -v gemini 2>/dev/null || true)"
+    found="$(command -v "$name" 2>/dev/null || true)"
     if [[ -n "$found" && -x "$found" ]]; then
         echo "$found"
         return 0
     fi
     local candidate
-    for candidate in "$HOME/.local/bin/gemini" "/opt/homebrew/bin/gemini" "/usr/local/bin/gemini"; do
+    for candidate in "$HOME/.local/bin/$name" "/opt/homebrew/bin/$name" "/usr/local/bin/$name"; do
         if [[ -x "$candidate" ]]; then
             echo "$candidate"
             return 0
         fi
     done
-    die "gemini not found in PATH (set GEMINI_BIN)"
+    die "$name not found in PATH (set $env_var)"
+}
+
+resolve_gemini_bin() {
+    resolve_named_bin gemini GEMINI_BIN
+}
+
+resolve_kimi_bin() {
+    if [[ -n "${KIMI_BIN:-}" && -x "$KIMI_BIN" ]]; then
+        echo "$KIMI_BIN"
+        return 0
+    fi
+    local found=""
+    found="$(command -v kimi 2>/dev/null || true)"
+    if [[ -n "$found" && -x "$found" ]]; then
+        echo "$found"
+        return 0
+    fi
+    local candidate
+    # Official install script places the binary under ~/.kimi-code/bin.
+    for candidate in \
+        "$HOME/.kimi-code/bin/kimi" \
+        "$HOME/.local/bin/kimi" \
+        "/opt/homebrew/bin/kimi" \
+        "/usr/local/bin/kimi"; do
+        if [[ -x "$candidate" ]]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    die "kimi not found in PATH (set KIMI_BIN; install: curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash)"
+}
+
+resolve_dsh_bin() {
+    resolve_named_bin dsh DSH_BIN
 }
 
 resolve_agent_bin() {
@@ -275,6 +342,20 @@ session_command() {
             if [[ -n "$model" ]]; then
                 cmd+=("--model" "$model")
             fi
+            ;;
+        kimi)
+            local kimi_bin
+            kimi_bin="$(resolve_kimi_bin)"
+            cmd=("$kimi_bin")
+            if [[ -n "$model" ]]; then
+                cmd+=("--model" "$model")
+            fi
+            ;;
+        dsh)
+            local dsh_bin
+            dsh_bin="$(resolve_dsh_bin)"
+            # Official interactive surface is Web UI (developer preview); cwd is the workspace.
+            cmd=("$dsh_bin" "web")
             ;;
         ide)
             ensure_worktree_skill_links "$worktree"
@@ -451,10 +532,86 @@ SH
         >"$output_file" 2>&1; then
         echo "  x agent accepted unsupported --model option"
         fails=$((fails + 1))
-    elif grep -qF -- '--model is only supported with the claude, codex, and gemini runtimes' "$output_file"; then
+    elif grep -qF -- '--model is only supported with the claude, codex, gemini, and kimi runtimes' "$output_file"; then
         echo "  ok: --model rejects unsupported runtimes"
     else
         echo "  x unsupported --model returned the wrong error"
+        sed 's/^/      /' "$output_file"
+        fails=$((fails + 1))
+    fi
+
+    kimi_argv_file="$tmp/kimi-argv"
+    cat > "$tmp/kimi" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$WTS_SELF_TEST_ARGV"
+SH
+    chmod +x "$tmp/kimi"
+
+    if WTS_SELF_TEST_WORKTREE="$worktree" WTREE_SCRIPT="$tmp/wtree.py" \
+        KIMI_BIN="$tmp/kimi" WTS_SELF_TEST_ARGV="$kimi_argv_file" \
+        "$self" --repo "$repo" seedance kimi --model kimi-for-coding \
+        >"$output_file" 2>&1 \
+        && [[ "$(printf '%s\n' --model kimi-for-coding)" == "$(cat "$kimi_argv_file")" ]]; then
+        echo "  ok: kimi receives --model"
+    else
+        echo "  x kimi did not receive --model kimi-for-coding"
+        sed 's/^/      /' "$output_file"
+        fails=$((fails + 1))
+    fi
+
+    if WTS_SELF_TEST_WORKTREE="$worktree" WTREE_SCRIPT="$tmp/wtree.py" \
+        KIMI_BIN="$tmp/kimi" WTS_SELF_TEST_ARGV="$kimi_argv_file" \
+        "$self" --repo "$repo" seedance kimi \
+        >"$output_file" 2>&1 \
+        && [[ -z "$(cat "$kimi_argv_file")" ]]; then
+        echo "  ok: kimi succeeds without --model"
+    else
+        echo "  x kimi failed without --model"
+        sed 's/^/      /' "$output_file"
+        fails=$((fails + 1))
+    fi
+
+    dsh_argv_file="$tmp/dsh-argv"
+    cat > "$tmp/dsh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$WTS_SELF_TEST_ARGV"
+SH
+    chmod +x "$tmp/dsh"
+
+    if WTS_SELF_TEST_WORKTREE="$worktree" WTREE_SCRIPT="$tmp/wtree.py" \
+        DSH_BIN="$tmp/dsh" WTS_SELF_TEST_ARGV="$dsh_argv_file" \
+        "$self" --repo "$repo" seedance dsh \
+        >"$output_file" 2>&1 \
+        && [[ "$(printf '%s\n' web)" == "$(cat "$dsh_argv_file")" ]]; then
+        echo "  ok: dsh launches web profile"
+    else
+        echo "  x dsh did not launch web profile"
+        sed 's/^/      /' "$output_file"
+        fails=$((fails + 1))
+    fi
+
+    if WTS_SELF_TEST_WORKTREE="$worktree" WTREE_SCRIPT="$tmp/wtree.py" \
+        DSH_BIN="$tmp/dsh" WTS_SELF_TEST_ARGV="$dsh_argv_file" \
+        "$self" --repo "$repo" seedance deepseek \
+        >"$output_file" 2>&1 \
+        && [[ "$(printf '%s\n' web)" == "$(cat "$dsh_argv_file")" ]]; then
+        echo "  ok: deepseek alias maps to dsh"
+    else
+        echo "  x deepseek alias did not map to dsh"
+        sed 's/^/      /' "$output_file"
+        fails=$((fails + 1))
+    fi
+
+    if WTS_SELF_TEST_WORKTREE="$worktree" WTREE_SCRIPT="$tmp/wtree.py" \
+        DSH_BIN="$tmp/dsh" \
+        "$self" --repo "$repo" seedance dsh --model deepseek-v4-flash \
+        >"$output_file" 2>&1; then
+        echo "  x dsh accepted unsupported --model option"
+        fails=$((fails + 1))
+    elif grep -qF -- '--model is only supported with the claude, codex, gemini, and kimi runtimes' "$output_file"; then
+        echo "  ok: --model rejects dsh runtime"
+    else
+        echo "  x dsh --model returned the wrong error"
         sed 's/^/      /' "$output_file"
         fails=$((fails + 1))
     fi
@@ -629,7 +786,7 @@ main() {
                 cmd="create"
                 shift
                 ;;
-            agent | cursor | codex | claude | gemini | gemini-cli | ide | cursor-ide)
+            agent | cursor | codex | claude | gemini | gemini-cli | kimi | kimi-code | dsh | deepseek | deepseek-harness | ide | cursor-ide)
                 runtime="$(normalize_runtime "$1")"
                 shift
                 ;;
@@ -655,7 +812,7 @@ main() {
         usage >&2
         exit 1
     }
-    [[ -z "$model" || "$runtime" == "claude" || "$runtime" == "codex" || "$runtime" == "gemini" ]] || die "--model is only supported with the claude, codex, and gemini runtimes"
+    [[ -z "$model" || "$runtime" == "claude" || "$runtime" == "codex" || "$runtime" == "gemini" || "$runtime" == "kimi" ]] || die "--model is only supported with the claude, codex, gemini, and kimi runtimes"
 
     WTREE="$(resolve_wtree_script)"
     repo="$(resolve_repo "$repo")"
