@@ -26,6 +26,7 @@
 | `sync.sh --check` | 检查项目 `.cursor/rules/` 与 submodule 是否 drift |
 | `verify-rules.sh` | 验证 dev-rules 仓库自身完整性 |
 | `templates/install-hooks.sh` | 安装 pre-commit + commit-msg hook（后者硬拦高风险锚点缺失） |
+| `templates/install-upstream-merge-notify.sh` | 有 `upstream` remote 时安装 detection-only 上游落后通知 workflow（`sync.sh` 自动调用） |
 | `templates/preflight.sh` | 消费项目默认门禁模板 |
 | `scripts/preflight.sh` | dev-rules 源仓库自己的提交门禁 |
 | `schemas/review.schema.json` | `/user:xj-review` 输出契约 |
