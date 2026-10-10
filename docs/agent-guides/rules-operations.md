@@ -56,7 +56,7 @@ git add .cursor/rules/ .gitmodules dev-rules
 git commit -m "chore: add dev-rules submodule and sync rules"
 ```
 
-Fork 仓库应配置 `upstream` remote（指向源仓库）。`sync.sh --local` / `--project` / fan-out 会调用 `templates/install-upstream-merge-notify.sh`：无 upstream 则跳过；已有无 managed-by 标记的定制文件（如历史手工版）不覆盖。也可单独执行：
+Fork 仓库应配置 `upstream` remote（指向源仓库）。`sync.sh --local` / `--project` / fan-out 会调用 `templates/install-upstream-merge-notify.sh`：无 upstream 则跳过；任一 payload 路径已存在且无 managed-by 标记时整组跳过（all-or-nothing，避免 custom workflow + managed scripts 混装）。也可单独执行：
 
 ```bash
 bash dev-rules/templates/install-upstream-merge-notify.sh

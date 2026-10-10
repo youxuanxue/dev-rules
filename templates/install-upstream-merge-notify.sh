@@ -6,6 +6,7 @@
 # Copies managed payload from templates/upstream-merge-notify/ into:
 #   .github/workflows/upstream-merge-notify.yml
 #   scripts/lib/upstream-drift.sh
+#   scripts/lib/upstream-url.conf
 #   scripts/upstream/check-drift.sh
 #   scripts/upstream/notify-merge-needed.py
 #
@@ -13,7 +14,8 @@
 #   - no upstream remote → no-op (exit 0)
 #   - missing managed file → install
 #   - existing file with managed-by marker → refresh
-#   - existing file without marker → skip (preserve project-specific forks)
+#   - any existing payload file without marker → skip entire install
+#     (all-or-nothing; avoid hybrid custom workflow + managed scripts)
 #
 # Usage:
 #   bash templates/install-upstream-merge-notify.sh [project_root]
@@ -49,14 +51,23 @@ is_managed_file() {
   [ -f "$path" ] && grep -qF "$MANAGED_MARKER" "$path"
 }
 
-should_write() {
-  local dest="$1"
-  if [ ! -e "$dest" ]; then
-    return 0
-  fi
-  if is_managed_file "$dest"; then
-    return 0
-  fi
+PAYLOAD_RELS=(
+  ".github/workflows/upstream-merge-notify.yml"
+  "scripts/lib/upstream-drift.sh"
+  "scripts/lib/upstream-url.conf"
+  "scripts/upstream/check-drift.sh"
+  "scripts/upstream/notify-merge-needed.py"
+)
+
+# Returns 0 when the project opted out (any unmanaged payload file exists).
+project_has_custom_payload() {
+  local project_dir="$1" rel dest
+  for rel in "${PAYLOAD_RELS[@]}"; do
+    dest="$project_dir/$rel"
+    if [ -e "$dest" ] && ! is_managed_file "$dest"; then
+      return 0
+    fi
+  done
   return 1
 }
 
@@ -81,28 +92,20 @@ install_into() {
     return 1
   fi
 
-  local rels=(
-    ".github/workflows/upstream-merge-notify.yml"
-    "scripts/lib/upstream-drift.sh"
-    "scripts/lib/upstream-url.conf"
-    "scripts/upstream/check-drift.sh"
-    "scripts/upstream/notify-merge-needed.py"
-  )
+  if project_has_custom_payload "$project_dir"; then
+    echo "  ok: upstream-merge-notify left custom files untouched in $(basename "$project_dir")"
+    return 0
+  fi
 
-  local changed=0 skipped=0
-  for rel in "${rels[@]}"; do
-    local src="$PAYLOAD_DIR/$rel"
-    local dest="$project_dir/$rel"
+  local changed=0
+  local rel src dest rendered
+  for rel in "${PAYLOAD_RELS[@]}"; do
+    src="$PAYLOAD_DIR/$rel"
+    dest="$project_dir/$rel"
     if [ ! -f "$src" ]; then
       echo "  FAIL: template file missing: $src" >&2
       return 1
     fi
-    if ! should_write "$dest"; then
-      echo "  skip (custom): $rel → $(basename "$project_dir")"
-      skipped=$((skipped + 1))
-      continue
-    fi
-    local rendered
     rendered="$(mktemp)"
     python3 - "$src" "$rendered" "$upstream_url" <<'PY'
 import pathlib, sys
@@ -123,10 +126,8 @@ PY
     changed=$((changed + 1))
   done
 
-  if [ "$changed" -eq 0 ] && [ "$skipped" -eq 0 ]; then
+  if [ "$changed" -eq 0 ]; then
     echo "  ok: upstream-merge-notify up to date in $(basename "$project_dir")"
-  elif [ "$changed" -eq 0 ]; then
-    echo "  ok: upstream-merge-notify left custom files untouched in $(basename "$project_dir")"
   fi
   return 0
 }
@@ -170,17 +171,19 @@ run_selftest() {
     failures=$((failures + 1))
   fi
 
-  # Case 3: custom unmanaged file is preserved.
+  # Case 3: any unmanaged payload file → skip entire install (no hybrid).
   git -C "$tmp2" init -q
   git -C "$tmp2" remote add origin https://github.com/example/fork.git
   git -C "$tmp2" remote add upstream https://github.com/example/upstream.git
   mkdir -p "$tmp2/.github/workflows"
   printf 'custom workflow\n' > "$tmp2/.github/workflows/upstream-merge-notify.yml"
   bash "$SCRIPT_DIR/install-upstream-merge-notify.sh" "$tmp2" >/tmp/umn-selftest-3.log 2>&1 || true
-  if grep -qx "custom workflow" "$tmp2/.github/workflows/upstream-merge-notify.yml"; then
-    echo "PASS install_preserves_custom"
+  if grep -qx "custom workflow" "$tmp2/.github/workflows/upstream-merge-notify.yml" \
+    && [ ! -e "$tmp2/scripts/upstream/notify-merge-needed.py" ] \
+    && [ ! -e "$tmp2/scripts/lib/upstream-drift.sh" ]; then
+    echo "PASS install_preserves_custom_all_or_nothing"
   else
-    echo "FAIL install_preserves_custom"
+    echo "FAIL install_preserves_custom_all_or_nothing"
     failures=$((failures + 1))
   fi
 
