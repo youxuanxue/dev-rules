@@ -802,6 +802,17 @@ sync_to_project() {
             "$project_dir/.cursor/skills" "$(basename "$project_dir")/.agents/skills" || return 1
     fi
 
+    # Forks with an `upstream` remote get the detection-only merge-notify
+    # workflow + scripts. No-op without upstream; never overwrites custom forks.
+    local upstream_notify_installer
+    upstream_notify_installer="$(project_source_path "$project_dir" templates/install-upstream-merge-notify.sh "$SCRIPT_DIR/templates/install-upstream-merge-notify.sh")"
+    if [ -f "$upstream_notify_installer" ]; then
+        if ! bash "$upstream_notify_installer" "$project_dir"; then
+            echo "  FAIL: upstream-merge-notify install failed for $(basename "$project_dir")" >&2
+            return 1
+        fi
+    fi
+
     return 0
 }
 

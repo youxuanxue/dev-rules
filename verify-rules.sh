@@ -872,6 +872,15 @@ else
     fail "install-hooks.sh must install hooks from linked worktrees"
 fi
 
+section "install-upstream-merge-notify self-test"
+if bash "$SCRIPT_DIR/templates/install-upstream-merge-notify.sh" --selftest \
+    > /tmp/dev-rules-upstream-merge-notify.log 2>&1; then
+    ok "install-upstream-merge-notify.sh --selftest"
+else
+    sed 's/^/    /' /tmp/dev-rules-upstream-merge-notify.log
+    fail "install-upstream-merge-notify.sh --selftest failed"
+fi
+
 # ── rule carrier partition anchor ─────────────────────────────────────
 # Prevent the system-level simplification rule from drifting into another
 # prose-only promise. The detailed partition belongs in dev-rules-convention;

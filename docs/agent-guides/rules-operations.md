@@ -47,9 +47,21 @@ Gemini CLI（Google `gemini`）消费端要点：全局技能由 `sync.sh` 逐�
 cd 项目根目录
 DEV_RULES_REMOTE_URL="${DEV_RULES_REMOTE_URL:?set DEV_RULES_REMOTE_URL}"
 git submodule add "$DEV_RULES_REMOTE_URL" dev-rules
-dev-rules/sync.sh --local                   # 复制规则 + 自动 register 该项目
+dev-rules/sync.sh --local                   # 复制规则 + 自动 register；有 upstream remote 时再装 merge-notify
 git add .cursor/rules/ .gitmodules dev-rules
+# 若仓库配置了 upstream remote，sync 会安装 managed 文件，一并提交：
+#   .github/workflows/upstream-merge-notify.yml
+#   scripts/lib/{upstream-drift.sh,upstream-url.conf}
+#   scripts/upstream/{check-drift.sh,notify-merge-needed.py}
 git commit -m "chore: add dev-rules submodule and sync rules"
+```
+
+Fork 仓库应配置 `upstream` remote（指向源仓库）。`sync.sh --local` / `--project` / fan-out 会调用 `templates/install-upstream-merge-notify.sh`：无 upstream 则跳过；任一 payload 路径已存在且无 managed-by 标记时整组跳过（all-or-nothing，避免 custom workflow + managed scripts 混装）。也可单独执行：
+
+```bash
+bash dev-rules/templates/install-upstream-merge-notify.sh
+# 或尚未挂 submodule 时：
+bash ~/Codes/dev-rules/templates/install-upstream-merge-notify.sh "$PWD"
 ```
 
 **首次在本机使用**（仅一次）：
