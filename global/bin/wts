@@ -2,7 +2,7 @@
 #
 # wts — create an isolated git worktree (shared-submodule layout) and start an
 # interactive agent session in the current terminal (Cursor Agent CLI / Codex /
-# Claude Code / Gemini CLI / Kimi Code CLI / DeepSeek Harness).
+# Claude Code / Gemini CLI / Kimi Code CLI / DeepSeek Harness / Pi).
 #
 # Canonical source: dev-rules/global/bin/wts (symlinked to ~/.local/bin/wts by sync.sh).
 # Under the hood: git-worktree-submodule/scripts/wtree.py
@@ -35,14 +35,15 @@ Runtimes:
   gemini    Gemini CLI       — gemini --yolo [--model …]
   kimi      Kimi Code CLI    — kimi [--model …]
   dsh       DeepSeek Harness — dsh web  (model via ~/.dsh/settings.yaml)
+  pi        Pi               — pi [--model …]
   ide       Open Cursor IDE window on the worktree (no CLI agent)
 
   Aliases: cursor→agent, cursor-ide→ide, gemini-cli→gemini,
-           kimi-code→kimi, deepseek|deepseek-harness→dsh
+           kimi-code→kimi, deepseek|deepseek-harness→dsh, pi-agent→pi
 
 Options:
   --repo PATH    Superproject path (default: git root from cwd)
-  --model MODEL  Forward --model to claude / codex / gemini / kimi only
+  --model MODEL  Forward --model to claude / codex / gemini / kimi / pi only
   --iterm        Open a new iTerm window instead of the current terminal
   --here         Current terminal (default; accepted for compatibility)
   --self-test    Run launcher self-tests and exit
@@ -55,6 +56,7 @@ Examples:
   cd ~/Codes/sub2api && wts prob kimi
   cd ~/Codes/sub2api && wts prob kimi --model <alias-from-config.toml>
   cd ~/Codes/sub2api && wts prob dsh
+  cd ~/Codes/sub2api && wts prob pi
   cd ~/Codes/sub2api && wts --iterm prob agent
   cd ~/Codes/sub2api && wts open prob
   cd ~/Codes/sub2api && wts open ../sub2api-wt-prob kimi
@@ -67,7 +69,7 @@ Notes:
 
 Environment:
   WTREE_SCRIPT   Override path to wtree.py
-  AGENT_BIN / CODEX_BIN / CLAUDE_BIN / GEMINI_BIN / KIMI_BIN / DSH_BIN
+  AGENT_BIN / CODEX_BIN / CLAUDE_BIN / GEMINI_BIN / KIMI_BIN / DSH_BIN / PI_BIN
   WTS_HERE=0     Same as --iterm
 EOF
 }
@@ -196,9 +198,10 @@ normalize_runtime() {
         gemini | gemini-cli) echo "gemini" ;;
         kimi | kimi-code) echo "kimi" ;;
         dsh | deepseek | deepseek-harness) echo "dsh" ;;
+        pi | pi-agent) echo "pi" ;;
         codex | claude) echo "$1" ;;
         *)
-            die "unknown runtime: $1 (expected agent, codex, claude, gemini, kimi, dsh, or ide)"
+            die "unknown runtime: $1 (expected agent, codex, claude, gemini, kimi, dsh, pi, or ide)"
             ;;
     esac
 }
@@ -259,6 +262,10 @@ resolve_kimi_bin() {
 
 resolve_dsh_bin() {
     resolve_named_bin dsh DSH_BIN
+}
+
+resolve_pi_bin() {
+    resolve_named_bin pi PI_BIN
 }
 
 resolve_agent_bin() {
@@ -356,6 +363,14 @@ session_command() {
             dsh_bin="$(resolve_dsh_bin)"
             # Official interactive surface is Web UI (developer preview); cwd is the workspace.
             cmd=("$dsh_bin" "web")
+            ;;
+        pi)
+            local pi_bin
+            pi_bin="$(resolve_pi_bin)"
+            cmd=("$pi_bin")
+            if [[ -n "$model" ]]; then
+                cmd+=("--model" "$model")
+            fi
             ;;
         ide)
             ensure_worktree_skill_links "$worktree"
@@ -532,7 +547,7 @@ SH
         >"$output_file" 2>&1; then
         echo "  x agent accepted unsupported --model option"
         fails=$((fails + 1))
-    elif grep -qF -- '--model is only supported with the claude, codex, gemini, and kimi runtimes' "$output_file"; then
+    elif grep -qF -- '--model is only supported with the claude, codex, gemini, kimi, and pi runtimes' "$output_file"; then
         echo "  ok: --model rejects unsupported runtimes"
     else
         echo "  x unsupported --model returned the wrong error"
@@ -641,10 +656,53 @@ SH
         >"$output_file" 2>&1; then
         echo "  x dsh accepted unsupported --model option"
         fails=$((fails + 1))
-    elif grep -qF -- '--model is only supported with the claude, codex, gemini, and kimi runtimes' "$output_file"; then
+    elif grep -qF -- '--model is only supported with the claude, codex, gemini, kimi, and pi runtimes' "$output_file"; then
         echo "  ok: --model rejects dsh runtime"
     else
         echo "  x dsh --model returned the wrong error"
+        sed 's/^/      /' "$output_file"
+        fails=$((fails + 1))
+    fi
+
+    pi_argv_file="$tmp/pi-argv"
+    cat > "$tmp/pi" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$WTS_SELF_TEST_ARGV"
+SH
+    chmod +x "$tmp/pi"
+
+    if WTS_SELF_TEST_WORKTREE="$worktree" WTREE_SCRIPT="$tmp/wtree.py" \
+        PI_BIN="$tmp/pi" WTS_SELF_TEST_ARGV="$pi_argv_file" \
+        "$self" --repo "$repo" seedance pi --model google/gemini-3-flash \
+        >"$output_file" 2>&1 \
+        && [[ "$(printf '%s\n' --model google/gemini-3-flash)" == "$(cat "$pi_argv_file")" ]]; then
+        echo "  ok: pi receives --model"
+    else
+        echo "  x pi did not receive --model google/gemini-3-flash"
+        sed 's/^/      /' "$output_file"
+        fails=$((fails + 1))
+    fi
+
+    if WTS_SELF_TEST_WORKTREE="$worktree" WTREE_SCRIPT="$tmp/wtree.py" \
+        PI_BIN="$tmp/pi" WTS_SELF_TEST_ARGV="$pi_argv_file" \
+        "$self" --repo "$repo" seedance pi \
+        >"$output_file" 2>&1 \
+        && [[ -z "$(cat "$pi_argv_file")" ]]; then
+        echo "  ok: pi succeeds without --model"
+    else
+        echo "  x pi failed without --model"
+        sed 's/^/      /' "$output_file"
+        fails=$((fails + 1))
+    fi
+
+    if WTS_SELF_TEST_WORKTREE="$worktree" WTREE_SCRIPT="$tmp/wtree.py" \
+        PI_BIN="$tmp/pi" WTS_SELF_TEST_ARGV="$pi_argv_file" \
+        "$self" --repo "$repo" seedance pi-agent --model anthropic/claude-sonnet-4 \
+        >"$output_file" 2>&1 \
+        && [[ "$(printf '%s\n' --model anthropic/claude-sonnet-4)" == "$(cat "$pi_argv_file")" ]]; then
+        echo "  ok: pi-agent alias maps to pi"
+    else
+        echo "  x pi-agent alias did not map to pi"
         sed 's/^/      /' "$output_file"
         fails=$((fails + 1))
     fi
@@ -819,7 +877,7 @@ main() {
                 cmd="create"
                 shift
                 ;;
-            agent | cursor | codex | claude | gemini | gemini-cli | kimi | kimi-code | dsh | deepseek | deepseek-harness | ide | cursor-ide)
+            agent | cursor | codex | claude | gemini | gemini-cli | kimi | kimi-code | dsh | deepseek | deepseek-harness | pi | pi-agent | ide | cursor-ide)
                 runtime="$(normalize_runtime "$1")"
                 shift
                 ;;
@@ -845,7 +903,7 @@ main() {
         usage >&2
         exit 1
     }
-    [[ -z "$model" || "$runtime" == "claude" || "$runtime" == "codex" || "$runtime" == "gemini" || "$runtime" == "kimi" ]] || die "--model is only supported with the claude, codex, gemini, and kimi runtimes"
+    [[ -z "$model" || "$runtime" == "claude" || "$runtime" == "codex" || "$runtime" == "gemini" || "$runtime" == "kimi" || "$runtime" == "pi" ]] || die "--model is only supported with the claude, codex, gemini, kimi, and pi runtimes"
 
     WTREE="$(resolve_wtree_script)"
     repo="$(resolve_repo "$repo")"
