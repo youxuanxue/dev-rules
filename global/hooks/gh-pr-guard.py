@@ -2,8 +2,10 @@
 """Claude Code hook: enforce rules around `gh pr` operations.
 
 PreToolUse (`pre-merge` subcommand):
-  - Block `gh pr merge` invocations. Merge requires explicit user authorization
-    in conversation, not auto-firing after PR-create or as a follow-up tool call.
+  - Block `gh pr merge` unless a user turn in this session explicitly asked for
+    a merge. Authorization is read from the transcript's `type == "user"`
+    records only, so it cannot auto-fire after PR-create, as a follow-up tool
+    call, or on anything the assistant wrote.
   - Block PR creates / body edits whose body is not Chinese or is stale versus
     the current branch commits.
   - Block `git push` for an existing PR when the PR body has not been rewritten
@@ -587,8 +589,86 @@ def _contains_gh_pr_merge(cmd: str) -> bool:
     return False
 
 
-def handle_pre_merge(cmd: str, cwd: str | None = None) -> int:
-    if _contains_gh_pr_merge(cmd):
+# An explicit human merge instruction. Deliberately narrow: a merge verb must be
+# present, not merely a mention of a PR. Only turns the user actually typed are
+# read (see _user_turns), so assistant text and tool output can never authorize.
+_MERGE_AUTHORIZATION = re.compile(
+    r"(合并|入主干|merge\b|squash[\s-]*merge)",
+    re.IGNORECASE,
+)
+
+# Phrasings that raise merging only to forbid or defer it. Checked first so
+# "先不要合并" never reads as authorization.
+_MERGE_REFUSAL = re.compile(
+    r"(别|不要|不用|暂不|先不|勿|禁止|don'?t|do not|no\s+need\s+to)"
+    r"[^。.!?\n]{0,12}?(合并|merge\b)",
+    re.IGNORECASE,
+)
+
+
+def _user_turns(transcript_path: str | None) -> list[str]:
+    """Text of the turns the user actually typed, oldest first.
+
+    Only `type == "user"` records are read, and slash-command echo / stdout
+    wrappers are dropped, so nothing the assistant or a tool emitted can be
+    mistaken for a user instruction.
+    """
+    if not transcript_path:
+        return []
+    try:
+        raw = Path(transcript_path).read_text(encoding="utf-8")
+    except OSError:
+        return []
+    turns: list[str] = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if record.get("type") != "user":
+            continue
+        content = (record.get("message") or {}).get("content")
+        if isinstance(content, str):
+            text = content
+        elif isinstance(content, list):
+            text = " ".join(
+                part.get("text", "")
+                for part in content
+                if isinstance(part, dict) and part.get("type") == "text"
+            )
+        else:
+            text = ""
+        text = text.strip()
+        if not text:
+            continue
+        # Slash-command echoes and their stdout are harness-generated, not typed.
+        if text.startswith(("<local-command-", "<command-name>", "<command-message>")):
+            continue
+        turns.append(text)
+    return turns
+
+
+def _merge_authorized(transcript_path: str | None) -> bool:
+    """True when a user turn in this session explicitly asked for a merge.
+
+    Without this, the block below fired unconditionally and contradicted its own
+    message ("尚未收到明确合并指令"): even an explicit "合并 #123" could not get
+    through, so the only way to merge was to disable the guard. Authorization is
+    now derived mechanically from the transcript instead of trusting the agent.
+    """
+    for text in _user_turns(transcript_path):
+        if _MERGE_REFUSAL.search(text):
+            continue
+        if _MERGE_AUTHORIZATION.search(text):
+            return True
+    return False
+
+
+def handle_pre_merge(cmd: str, cwd: str | None = None, transcript_path: str | None = None) -> int:
+    if _contains_gh_pr_merge(cmd) and not _merge_authorized(transcript_path):
         sys.stderr.write(
             "禁止无授权 merge：本次会话尚未收到明确合并指令(如 \"合并 #XX\")。"
             "请先与用户确认；merge 不在 /xj-review 自动范围内。\n"
@@ -643,6 +723,61 @@ def handle_post_pr_activity(cmd: str, cwd: str | None = None) -> bool:
     return False
 
 
+def _self_test_merge_authorization() -> list[str]:
+    """Merge authorization must come from typed user turns only."""
+    failures: list[str] = []
+
+    def transcript(records: list[dict]) -> str:
+        handle = tempfile.NamedTemporaryFile(
+            "w", suffix=".jsonl", delete=False, encoding="utf-8"
+        )
+        with handle:
+            for record in records:
+                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        return handle.name
+
+    def user(text: str) -> dict:
+        return {"type": "user", "message": {"content": text}}
+
+    def assistant(text: str) -> dict:
+        return {"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}
+
+    cases: list[tuple[str, list[dict], bool]] = [
+        ("no transcript authorizes nothing", [], False),
+        ("review-only request is not authorization", [user("复审 #3033 到 #3040")], False),
+        ("explicit Chinese merge authorizes", [user("按顺序合并这些 pr 并解决冲突")], True),
+        ("explicit English merge authorizes", [user("merge #3033 now")], True),
+        ("assistant text cannot authorize", [assistant("我来合并 #3033")], False),
+        ("tool output cannot authorize", [{"type": "tool_result", "message": {"content": "合并"}}], False),
+        ("refusal is not authorization", [user("先不要合并，只审查")], False),
+        ("refusal then approval authorizes", [user("先不要合并"), user("现在合并 #3033")], True),
+        (
+            "slash-command echo cannot authorize",
+            [user("<command-name>/merge</command-name> 合并")],
+            False,
+        ),
+    ]
+    for label, records, expected in cases:
+        path = transcript(records) if records else None
+        try:
+            if _merge_authorized(path) is not expected:
+                failures.append(f"merge authorization: {label}")
+        finally:
+            if path:
+                Path(path).unlink(missing_ok=True)
+
+    blocked = handle_pre_merge("gh pr merge 1 --squash", None, None)
+    if blocked != 2:
+        failures.append("unauthorized gh pr merge must still be blocked")
+    allowed_path = transcript([user("合并 #1")])
+    try:
+        if handle_pre_merge("gh pr merge 1 --squash", None, allowed_path) != 0:
+            failures.append("authorized gh pr merge must pass the guard")
+    finally:
+        Path(allowed_path).unlink(missing_ok=True)
+    return failures
+
+
 def _self_test() -> int:
     failures: list[str] = []
     if command_leading_matches("echo 'gh pr merge 1'", r"^gh\s+pr\s+merge\b"):
@@ -653,6 +788,7 @@ def _self_test() -> int:
         failures.append("token merge detector should ignore quoted echo")
     if not _contains_gh_pr_merge("gh -R owner/repo pr merge 1"):
         failures.append("gh -R owner/repo pr merge should be detected")
+    failures.extend(_self_test_merge_authorization())
     tokens = _segment_tokens("FOO=bar gh pr create --body '摘要：中文说明足够长。风险：低。验证：已跑。提交：abc1234'")
     if not _is_gh_pr(tokens, "create"):
         failures.append("env-prefixed gh pr create tokenization failed")
@@ -792,8 +928,9 @@ def main() -> int:
     data = load_input()
     cmd = (data.get("tool_input") or {}).get("command") or ""
     cwd = data.get("cwd") or (data.get("tool_input") or {}).get("cwd") or os.getcwd()
+    transcript_path = data.get("transcript_path")
     if mode == "pre-merge":
-        return handle_pre_merge(cmd, cwd)
+        return handle_pre_merge(cmd, cwd, transcript_path)
     if mode == "post-pr-create":
         if handle_post_pr_create(cmd):
             return 0
