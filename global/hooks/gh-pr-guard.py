@@ -671,7 +671,8 @@ def handle_pre_merge(cmd: str, cwd: str | None = None, transcript_path: str | No
     if _contains_gh_pr_merge(cmd) and not _merge_authorized(transcript_path):
         sys.stderr.write(
             "禁止无授权 merge：本次会话尚未收到明确合并指令(如 \"合并 #XX\")。"
-            "请先与用户确认；merge 不在 /xj-review 自动范围内。\n"
+            "低风险 PR 走 `auto-merge-low-risk <PR号>`（带 risk:low 标签、CI 全绿、"
+            "不碰发布/高风险路径才合并）；其余先与用户确认。\n"
         )
         return 2
     body_status = _handle_pr_body_writes(cmd, cwd)
@@ -691,8 +692,9 @@ def handle_post_pr_create(cmd: str) -> bool:
                 "PR 已创建。下一步必做：调用 /xj-review 对本 PR 审查，按严格 "
                 "merge-ready 准则（零 medium+ finding，包含 out-of-scope 顺手问题 "
                 "与 Jobs / 确定性自动化运营和运维原则违背）循环 fix → re-review。达到 merge-ready "
-                "后，**停下并在对话中等待用户的明确合并指令**；禁止直接调用 "
-                "gh pr merge。PR body 必须保持中文；后续每新增 commit，先按当前 "
+                "后：低风险 PR 打 `risk:low` 标签并执行 `auto-merge-low-risk <PR号>`，"
+                "由脚本在 CI 全绿后合并；常规/高风险 PR **停下并在对话中等待用户的明确合并指令**。"
+                "禁止直接调用 gh pr merge。PR body 必须保持中文；后续每新增 commit，先按当前 "
                 "`git log --oneline <base>..HEAD` 重写 PR body，确保「提交」小节包含所有 "
                 "commit short SHA，再 push 或继续 review。"
             ),
@@ -766,6 +768,8 @@ def _self_test_merge_authorization() -> list[str]:
             if path:
                 Path(path).unlink(missing_ok=True)
 
+    if _contains_gh_pr_merge("auto-merge-low-risk 1 --repo o/r"):
+        failures.append("auto-merge-low-risk must not be read as a direct gh pr merge")
     blocked = handle_pre_merge("gh pr merge 1 --squash", None, None)
     if blocked != 2:
         failures.append("unauthorized gh pr merge must still be blocked")

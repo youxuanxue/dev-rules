@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+"""auto-merge-low-risk — merge a low-risk PR once its CI is green.
+
+Usage:
+  auto-merge-low-risk <pr-number> [--repo OWNER/NAME] [--dry-run]
+  auto-merge-low-risk --self-test
+
+The only way an agent merges on its own. Every gate below is mechanical; the
+one judgment — that a change is low risk — is the agent's, recorded as the PR
+label `risk:low` (`rules/product-dev.mdc` §风险分级). Anything that fails a
+gate is left for the user, with the reason printed.
+
+Gates, all required:
+  1. open, not draft, targets the default branch, no merge conflict;
+  2. labelled `risk:low`, and not `risk:normal` / `risk:high`;
+  3. touches no path that publishes on merge or is high risk by location
+     (workflows, deploy, migrations, schema, pricing, secrets — see
+     PROTECTED_PATHS);
+  4. every CI check finished green (success / skipped / neutral), at least one.
+
+Public repos get `gh pr merge --auto --squash`: GitHub branch protection
+re-checks the required CI and merges when green. Private repos on a free plan
+have no branch protection, so this script's own CI gate is the only one and
+the merge is immediate. It never tags, releases or deploys.
+"""
+
+from __future__ import annotations
+
+import fnmatch
+import json
+import subprocess
+import sys
+
+LOW_RISK_LABEL = "risk:low"
+HIGHER_RISK_LABELS = ("risk:normal", "risk:high")
+
+# Paths whose change publishes on merge or is high risk by where it lives.
+# Matched against every changed file (fnmatch, `**` spans directories).
+PROTECTED_PATHS = (
+    ".github/**",
+    "deploy/**",
+    "**/deploy/**",
+    "infra/**",
+    "terraform/**",
+    "**/migrations/**",
+    "**/ent/schema/**",
+    "docs/approved/**",
+    "**/*pricing*",
+    "**/*billing*",
+    "ops/gemini-web/**",
+    "**/*secret*",
+    "**/*credential*",
+    "**/.env*",
+)
+
+GREEN_CONCLUSIONS = {"SUCCESS", "SKIPPED", "NEUTRAL"}
+
+
+def protected_files(paths: list[str]) -> list[str]:
+    """The changed files that keep a PR from merging on its own."""
+    hit = []
+    for path in paths:
+        for pattern in PROTECTED_PATHS:
+            if fnmatch.fnmatch(path, pattern) or (
+                pattern.startswith("**/") and fnmatch.fnmatch(path, pattern[3:])
+            ):
+                hit.append(path)
+                break
+    return hit
+
+
+def ci_state(rollup: list[dict]) -> tuple[str, list[str]]:
+    """`green`, `pending` or `red`, with the checks that are not green."""
+    if not rollup:
+        return "pending", ["no CI checks reported yet"]
+    pending, red = [], []
+    for check in rollup:
+        name = check.get("name") or check.get("context") or "?"
+        # Check runs carry status/conclusion; legacy commit statuses carry state.
+        status = (check.get("status") or "").upper()
+        conclusion = (check.get("conclusion") or check.get("state") or "").upper()
+        if status and status != "COMPLETED":
+            pending.append(name)
+        elif conclusion in ("PENDING", "EXPECTED", ""):
+            pending.append(name)
+        elif conclusion not in GREEN_CONCLUSIONS:
+            red.append(f"{name}={conclusion.lower()}")
+    if red:
+        return "red", red
+    if pending:
+        return "pending", pending
+    return "green", []
+
+
+def refusals(pr: dict, default_branch: str) -> list[str]:
+    """Why `pr` may not merge on its own; empty when every gate passes."""
+    why = []
+    if pr.get("state") != "OPEN":
+        why.append(f"not open ({pr.get('state')})")
+    if pr.get("isDraft"):
+        why.append("draft")
+    if pr.get("baseRefName") != default_branch:
+        why.append(f"targets {pr.get('baseRefName')}, not {default_branch}")
+    if pr.get("mergeable") == "CONFLICTING":
+        why.append("merge conflict")
+    labels = {label["name"] for label in pr.get("labels", [])}
+    if LOW_RISK_LABEL not in labels:
+        why.append(f"no `{LOW_RISK_LABEL}` label")
+    for higher in HIGHER_RISK_LABELS:
+        if higher in labels:
+            why.append(f"labelled `{higher}`")
+    hit = protected_files([f["path"] for f in pr.get("files", [])])
+    if hit:
+        why.append("touches protected paths: " + ", ".join(hit[:5]))
+    state, detail = ci_state(pr.get("statusCheckRollup") or [])
+    if state != "green":
+        why.append(f"CI {state}: " + ", ".join(detail[:5]))
+    return why
+
+
+def gh(*args: str) -> str:
+    return subprocess.run(
+        ["gh", *args], check=True, capture_output=True, text=True
+    ).stdout
+
+
+def run(pr_number: str, repo: str | None, dry_run: bool) -> int:
+    repo_args = ["--repo", repo] if repo else []
+    meta = json.loads(
+        gh("repo", "view", *([repo] if repo else []), "--json", "defaultBranchRef,isPrivate,nameWithOwner")
+    )
+    pr = json.loads(
+        gh(
+            "pr", "view", pr_number, *repo_args, "--json",
+            "number,state,isDraft,baseRefName,mergeable,labels,files,statusCheckRollup,headRefOid",
+        )
+    )
+    name = f"{meta['nameWithOwner']}#{pr['number']}"
+    why = refusals(pr, meta["defaultBranchRef"]["name"])
+    if why:
+        print(f"{name}: left for the user — " + "; ".join(why))
+        return 1
+    # Pin the merge to the head that was checked: a push after the check
+    # makes GitHub refuse the merge instead of landing unchecked commits.
+    cmd = ["pr", "merge", pr_number, *repo_args, "--squash", "--delete-branch",
+           "--match-head-commit", pr["headRefOid"]]
+    if not meta["isPrivate"]:
+        cmd.append("--auto")
+    if dry_run:
+        print(f"{name}: would run gh {' '.join(cmd)}")
+        return 0
+    gh(*cmd)
+    print(f"{name}: merged" + (" (auto, after required CI)" if not meta["isPrivate"] else ""))
+    return 0
+
+
+def self_test() -> int:
+    failures = []
+
+    def check(label: str, ok: bool) -> None:
+        if not ok:
+            failures.append(label)
+
+    green = [{"name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"},
+             {"name": "fe", "status": "COMPLETED", "conclusion": "SKIPPED"}]
+    base = {"state": "OPEN", "isDraft": False, "baseRefName": "main",
+            "mergeable": "MERGEABLE", "labels": [{"name": "risk:low"}],
+            "files": [{"path": "scripts/local-deploy.sh"}], "statusCheckRollup": green}
+
+    check("a green low-risk PR passes", refusals(base, "main") == [])
+    check("unlabelled is refused", any("risk:low" in w for w in refusals({**base, "labels": []}, "main")))
+    check("risk:high wins over risk:low", any("risk:high" in w for w in refusals(
+        {**base, "labels": [{"name": "risk:low"}, {"name": "risk:high"}]}, "main")))
+    check("draft is refused", "draft" in refusals({**base, "isDraft": True}, "main"))
+    check("other base is refused", any("targets" in w for w in refusals({**base, "baseRefName": "dev"}, "main")))
+    check("conflict is refused", "merge conflict" in refusals({**base, "mergeable": "CONFLICTING"}, "main"))
+    for path in (".github/workflows/release.yml", "deploy/aws/stage0/x.json",
+                 "backend/internal/service/tk_pricing_overlay.json", "backend/ent/schema/user.go",
+                 "db/migrations/0001.sql", "docs/approved/x.md", "ops/gemini-web/app.py", ".env.prod"):
+        check(f"protected: {path}", bool(protected_files([path])))
+    for path in ("src/app.ts", "README.md", "scripts/local-deploy.sh", "docs/deployment-notes.md"):
+        check(f"not protected: {path}", not protected_files([path]))
+    check("no checks is pending", ci_state([])[0] == "pending")
+    check("running check is pending",
+          ci_state([{"name": "x", "status": "IN_PROGRESS", "conclusion": ""}])[0] == "pending")
+    check("failed check is red",
+          ci_state(green + [{"name": "x", "status": "COMPLETED", "conclusion": "FAILURE"}])[0] == "red")
+    check("cancelled check is red",
+          ci_state([{"name": "x", "status": "COMPLETED", "conclusion": "CANCELLED"}])[0] == "red")
+    check("legacy pending status is pending", ci_state([{"context": "x", "state": "PENDING"}])[0] == "pending")
+    check("legacy success status is green", ci_state([{"context": "x", "state": "SUCCESS"}])[0] == "green")
+
+    if failures:
+        print("auto-merge-low-risk self-test FAILED:\n  " + "\n  ".join(failures))
+        return 1
+    print("auto-merge-low-risk self-test ok")
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    if argv[:1] == ["--self-test"]:
+        return self_test()
+    args = [a for a in argv if a != "--dry-run"]
+    dry_run = len(args) != len(argv)
+    repo = None
+    if "--repo" in args:
+        i = args.index("--repo")
+        if i + 1 >= len(args):
+            print("auto-merge-low-risk: --repo needs OWNER/NAME", file=sys.stderr)
+            return 2
+        repo = args[i + 1]
+        del args[i : i + 2]
+    if len(args) != 1 or not args[0].isdigit():
+        print(__doc__.split("\n\n")[1], file=sys.stderr)
+        return 2
+    try:
+        return run(args[0], repo, dry_run)
+    except subprocess.CalledProcessError as e:
+        print(f"auto-merge-low-risk: gh failed: {(e.stderr or '').strip()}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
