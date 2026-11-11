@@ -117,9 +117,10 @@ def refusals(pr: dict, default_branch: str) -> list[str]:
     for higher in HIGHER_RISK_LABELS:
         if higher in labels:
             why.append(f"labelled `{higher}`")
-    paths = pr.get("files", [])
-    if len(paths) != pr.get("changedFiles", len(paths)):
-        why.append(f"saw {len(paths)} of {pr.get('changedFiles')} changed files")
+    entries = pr.get("files", [])
+    if len(entries) != pr.get("changedFiles", len(entries)):
+        why.append(f"saw {len(entries)} of {pr.get('changedFiles')} changed files")
+    paths = [p for entry in entries for p in entry.split("\t") if p]
     hit = protected_files(paths)
     if hit:
         why.append("touches protected paths: " + ", ".join(hit[:5]))
@@ -159,9 +160,11 @@ def run(pr_number: str, repo: str | None, dry_run: bool) -> int:
         )
     )
     # `--json files` stops at 100; the REST listing pages through all of them.
+    # A rename lists both paths, so moving a file out of a protected
+    # directory is caught by its old path.
     pr["files"] = gh(
         "api", "--paginate", f"repos/{meta['nameWithOwner']}/pulls/{pr['number']}/files?per_page=100",
-        "--jq", ".[].filename",
+        "--jq", '.[] | "\(.filename)\t\(.previous_filename // "")"',
     ).splitlines()
     name = f"{meta['nameWithOwner']}#{pr['number']}"
     branch = meta["defaultBranchRef"]["name"]
@@ -206,6 +209,8 @@ def self_test() -> int:
     check("conflict is refused", "merge conflict" in refusals({**base, "mergeable": "CONFLICTING"}, "main"))
     check("an incomplete file list is refused", any("changed files" in w for w in refusals(
         {**base, "changedFiles": 127}, "main")))
+    check("renaming a file out of a protected path is refused", any("protected" in w for w in refusals(
+        {**base, "files": ["src/kept.yml\t.github/workflows/ci.yml"]}, "main")))
     check("a protected file anywhere in the list is refused", any("protected" in w for w in refusals(
         {**base, "files": ["src/a.ts"] * 120 + [".github/workflows/x.yml"], "changedFiles": 121}, "main")))
     for path in (".github/workflows/release.yml", "deploy/aws/stage0/x.json",
