@@ -13,9 +13,10 @@ gate is left for the user, with the reason printed.
 Gates, all required:
   1. open, not draft, targets the default branch, no merge conflict;
   2. labelled `risk:low`, and not `risk:normal` / `risk:high`;
-  3. touches no path that publishes on merge or is high risk by location
-     (workflows, deploy, migrations, schema, pricing, secrets — see
-     PROTECTED_PATHS);
+  3. touches no path that publishes on merge or is high risk by location:
+     the generic PROTECTED_PATHS, plus what the repo declares in
+     `.preflight/high-risk-anchor.conf` under `[high_risk_paths]` and
+     `[auto_merge_protected_paths]` (regexes, matched case-insensitively);
   4. every CI check finished green (success / skipped / neutral), at least one.
 
 A repo whose default branch has required status checks gets
@@ -29,6 +30,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import re
 import subprocess
 import sys
 
@@ -48,11 +50,17 @@ PROTECTED_PATHS = (
     "docs/approved/**",
     "**/*pricing*",
     "**/*billing*",
-    "ops/gemini-web/**",
+    ".preflight/**",
     "**/*secret*",
     "**/*credential*",
     "**/.env*",
 )
+
+# The repo's own additions, read from its default branch so a PR cannot lift
+# the protection it is checked against. Same file and dialect as the
+# high-risk anchor check (`scripts/check_high_risk_anchor.py`).
+REPO_CONFIG = ".preflight/high-risk-anchor.conf"
+REPO_SECTIONS = ("high_risk_paths", "auto_merge_protected_paths")
 
 GREEN_CONCLUSIONS = {"SUCCESS", "SKIPPED", "NEUTRAL"}
 
@@ -61,17 +69,38 @@ GREEN_CONCLUSIONS = {"SUCCESS", "SKIPPED", "NEUTRAL"}
 ROLLUP_PAGE = 100
 
 
-def protected_files(paths: list[str]) -> list[str]:
+def repo_patterns(conf: str) -> list[re.Pattern[str]]:
+    """The protected-path regexes a repo declares in its high-risk config.
+
+    Lines inside REPO_SECTIONS count; other sections, blanks and `#`
+    comments are skipped. A pattern that does not compile is an error, not
+    a skip: dropping it would silently unprotect the path.
+    """
+    out, section = [], None
+    for raw in conf.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1]
+            continue
+        if section in REPO_SECTIONS:
+            out.append(re.compile(line, re.IGNORECASE))
+    return out
+
+
+def protected_files(paths: list[str], extra: list[re.Pattern[str]] | None = None) -> list[str]:
     """The changed files that keep a PR from merging on its own."""
     hit = []
     for path in paths:
         lower = path.lower()
-        for pattern in PROTECTED_PATHS:
-            if fnmatch.fnmatchcase(lower, pattern) or (
-                pattern.startswith("**/") and fnmatch.fnmatchcase(lower, pattern[3:])
-            ):
-                hit.append(path)
-                break
+        generic = any(
+            fnmatch.fnmatchcase(lower, pattern)
+            or (pattern.startswith("**/") and fnmatch.fnmatchcase(lower, pattern[3:]))
+            for pattern in PROTECTED_PATHS
+        )
+        if generic or any(p.search(path) for p in extra or []):
+            hit.append(path)
     return hit
 
 
@@ -100,7 +129,7 @@ def ci_state(rollup: list[dict]) -> tuple[str, list[str]]:
     return "green", []
 
 
-def refusals(pr: dict, default_branch: str) -> list[str]:
+def refusals(pr: dict, default_branch: str, extra: list[re.Pattern[str]] | None = None) -> list[str]:
     """Why `pr` may not merge on its own; empty when every gate passes."""
     why = []
     if pr.get("state") != "OPEN":
@@ -121,7 +150,7 @@ def refusals(pr: dict, default_branch: str) -> list[str]:
     if len(entries) != pr.get("changedFiles", len(entries)):
         why.append(f"saw {len(entries)} of {pr.get('changedFiles')} changed files")
     paths = [p for entry in entries for p in entry.split("\t") if p]
-    hit = protected_files(paths)
+    hit = protected_files(paths, extra)
     if hit:
         why.append("touches protected paths: " + ", ".join(hit[:5]))
     state, detail = ci_state(pr.get("statusCheckRollup") or [])
@@ -134,6 +163,17 @@ def gh(*args: str) -> str:
     return subprocess.run(
         ["gh", *args], check=True, capture_output=True, text=True
     ).stdout
+
+
+def fetch_repo_config(repo: str, branch: str) -> str:
+    """The repo's high-risk config on `branch`, or "" when it has none."""
+    try:
+        return gh("api", "-H", "Accept: application/vnd.github.raw",
+                  f"repos/{repo}/contents/{REPO_CONFIG}?ref={branch}")
+    except subprocess.CalledProcessError as e:
+        if "404" in (e.stderr or ""):
+            return ""
+        raise
 
 
 def has_required_checks(repo: str, branch: str) -> bool:
@@ -168,7 +208,12 @@ def run(pr_number: str, repo: str | None, dry_run: bool) -> int:
     ).splitlines()
     name = f"{meta['nameWithOwner']}#{pr['number']}"
     branch = meta["defaultBranchRef"]["name"]
-    why = refusals(pr, branch)
+    try:
+        extra = repo_patterns(fetch_repo_config(meta["nameWithOwner"], branch))
+    except re.error as e:
+        print(f"{name}: left for the user — {REPO_CONFIG} has a bad pattern: {e}")
+        return 1
+    why = refusals(pr, branch, extra)
     if why:
         print(f"{name}: left for the user — " + "; ".join(why))
         return 1
@@ -215,12 +260,38 @@ def self_test() -> int:
         {**base, "files": ["src/a.ts"] * 120 + [".github/workflows/x.yml"], "changedFiles": 121}, "main")))
     for path in (".github/workflows/release.yml", "deploy/aws/stage0/x.json",
                  "backend/internal/service/tk_pricing_overlay.json", "backend/ent/schema/user.go",
-                 "db/migrations/0001.sql", "docs/approved/x.md", "ops/gemini-web/app.py", ".env.prod"):
+                 "db/migrations/0001.sql", "docs/approved/x.md", ".env.prod",
+                 ".preflight/high-risk-anchor.conf"):
         check(f"protected: {path}", bool(protected_files([path])))
     for path in ("src/app.ts", "README.md", "scripts/local-deploy.sh", "docs/deployment-notes.md"):
         check(f"not protected: {path}", not protected_files([path]))
     check("protected regardless of case: Deploy/x.yml", bool(protected_files(["Deploy/x.yml"])))
     check("protected regardless of case: Pricing.json", bool(protected_files(["src/Pricing.json"])))
+    conf = """
+[high_risk_paths]
+^ops/stage0/cfn_.*\\.py$
+# a comment
+[anchor_tokens]
+high[-_ ]risk[-_ ]anchor
+[auto_merge_protected_paths]
+^ops/gemini-web/
+^OPS/stage0/[^/]*probe_account_model
+"""
+    extra = repo_patterns(conf)
+    check("repo config reads both protected sections", len(extra) == 3)
+    check("anchor tokens are not paths", not protected_files(["high-risk-anchor"], extra))
+    check("repo path is protected", bool(protected_files(["ops/gemini-web/app.py"], extra)))
+    check("repo pattern ignores case", bool(protected_files(["ops/stage0/probe_account_model.sh"], extra)))
+    check("high-risk path is protected", bool(protected_files(["ops/stage0/cfn_guard.py"], extra)))
+    check("repo-specific path is not generic", not protected_files(["ops/gemini-web/app.py"]))
+    check("unrelated path stays mergeable", not protected_files(["ops/stage0/other.sh"], extra))
+    check("a repo path refuses the PR", any("protected" in w for w in refusals(
+        {**base, "files": ["ops/gemini-web/app.py"]}, "main", extra)))
+    try:
+        repo_patterns("[auto_merge_protected_paths]\n^ops/(unclosed\n")
+        check("a bad repo pattern is an error", False)
+    except re.error:
+        pass
     check("no checks is pending", ci_state([])[0] == "pending")
     check("a possibly cut check list is not green",
           ci_state([{"name": f"c{i}", "status": "COMPLETED", "conclusion": "SUCCESS"}
