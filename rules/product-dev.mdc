@@ -45,6 +45,8 @@ alwaysApply: true
 
 文件数、代码量、模块数、评论长度不单独决定风险。拿不准时先按常规补最小澄清；明确安全/数据损失级不确定性才升级。
 
+低风险 PR merge-ready 后打 `risk:low` 并跑 `auto-merge-low-risk <PR号>`(另核 CI 全绿、未碰发布路径)，其余等人合。
+
 ### 常规风险意图载体
 
 只有 PR summary 不足以表达行为或 reviewer 必须先理解 intent 时，补 `docs/spec-delta-<slug>.md`：Background、Delta（ADDED/MODIFIED/REMOVED）、Scenarios（正/负/回归）、Validation。它不是审批基线，也不能替代测试。
@@ -61,7 +63,7 @@ alwaysApply: true
 - `提交` 从 `git log --oneline <base>..HEAD` 生成全部 short SHA + subject，并包含 `最新提交：<HEAD short SHA>`。每次新增 commit 后，push 或继续 review 前重写整个 body，不能只追加备注。
 - 有 Web surface 时，后端/业务行为须同 PR 对齐 Web/config/contract/Story；确无影响在 commit message 写 `no-web-impact` 或 `Web impact: none`。
 - 高风险改动必须绑定 `docs/approved/*` 或等价审批 anchor；release 语境禁止方括号形式的 skip-ci / ci-skip marker。
-- review 默认只报阻塞问题、真实风险、缺失验证。合并后持续监控目标分支/merge queue CI 至全绿；失败、取消、长时间 pending 及时报告并修复或交人工判断。
+- review 只报阻塞问题、真实风险、缺失验证。合并后盯目标分支 CI 至全绿；失败、取消、长时间 pending 及时报告并修复或交人工判断。
 
 ### Fork 仓库上游治理（Upstream Merge）纪律
 
@@ -77,7 +79,7 @@ Background/Long-running Agent 每完成可验证里程碑立即提交推送，�
 
 ## 完成自检与门禁
 
-汇报须给与风险匹配的已运行验证证据及剩余风险；普通进度不触发全量 preflight。
+汇报给与风险匹配的已运行验证证据及剩余风险；普通进度不跑全量 preflight。
 创建 commit、push、PR 出口、新增 commit 后继续 review、部署、发布、tag、高风险审批或明确要求时，运行 `./scripts/preflight.sh`（无项目 wrapper 用 `dev-rules/templates/preflight.sh`）。失败修复后重跑；禁止带红提交/推送/发布或 `--no-verify` 绕过（紧急回滚除外）。条件门禁不扩成所有任务都跑最高负担。
 
 ### 文档数值/事实声明的硬约束

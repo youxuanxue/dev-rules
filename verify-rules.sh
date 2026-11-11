@@ -920,7 +920,7 @@ fi
 # only runs when someone remembers to — exactly the soft constraint §5 says
 # to harden.
 #
-# Discovery is static (grep the source for a --self-test case branch), not
+# Discovery is static (grep the source for a --self-test branch), not
 # `$launcher --help`: probing help would execute the launcher, and some of
 # these exec real backends (claude-with-token exec's claude with a token).
 # Symlinks are skipped so profile aliases don't re-run the same script.
@@ -930,7 +930,8 @@ if [ -d "$GLOBAL_DIR/bin" ]; then
     for launcher in "$GLOBAL_DIR"/bin/*; do
         [ -f "$launcher" ] || continue
         [ -L "$launcher" ] && continue
-        grep -q -- '--self-test)' "$launcher" || continue
+        # Shell launchers declare it as a case branch, Python ones compare argv.
+        grep -qE -- '--self-test\)|\["--self-test"\]' "$launcher" || continue
         LAUNCHER_TESTED=1
         if "$launcher" --self-test > /tmp/dev-rules-launcher-self-test.log 2>&1; then
             ok "$(basename "$launcher") --self-test"
