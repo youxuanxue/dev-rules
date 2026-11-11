@@ -18,10 +18,11 @@ Gates, all required:
      PROTECTED_PATHS);
   4. every CI check finished green (success / skipped / neutral), at least one.
 
-Public repos get `gh pr merge --auto --squash`: GitHub branch protection
-re-checks the required CI and merges when green. Private repos on a free plan
-have no branch protection, so this script's own CI gate is the only one and
-the merge is immediate. It never tags, releases or deploys.
+A repo whose default branch has required status checks gets
+`gh pr merge --auto --squash`: branch protection re-checks CI and GitHub
+merges when green. A repo without them (any private repo on a free plan, or a
+public one never protected) has only this script's CI gate, so the merge is
+immediate. It never tags, releases or deploys.
 """
 
 from __future__ import annotations
@@ -55,14 +56,19 @@ PROTECTED_PATHS = (
 
 GREEN_CONCLUSIONS = {"SUCCESS", "SKIPPED", "NEUTRAL"}
 
+# `gh pr view --json statusCheckRollup` returns at most this many checks; a
+# list that long may be cut, and an unseen check may be red.
+ROLLUP_PAGE = 100
+
 
 def protected_files(paths: list[str]) -> list[str]:
     """The changed files that keep a PR from merging on its own."""
     hit = []
     for path in paths:
+        lower = path.lower()
         for pattern in PROTECTED_PATHS:
-            if fnmatch.fnmatch(path, pattern) or (
-                pattern.startswith("**/") and fnmatch.fnmatch(path, pattern[3:])
+            if fnmatch.fnmatchcase(lower, pattern) or (
+                pattern.startswith("**/") and fnmatch.fnmatchcase(lower, pattern[3:])
             ):
                 hit.append(path)
                 break
@@ -73,6 +79,8 @@ def ci_state(rollup: list[dict]) -> tuple[str, list[str]]:
     """`green`, `pending` or `red`, with the checks that are not green."""
     if not rollup:
         return "pending", ["no CI checks reported yet"]
+    if len(rollup) >= ROLLUP_PAGE:
+        return "pending", [f"{len(rollup)} checks, list may be cut; check by hand"]
     pending, red = [], []
     for check in rollup:
         name = check.get("name") or check.get("context") or "?"
@@ -109,7 +117,10 @@ def refusals(pr: dict, default_branch: str) -> list[str]:
     for higher in HIGHER_RISK_LABELS:
         if higher in labels:
             why.append(f"labelled `{higher}`")
-    hit = protected_files([f["path"] for f in pr.get("files", [])])
+    paths = pr.get("files", [])
+    if len(paths) != pr.get("changedFiles", len(paths)):
+        why.append(f"saw {len(paths)} of {pr.get('changedFiles')} changed files")
+    hit = protected_files(paths)
     if hit:
         why.append("touches protected paths: " + ", ".join(hit[:5]))
     state, detail = ci_state(pr.get("statusCheckRollup") or [])
@@ -124,19 +135,37 @@ def gh(*args: str) -> str:
     ).stdout
 
 
+def has_required_checks(repo: str, branch: str) -> bool:
+    """Whether GitHub itself holds merges on `branch` until CI is green."""
+    try:
+        out = gh("api", f"repos/{repo}/branches/{branch}/protection/required_status_checks",
+                 "--jq", "(.checks // []) | length")
+    except subprocess.CalledProcessError:
+        # 404 unprotected, 403 not available on this plan: no GitHub-side gate.
+        return False
+    return out.strip() not in ("", "0")
+
+
 def run(pr_number: str, repo: str | None, dry_run: bool) -> int:
     repo_args = ["--repo", repo] if repo else []
     meta = json.loads(
-        gh("repo", "view", *([repo] if repo else []), "--json", "defaultBranchRef,isPrivate,nameWithOwner")
+        gh("repo", "view", *([repo] if repo else []), "--json", "defaultBranchRef,nameWithOwner")
     )
     pr = json.loads(
         gh(
             "pr", "view", pr_number, *repo_args, "--json",
-            "number,state,isDraft,baseRefName,mergeable,labels,files,statusCheckRollup,headRefOid",
+            "number,state,isDraft,baseRefName,mergeable,labels,changedFiles,"
+            "statusCheckRollup,headRefOid",
         )
     )
+    # `--json files` stops at 100; the REST listing pages through all of them.
+    pr["files"] = gh(
+        "api", "--paginate", f"repos/{meta['nameWithOwner']}/pulls/{pr['number']}/files?per_page=100",
+        "--jq", ".[].filename",
+    ).splitlines()
     name = f"{meta['nameWithOwner']}#{pr['number']}"
-    why = refusals(pr, meta["defaultBranchRef"]["name"])
+    branch = meta["defaultBranchRef"]["name"]
+    why = refusals(pr, branch)
     if why:
         print(f"{name}: left for the user — " + "; ".join(why))
         return 1
@@ -144,13 +173,14 @@ def run(pr_number: str, repo: str | None, dry_run: bool) -> int:
     # makes GitHub refuse the merge instead of landing unchecked commits.
     cmd = ["pr", "merge", pr_number, *repo_args, "--squash", "--delete-branch",
            "--match-head-commit", pr["headRefOid"]]
-    if not meta["isPrivate"]:
+    guarded = has_required_checks(meta["nameWithOwner"], branch)
+    if guarded:
         cmd.append("--auto")
     if dry_run:
         print(f"{name}: would run gh {' '.join(cmd)}")
         return 0
     gh(*cmd)
-    print(f"{name}: merged" + (" (auto, after required CI)" if not meta["isPrivate"] else ""))
+    print(f"{name}: " + ("queued; GitHub merges once required CI is green" if guarded else "merged"))
     return 0
 
 
@@ -165,7 +195,7 @@ def self_test() -> int:
              {"name": "fe", "status": "COMPLETED", "conclusion": "SKIPPED"}]
     base = {"state": "OPEN", "isDraft": False, "baseRefName": "main",
             "mergeable": "MERGEABLE", "labels": [{"name": "risk:low"}],
-            "files": [{"path": "scripts/local-deploy.sh"}], "statusCheckRollup": green}
+            "files": ["scripts/local-deploy.sh"], "changedFiles": 1, "statusCheckRollup": green}
 
     check("a green low-risk PR passes", refusals(base, "main") == [])
     check("unlabelled is refused", any("risk:low" in w for w in refusals({**base, "labels": []}, "main")))
@@ -174,13 +204,22 @@ def self_test() -> int:
     check("draft is refused", "draft" in refusals({**base, "isDraft": True}, "main"))
     check("other base is refused", any("targets" in w for w in refusals({**base, "baseRefName": "dev"}, "main")))
     check("conflict is refused", "merge conflict" in refusals({**base, "mergeable": "CONFLICTING"}, "main"))
+    check("an incomplete file list is refused", any("changed files" in w for w in refusals(
+        {**base, "changedFiles": 127}, "main")))
+    check("a protected file anywhere in the list is refused", any("protected" in w for w in refusals(
+        {**base, "files": ["src/a.ts"] * 120 + [".github/workflows/x.yml"], "changedFiles": 121}, "main")))
     for path in (".github/workflows/release.yml", "deploy/aws/stage0/x.json",
                  "backend/internal/service/tk_pricing_overlay.json", "backend/ent/schema/user.go",
                  "db/migrations/0001.sql", "docs/approved/x.md", "ops/gemini-web/app.py", ".env.prod"):
         check(f"protected: {path}", bool(protected_files([path])))
     for path in ("src/app.ts", "README.md", "scripts/local-deploy.sh", "docs/deployment-notes.md"):
         check(f"not protected: {path}", not protected_files([path]))
+    check("protected regardless of case: Deploy/x.yml", bool(protected_files(["Deploy/x.yml"])))
+    check("protected regardless of case: Pricing.json", bool(protected_files(["src/Pricing.json"])))
     check("no checks is pending", ci_state([])[0] == "pending")
+    check("a possibly cut check list is not green",
+          ci_state([{"name": f"c{i}", "status": "COMPLETED", "conclusion": "SUCCESS"}
+                    for i in range(ROLLUP_PAGE)])[0] == "pending")
     check("running check is pending",
           ci_state([{"name": "x", "status": "IN_PROGRESS", "conclusion": ""}])[0] == "pending")
     check("failed check is red",
